@@ -131,3 +131,7 @@ drive their work.
   OptiScaler is deployed into a game folder on Linux.
 - [Decky LSFG-VK](https://github.com/xXJSONDeruloXx/decky-lsfg-vk) — reference for the
   configuration-driven plugin UI.
+
+## AI disclosure
+
+This plugin was built with heavy use of AI: Claude Opus 5 was the model mainly used for its development. Every design decision, review and manual testing runs were mine, and everything here has been run on an Xbox Ally X running Bazzite.
