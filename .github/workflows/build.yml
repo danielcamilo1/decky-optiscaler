@@ -70,6 +70,10 @@ jobs:
           HARNESS=all-options.tsx node testharness/build-and-run.mjs 2>&1 | tee all-options.log
           grep -q "real React errors: 0" all-options.log
 
+      # This one exits non-zero on a failed check, so its status is enough.
+      - name: Live-controls harness
+        run: HARNESS=live-fields.tsx node testharness/build-and-run.mjs
+
       - name: Package
         run: python3 scripts/package.py
 

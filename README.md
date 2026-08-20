@@ -13,6 +13,12 @@ say plainly that they take effect on the next launch.
 
 OptiScaler v0.9.4 is bundled, so installing works offline and every game gets the same build.
 
+> **Unofficial.** I am an independent developer with no connection to the OptiScaler project.
+> This plugin is not made, endorsed or supported by them — it bundles their release and drives
+> it from the Steam Deck UI. Please report problems with the plugin
+> [here](https://github.com/danielcamilo1/decky-optiscaler/issues), not to the OptiScaler
+> maintainers.
+
 ## What it does
 
 - **Finds your games and the folder to install into.** Steam libraries come from
@@ -115,6 +121,10 @@ appreciated and it keeps the updates coming ☕
 [![Support me on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/danielcamilo)
 
 ## Credits
+
+This is an unofficial, independently developed plugin. It is not affiliated with, endorsed by or
+supported by the OptiScaler project or any of the projects below; all it does is package and
+drive their work.
 
 - [OptiScaler](https://github.com/optiscaler/OptiScaler) and its wiki contributors.
 - [Decky Framegen](https://github.com/xXJSONDeruloXx/Decky-Framegen) — reference for how

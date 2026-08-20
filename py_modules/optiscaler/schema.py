@@ -8,6 +8,7 @@ picked in the UI, and the wiki plan builder for keys mined out of prose, where
 the need is greater still.
 """
 
+from .live import FFX_FG_MAX
 from .schema_generated import OPTIONS
 
 #: (section, key) -> option metadata.
@@ -48,10 +49,30 @@ def resolve(key_name, section=None):
     return candidates[0], None
 
 
+#: Options whose reference-ini enum is a snapshot rather than a closed set.
+#:
+#: ``FSR.FGIndex`` is written "0 = FSR 4.0.0 | 1 = FSR 3.1.6" in the shipped ini
+#: because that is what the reference build's FidelityFX SDK offered. The list
+#: is per-game — OptiScaler asks the SDK what it can provide and reports the
+#: answer through the live channel, which is what the FFX FG control lists — so
+#: validating a pick against the ini's two entries rejects any third generator a
+#: game actually has. The write is then dropped *and never pushed live*, so the
+#: control ends up showing a choice that reached neither the file nor the game.
+#: The real constraint is that it is an index, bounded by the same ceiling the
+#: live channel uses.
+INDEX_RANGES = {
+    ("FSR", "FGIndex"): (0, FFX_FG_MAX - 1),
+}
+
+
 def valid(meta, value):
     """Validate a value against one option's metadata; 'auto' is always allowed."""
     if value == "auto":
         return True
+    bounds = INDEX_RANGES.get((meta.get("section"), meta.get("key")))
+    if bounds is not None:
+        number = _as_int(value)
+        return number is not None and bounds[0] <= number <= bounds[1]
     kind = meta.get("type")
     if kind == "bool":
         return value.lower() in ("true", "false")

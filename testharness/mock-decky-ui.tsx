@@ -34,6 +34,12 @@ const box = (name: string) =>
       <div
         data-mock={name}
         data-label={labelText(label)}
+        // What the control currently displays, so a test can check that a
+        // change is reflected back rather than only that a handler fired.
+        data-selected={
+          rest.selectedOption === undefined ? undefined : String(rest.selectedOption)
+        }
+        data-disabled={rest.disabled ? "true" : undefined}
         {...passthrough}
       >
         {title ? <div data-title>{title}</div> : null}

@@ -54,18 +54,30 @@ export function OptionControl({ option, values, onChange, disabled }: Props) {
 
   if (option.type === "enum") {
     const choices = [AUTO, ...(option.options ?? [])];
+    // OptiScaler's ini is case-insensitive and hand-edited files show it, so
+    // the value is matched to a choice rather than compared to one. A value
+    // that matches nothing keeps an option of its own: Steam's dropdown shows
+    // the option whose data equals selectedOption and has nothing to fall back
+    // on, so without this the control silently displays the wrong setting.
+    const selected =
+      choices.find((choice) => choice.toLowerCase() === raw.toLowerCase()) ?? raw;
+    const known = choices.includes(selected);
     return (
       <DropdownItem
+        key={selected}
         label={label}
         description={description}
         disabled={disabled}
         bottomSeparator="standard"
-        rgOptions={choices.map((choice) => ({
+        rgOptions={(known ? choices : [...choices, selected]).map((choice) => ({
           data: choice,
-          label: choice === AUTO ? `Auto (${labelFor(option, option.default)})` : labelFor(option, choice),
+          label:
+            choice === AUTO
+              ? `Auto (${labelFor(option, option.default)})`
+              : labelFor(option, choice),
         }))}
-        selectedOption={raw.toLowerCase() === AUTO ? AUTO : raw}
-        onChange={(selected) => onChange(option, String(selected.data))}
+        selectedOption={selected}
+        onChange={(picked) => onChange(option, String(picked.data))}
       />
     );
   }

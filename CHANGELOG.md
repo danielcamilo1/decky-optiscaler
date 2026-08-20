@@ -7,6 +7,41 @@ All notable changes to this project are documented here. The format follows
 Each release ships `Decky OptiScaler.zip`, installable through Decky Loader's
 *Install from URL* (Developer mode).
 
+## [0.0.2] - 2026-08-20
+
+Fixes for the Quick Access panel's live controls, where a dropdown could end up
+showing something other than what was picked.
+
+### Fixed
+
+- **A control could display a value it was not set to.** Steam's dropdown shows
+  the option whose value matches what it is given, and has nothing to fall back
+  on when none of them does — so it kept the label it drew last, which read as
+  the control ignoring the choice just made. Basic mode's four dropdowns and the
+  Advanced page's option lists now always offer whatever the file is actually
+  set to, named after itself when no preset covers it: an upscaler set from the
+  Advanced page is no longer shown as "Auto", and a frame-generation pair
+  written by a wiki plan is no longer shown as "FSR FG".
+- **Picking the third FidelityFX frame generator did nothing.** The shipped
+  `OptiScaler.ini` documents the two its own build offered, but each game's
+  FidelityFX runtime reports its own list and the panel offers what the game
+  reports. Anything past the second was refused by the config writer, so it
+  reached neither the file nor the running game while still appearing selected.
+- **Refused settings are reported instead of left on screen.** A value the
+  writer will not take is now put back to what the file says, and the Quick
+  Access panel says which key was refused — previously the control kept showing
+  a change that existed nowhere.
+- **Re-reading the config no longer undoes an edit or blanks the panel.** Edits
+  are written on a short debounce, so a read landing in that window used to
+  overwrite them with the file's older contents, and the panel would drop back
+  to "Reading config…" — taking the live upscaler switch with it. A read now
+  keeps the controls on screen and lays any newer edit back on top.
+- **The live upscaler switch works for DX11 games.** It compared the pick
+  against the DX12 and Vulkan backends only, so a game reporting its upscaler
+  under DX11 was compared against nothing.
+
+[0.0.2]: https://github.com/danielcamilo1/decky-optiscaler/releases/tag/v0.0.2
+
 ## [0.0.1] - 2026-08-20
 
 First public release. Bundles **OptiScaler v0.9.4**, so installing works offline

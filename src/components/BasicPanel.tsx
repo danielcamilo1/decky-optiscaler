@@ -17,8 +17,9 @@ import {
   supportsMultiplier,
   usesFfxFrameGen,
 } from "../config/basic";
+import { curatedLabel } from "../config/labels";
 import { optionById } from "../config/tabs";
-import { effectiveValue, labelFor } from "../config/values";
+import { AUTO, effectiveValue, labelFor } from "../config/values";
 import type { Preset } from "../config/basic";
 import type {
   AutoPlan,
@@ -83,6 +84,60 @@ function ffxFgOptions(live: LiveStatus | null | undefined, option: OptionMeta | 
   };
 }
 
+interface Choice {
+  data: string;
+  label: string;
+}
+
+/**
+ * A dropdown whose value is worked out from the ini and the running game rather
+ * than remembered by the control.
+ *
+ * Steam's Dropdown shows the option whose `data` equals `selectedOption`. Given
+ * a value that is in none of them it has nothing to show and keeps the label it
+ * built last, which reads as the control ignoring the choice just made. Neither
+ * source is guaranteed to name one of the choices on offer: an ini written from
+ * the Advanced page or by a wiki plan can hold an upscaler or an FG pair no
+ * preset covers, and the FFX FG list comes from the running game, which can
+ * report fewer generators than the index the ini holds. So a value with no
+ * option of its own is given one, named after itself — what the file says is
+ * then readable here instead of being displayed as something it is not.
+ *
+ * The `key` is the same problem from the other end. Nothing here can see
+ * whether Steam's control picked a new value up, so it is rebuilt whenever the
+ * value changes; the value is derived state, so there is nothing in the control
+ * worth preserving across that.
+ */
+function ValueDropdown({
+  options,
+  selected,
+  describe,
+  onPick,
+  ...rest
+}: Readonly<{
+  options: Choice[];
+  selected: string;
+  /** What to call a value the list does not offer. */
+  describe: (value: string) => string;
+  onPick: (value: string) => void;
+  label: string;
+  description?: string;
+  disabled?: boolean;
+  bottomSeparator?: "standard" | "none";
+}>) {
+  const known = options.some((choice) => choice.data === selected);
+  const rgOptions = known ? options : [...options, { data: selected, label: describe(selected) }];
+  return (
+    <DropdownItem
+      key={selected}
+      {...rest}
+      rgOptions={rgOptions}
+      selectedOption={selected}
+      onChange={(picked) => onPick(String(picked.data))}
+    />
+  );
+}
+
 /** The DX12 backend id a preset selects, or null for "leave the game alone". */
 function backendCode(preset: Preset | undefined): string | null {
   const change = preset?.changes.find(
@@ -120,6 +175,12 @@ export function BasicPanel({
   const fgOn = frameGenEnabled(values);
   const fgPreset = activeFgPreset(values);
   const upscalerPreset = activeUpscalerPreset(values);
+  // What the ini actually holds, for the cases the presets do not cover. Basic
+  // mode is a view of a file the Advanced page and the wiki plan also write, so
+  // it has to be able to say "this is set to something I have no name for".
+  const rawUpscaler = (values.Upscalers?.Dx12Upscaler ?? AUTO).toLowerCase();
+  const rawFgInput = (values.FrameGen?.FGInput ?? AUTO).toLowerCase();
+  const rawFgOutput = (values.FrameGen?.FGOutput ?? AUTO).toLowerCase();
   const multiplierOption = optionById(MULTIPLIER_ID);
   const multiplierUsable = supportsMultiplier(values);
 
@@ -158,7 +219,11 @@ export function BasicPanel({
   const ffxNotLive = ffxFgChanged && Boolean(live?.attached) && !live?.can_change_fg;
 
   const liveFg = typeof live?.fg_enabled === "boolean" ? live.fg_enabled : null;
-  const runningBackend = live?.upscaler?.dx12 ?? live?.upscaler?.vulkan ?? null;
+  // The same order the live tiles read it in — a DX11 game reports its backend
+  // under dx11 and nowhere else, and leaving that out made the switch compare
+  // the pick against nothing at all.
+  const runningBackend =
+    live?.upscaler?.dx12 ?? live?.upscaler?.vulkan ?? live?.upscaler?.dx11 ?? null;
   const wanted = backendCode(UPSCALER_PRESETS.find((preset) => preset.id === picked));
   // Nothing to apply once the game is already on it, or if the choice cannot be
   // pushed at all — the plugin has to be attached with an upscaler registered.
@@ -219,15 +284,21 @@ export function BasicPanel({
           upscaler is, so it is a recommendation printed under the control
           rather than the control's replacement. */}
       <PanelSectionRow>
-        <DropdownItem
+        <ValueDropdown
           label="Method"
           description={hint(fgPreset?.description ?? "Choose which frame generator to use.")}
           disabled={disabled || !fgOn}
           bottomSeparator={automatic && plannedFg ? "none" : "standard"}
-          rgOptions={FG_PRESETS.map((preset) => ({ data: preset.id, label: preset.label }))}
-          selectedOption={fgPreset?.id ?? FG_PRESETS[0].id}
-          onChange={(selected) => {
-            const preset = FG_PRESETS.find((p) => p.id === selected.data);
+          options={FG_PRESETS.map((preset) => ({ data: preset.id, label: preset.label }))}
+          // A wiki plan writes the pair the entry names, which is a stronger
+          // statement than any preset and need not be one of them.
+          selected={fgPreset?.id ?? `${rawFgInput} \u2192 ${rawFgOutput}`}
+          describe={() =>
+            `${curatedLabel("FrameGen.FGInput", rawFgInput) ?? rawFgInput} \u2192 ` +
+            `${curatedLabel("FrameGen.FGOutput", rawFgOutput) ?? rawFgOutput}`
+          }
+          onPick={(id) => {
+            const preset = FG_PRESETS.find((p) => p.id === id);
             if (!preset) return;
             setMethodChanged(true);
             onApply(preset.changes);
@@ -360,7 +431,7 @@ export function BasicPanel({
             which is what the in-game plugin does alongside the write. */}
         {ffxUsable && ffxChoices.options.length > 1 ? (
           <PanelSectionRow>
-            <DropdownItem
+            <ValueDropdown
               label="FFX FG version"
               description={hint(
                 ffxChoices.fromGame
@@ -369,11 +440,15 @@ export function BasicPanel({
               )}
               disabled={disabled || !fgOn}
               bottomSeparator={ffxNotLive ? "none" : "standard"}
-              rgOptions={ffxChoices.options}
-              selectedOption={ffxSelected}
-              onChange={(selected) => {
+              options={ffxChoices.options}
+              selected={ffxSelected}
+              // The ini can hold an index this game's runtime does not offer —
+              // it was set for another game, or by an older release with a
+              // different list.
+              describe={(index) => `Generator ${index} (not offered here)`}
+              onPick={(index) => {
                 setFfxFgChanged(true);
-                onApply(ffxFgChanges(String(selected.data)));
+                onApply(ffxFgChanges(index));
               }}
             />
           </PanelSectionRow>
@@ -393,7 +468,7 @@ export function BasicPanel({
 
         {multiplierOption ? (
           <PanelSectionRow>
-            <DropdownItem
+            <ValueDropdown
               label="Frame multiplier"
               description={
                 multiplierUsable
@@ -402,18 +477,15 @@ export function BasicPanel({
               }
               disabled={disabled || !fgOn || !multiplierUsable}
               bottomSeparator="standard"
-              rgOptions={(multiplierOption.options ?? []).map((value) => ({
+              options={(multiplierOption.options ?? []).map((value) => ({
                 data: value,
                 label: labelFor(multiplierOption, value),
               }))}
-              selectedOption={effectiveValue(values, multiplierOption)}
-              onChange={(selected) =>
+              selected={effectiveValue(values, multiplierOption)}
+              describe={(value) => labelFor(multiplierOption, value)}
+              onPick={(value) =>
                 onApply([
-                  {
-                    section: MULTIPLIER_SECTION,
-                    key: MULTIPLIER_KEY,
-                    value: String(selected.data),
-                  },
+                  { section: MULTIPLIER_SECTION, key: MULTIPLIER_KEY, value },
                 ])
               }
             />
@@ -435,20 +507,24 @@ export function BasicPanel({
 
       <PanelSection title="Upscaler">
         <PanelSectionRow>
-          <DropdownItem
+          <ValueDropdown
             label="Override upscaler with"
             description={hint(
               upscalerPreset?.description ?? "Replaces whichever upscaler the game asks for."
             )}
             disabled={disabled}
             bottomSeparator="standard"
-            rgOptions={upscalerChoices.map((preset) => ({
+            options={upscalerChoices.map((preset) => ({
               data: preset.id,
               label: preset.label,
             }))}
-            selectedOption={upscalerPreset?.id ?? "auto"}
-            onChange={(selected) => {
-              const preset = UPSCALER_PRESETS.find((p) => p.id === selected.data);
+            // The Advanced page can set a backend no preset covers — fsr21, or
+            // one of the dx11on12 variants. Showing "Auto" for those said the
+            // opposite of what the file holds.
+            selected={upscalerPreset?.id ?? rawUpscaler}
+            describe={(code) => curatedLabel("Upscalers.Dx12Upscaler", code) ?? code}
+            onPick={(id) => {
+              const preset = UPSCALER_PRESETS.find((p) => p.id === id);
               if (!preset) return;
               setPicked(preset.id);
               setSwitchError(null);

@@ -1148,6 +1148,57 @@ def check_library_labels():
            OptiScalerService._disk_name("/dev/sda2")) == ("mmcblk0", "nvme0n1", "sda"))
 
 
+def check_option_validation():
+    """Values the config writer accepts, for the keys whose list is not fixed.
+
+    A write the writer refuses is dropped *and* never pushed to the running
+    game, and the panel is left showing a choice that reached neither. That is
+    only correct when the refusal is: FSR.FGIndex is documented in the shipped
+    ini as the two generators the reference build had, but each game's
+    FidelityFX runtime reports its own list, and the plugin lists what the game
+    reports. Validating a pick against the ini's two entries therefore refused
+    every generator past the second one that a game actually offered.
+    """
+    from optiscaler.live import FFX_FG_MAX
+    from optiscaler.schema import SCHEMA, valid
+
+    print("\nOption validation")
+
+    fg_index = SCHEMA[("FSR", "FGIndex")]
+    check("the reference ini only documents two FFX generators",
+          fg_index["options"] == ["0", "1"], fg_index["options"])
+    check("but a third one the game reports is accepted", valid(fg_index, "2"))
+    check("up to the ceiling the live channel enforces",
+          valid(fg_index, str(FFX_FG_MAX - 1)) and not valid(fg_index, str(FFX_FG_MAX)))
+    check("an index that is not one is still refused",
+          not valid(fg_index, "-1") and not valid(fg_index, "fsr"))
+    check("auto still means auto", valid(fg_index, "auto"))
+
+    # Everything else keeps the closed-set treatment: these lists are the
+    # backends OptiScaler has, not a snapshot of one runtime's answer.
+    dx12 = SCHEMA[("Upscalers", "Dx12Upscaler")]
+    check("a real backend id is accepted", valid(dx12, "fsr31"))
+    check("an id OptiScaler does not have is not", not valid(dx12, "fsr31_12"))
+
+    # Basic mode's presets all have to survive the writer, or picking one would
+    # half-apply: some keys written, others silently dropped.
+    from optiscaler.schema import option as schema_option
+    presets = {
+        "fsr4": [("Upscalers", "Dx12Upscaler", "fsr31"), ("Upscalers", "Dx11Upscaler", "fsr31_12"),
+                 ("Upscalers", "VulkanUpscaler", "fsr31_12"), ("FSR", "Fsr4Update", "true"),
+                 ("FSR", "UpscalerIndex", "0")],
+        "fsr31": [("Upscalers", "Dx12Upscaler", "fsr31"), ("Upscalers", "Dx11Upscaler", "fsr31"),
+                  ("Upscalers", "VulkanUpscaler", "fsr31"), ("FSR", "Fsr4Update", "false"),
+                  ("FSR", "UpscalerIndex", "1")],
+        "xess": [("Upscalers", "Dx12Upscaler", "xess"), ("Upscalers", "Dx11Upscaler", "xess_12"),
+                 ("Upscalers", "VulkanUpscaler", "xess")],
+    }
+    for name, changes in presets.items():
+        bad = [f"{s}.{k}={v}" for s, k, v in changes
+               if not (schema_option(s, k) and valid(schema_option(s, k), v))]
+        check(f"every key the {name} preset writes is accepted", not bad, bad)
+
+
 def main():
     logging.basicConfig(level=logging.ERROR)
     asyncio.run(run())
@@ -1162,6 +1213,7 @@ def main():
     check_asi_backend_layout()
     check_asi_state_layout()
     check_auto_plan()
+    check_option_validation()
     check_library_labels()
     print(f"\n{len(PASSED)} passed, {len(FAILED)} failed")
     if FAILED:

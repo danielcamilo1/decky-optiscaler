@@ -1,6 +1,6 @@
 {
   "name": "decky-optiscaler",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Manage OptiScaler per game from the Steam Deck UI, without the in-game overlay",
   "type": "module",
   "scripts": {

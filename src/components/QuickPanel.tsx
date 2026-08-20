@@ -195,6 +195,18 @@ function NowPlayingTab({
 
       {installed && detail ? (
         <>
+          {/* A write the backend would not take reaches neither the file nor
+              the running game, and this is the surface those changes are made
+              from, so it has to say so rather than leave the control looking
+              as if it worked. */}
+          {config.error ? (
+            <PanelSection>
+              <PanelSectionRow>
+                <Notice tone="error">{config.error}</Notice>
+              </PanelSectionRow>
+            </PanelSection>
+          ) : null}
+
           {config.loading ? (
             <Centered>Reading config…</Centered>
           ) : (
