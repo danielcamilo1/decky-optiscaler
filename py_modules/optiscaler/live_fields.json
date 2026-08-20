@@ -1,0 +1,1444 @@
+{
+ "fields": {
+  "Anisotropy.AFModifyComparison": {
+   "kind": "bool",
+   "member": "AnisotropyModifyComp",
+   "read": "Bool"
+  },
+  "Anisotropy.AFModifyMinMax": {
+   "kind": "bool",
+   "member": "AnisotropyModifyMinMax",
+   "read": "Bool"
+  },
+  "Anisotropy.AnisotropyOverride": {
+   "kind": "int",
+   "member": "AnisotropyOverride",
+   "read": "Int"
+  },
+  "Anisotropy.SkipPointFilter": {
+   "kind": "bool",
+   "member": "AnisotropySkipPointFilter",
+   "read": "Bool"
+  },
+  "CAS.Contrast": {
+   "kind": "float",
+   "member": "Contrast",
+   "read": "Float"
+  },
+  "CAS.ContrastEnabled": {
+   "kind": "bool",
+   "member": "ContrastEnabled",
+   "read": "Bool"
+  },
+  "CAS.DAClampOutput": {
+   "kind": "bool",
+   "member": "DAClampOutput",
+   "read": "Bool"
+  },
+  "CAS.DADepthBias": {
+   "kind": "float",
+   "member": "DADepthBias",
+   "read": "Float"
+  },
+  "CAS.DADepthIsLinear": {
+   "kind": "bool",
+   "member": "DADepthIsLinear",
+   "read": "Bool"
+  },
+  "CAS.DADepthScale": {
+   "kind": "float",
+   "member": "DADepthScale",
+   "read": "Float"
+  },
+  "CAS.Enabled": {
+   "kind": "bool",
+   "member": "RcasEnabled",
+   "read": "Bool"
+  },
+  "CAS.MotionScaleLimit": {
+   "kind": "float",
+   "member": "MotionScaleLimit",
+   "read": "Float"
+  },
+  "CAS.MotionSharpness": {
+   "kind": "float",
+   "member": "MotionSharpness",
+   "read": "Float"
+  },
+  "CAS.MotionSharpnessEnabled": {
+   "kind": "bool",
+   "member": "MotionSharpnessEnabled",
+   "read": "Bool"
+  },
+  "CAS.MotionThreshold": {
+   "kind": "float",
+   "member": "MotionThreshold",
+   "read": "Float"
+  },
+  "CAS.SharpenerDebug": {
+   "kind": "bool",
+   "member": "MotionSharpnessDebug",
+   "read": "Bool"
+  },
+  "CAS.UseDASDepthAwareSharpen": {
+   "kind": "bool",
+   "member": "UseDASDepthAwareSharpen",
+   "read": "Bool"
+  },
+  "CAS.UseDepthAwareSharpen": {
+   "kind": "bool",
+   "member": "UseDepthAwareSharpen",
+   "read": "Bool"
+  },
+  "DLSS.Enabled": {
+   "kind": "bool",
+   "member": "DLSSEnabled",
+   "read": "Bool"
+  },
+  "DLSS.RenderPresetBalanced": {
+   "kind": "uint32_t",
+   "member": "RenderPresetBalanced",
+   "read": "Int"
+  },
+  "DLSS.RenderPresetDLAA": {
+   "kind": "uint32_t",
+   "member": "RenderPresetDLAA",
+   "read": "Int"
+  },
+  "DLSS.RenderPresetForAll": {
+   "kind": "uint32_t",
+   "member": "RenderPresetForAll",
+   "read": "Int"
+  },
+  "DLSS.RenderPresetOverride": {
+   "kind": "bool",
+   "member": "RenderPresetOverride",
+   "read": "Bool"
+  },
+  "DLSS.RenderPresetPerformance": {
+   "kind": "uint32_t",
+   "member": "RenderPresetPerformance",
+   "read": "Int"
+  },
+  "DLSS.RenderPresetQuality": {
+   "kind": "uint32_t",
+   "member": "RenderPresetQuality",
+   "read": "Int"
+  },
+  "DLSS.RenderPresetUltraPerformance": {
+   "kind": "uint32_t",
+   "member": "RenderPresetUltraPerformance",
+   "read": "Int"
+  },
+  "DLSS.RenderPresetUltraQuality": {
+   "kind": "uint32_t",
+   "member": "RenderPresetUltraQuality",
+   "read": "Int"
+  },
+  "DLSS.UseGenericAppIdWithDlss": {
+   "kind": "bool",
+   "member": "UseGenericAppIdWithDlss",
+   "read": "Bool"
+  },
+  "DLSSD.RenderPresetBalanced": {
+   "kind": "uint32_t",
+   "member": "DLSSDRenderPresetBalanced",
+   "read": "Int"
+  },
+  "DLSSD.RenderPresetDLAA": {
+   "kind": "uint32_t",
+   "member": "DLSSDRenderPresetDLAA",
+   "read": "Int"
+  },
+  "DLSSD.RenderPresetForAll": {
+   "kind": "uint32_t",
+   "member": "DLSSDRenderPresetForAll",
+   "read": "Int"
+  },
+  "DLSSD.RenderPresetOverride": {
+   "kind": "bool",
+   "member": "DLSSDRenderPresetOverride",
+   "read": "Bool"
+  },
+  "DLSSD.RenderPresetPerformance": {
+   "kind": "uint32_t",
+   "member": "DLSSDRenderPresetPerformance",
+   "read": "Int"
+  },
+  "DLSSD.RenderPresetQuality": {
+   "kind": "uint32_t",
+   "member": "DLSSDRenderPresetQuality",
+   "read": "Int"
+  },
+  "DLSSD.RenderPresetUltraPerformance": {
+   "kind": "uint32_t",
+   "member": "DLSSDRenderPresetUltraPerformance",
+   "read": "Int"
+  },
+  "DLSSD.RenderPresetUltraQuality": {
+   "kind": "uint32_t",
+   "member": "DLSSDRenderPresetUltraQuality",
+   "read": "Int"
+  },
+  "DRS.DrsMaxOverrideEnabled": {
+   "kind": "bool",
+   "member": "DrsMaxOverrideEnabled",
+   "read": "Bool"
+  },
+  "DRS.DrsMinOverrideEnabled": {
+   "kind": "bool",
+   "member": "DrsMinOverrideEnabled",
+   "read": "Bool"
+  },
+  "Dx11withDx12.DontUseNTShared": {
+   "kind": "bool",
+   "member": "DontUseNTShared",
+   "read": "Bool"
+  },
+  "Dx11withDx12.UseDelayedInit": {
+   "kind": "bool",
+   "member": "Dx11DelayedInit",
+   "read": "Int"
+  },
+  "FSR.AccAddPerFrame": {
+   "kind": "float",
+   "member": "FsrAccAddPerFrame",
+   "read": "Float"
+  },
+  "FSR.CameraFar": {
+   "kind": "float",
+   "member": "FsrCameraFar",
+   "read": "Float"
+  },
+  "FSR.CameraNear": {
+   "kind": "float",
+   "member": "FsrCameraNear",
+   "read": "Float"
+  },
+  "FSR.DebugView": {
+   "kind": "bool",
+   "member": "FsrDebugView",
+   "read": "Bool"
+  },
+  "FSR.DlssReactiveMaskBias": {
+   "kind": "float",
+   "member": "DlssReactiveMaskBias",
+   "read": "Float"
+  },
+  "FSR.FGIndex": {
+   "kind": "int",
+   "member": "FfxFGIndex",
+   "read": "Int"
+  },
+  "FSR.Fsr4DoNotLoadAmdxc64": {
+   "kind": "bool",
+   "member": "Fsr4DoNotLoadAmdxc64",
+   "read": "Bool"
+  },
+  "FSR.Fsr4EnableDebugView": {
+   "kind": "bool",
+   "member": "Fsr4EnableDebugView",
+   "read": "Bool"
+  },
+  "FSR.Fsr4EnableWatermark": {
+   "kind": "bool",
+   "member": "Fsr4EnableWatermark",
+   "read": "Bool"
+  },
+  "FSR.Fsr4ForceEnableInt8": {
+   "kind": "bool",
+   "member": "Fsr4ForceEnableInt8",
+   "read": "Bool"
+  },
+  "FSR.Fsr4Preset": {
+   "kind": "uint32_t",
+   "member": "Fsr4Preset",
+   "read": "Int"
+  },
+  "FSR.Fsr4Update": {
+   "kind": "bool",
+   "member": "Fsr4Update",
+   "read": "Bool"
+  },
+  "FSR.FsrAgilitySDKUpgrade": {
+   "kind": "bool",
+   "member": "FsrAgilitySDKUpgrade",
+   "read": "Bool"
+  },
+  "FSR.FsrNonLinearColorSpace": {
+   "kind": "bool",
+   "member": "FsrNonLinearColorSpace",
+   "read": "Bool"
+  },
+  "FSR.FsrNonLinearPQ": {
+   "kind": "bool",
+   "member": "FsrNonLinearPQ",
+   "read": "Bool"
+  },
+  "FSR.FsrNonLinearSRGB": {
+   "kind": "bool",
+   "member": "FsrNonLinearSRGB",
+   "read": "Bool"
+  },
+  "FSR.HorizontalFov": {
+   "kind": "float",
+   "member": "FsrHorizontalFov",
+   "read": "Float"
+  },
+  "FSR.MinDisOccAcc": {
+   "kind": "float",
+   "member": "FsrMinDisOccAcc",
+   "read": "Float"
+  },
+  "FSR.ReactiveScale": {
+   "kind": "float",
+   "member": "FsrReactiveScale",
+   "read": "Float"
+  },
+  "FSR.ShadingScale": {
+   "kind": "float",
+   "member": "FsrShadingScale",
+   "read": "Float"
+  },
+  "FSR.UpscalerIndex": {
+   "kind": "int",
+   "member": "FfxUpscalerIndex",
+   "read": "Int"
+  },
+  "FSR.UseFsrInputValues": {
+   "kind": "bool",
+   "member": "FsrUseFsrInputValues",
+   "read": "Bool"
+  },
+  "FSR.UseReactiveMaskForTransparency": {
+   "kind": "bool",
+   "member": "FsrUseMaskForTransparency",
+   "read": "Bool"
+  },
+  "FSR.VelocityFactor": {
+   "kind": "float",
+   "member": "FsrVelocity",
+   "read": "Float"
+  },
+  "FSR.VerticalFov": {
+   "kind": "float",
+   "member": "FsrVerticalFov",
+   "read": "Float"
+  },
+  "FSRFG.AllowAsync": {
+   "kind": "bool",
+   "member": "FGAsync",
+   "read": "Bool"
+  },
+  "FSRFG.DebugPacingLines": {
+   "kind": "bool",
+   "member": "FGDebugPacingLines",
+   "read": "Bool"
+  },
+  "FSRFG.DebugResetLines": {
+   "kind": "bool",
+   "member": "FGDebugResetLines",
+   "read": "Bool"
+  },
+  "FSRFG.DebugTearLines": {
+   "kind": "bool",
+   "member": "FGDebugTearLines",
+   "read": "Bool"
+  },
+  "FSRFG.EnableWatermark": {
+   "kind": "bool",
+   "member": "FSRFGEnableWatermark",
+   "read": "Bool"
+  },
+  "FSRFG.FPTHybridSpin": {
+   "kind": "bool",
+   "member": "FGFPTAllowHybridSpin",
+   "read": "Bool"
+  },
+  "FSRFG.FPTHybridSpinTime": {
+   "kind": "int",
+   "member": "FGFPTHybridSpinTime",
+   "read": "Int"
+  },
+  "FSRFG.FPTSafetyMarginInMs": {
+   "kind": "float",
+   "member": "FGFPTSafetyMarginInMs",
+   "read": "Float"
+  },
+  "FSRFG.FPTVarianceFactor": {
+   "kind": "float",
+   "member": "FGFPTVarianceFactor",
+   "read": "Float"
+  },
+  "FSRFG.FPTWaitForSingleObjectOnFence": {
+   "kind": "bool",
+   "member": "FGFPTAllowWaitForSingleObjectOnFence",
+   "read": "Bool"
+  },
+  "FSRFG.FramePacingTuning": {
+   "kind": "bool",
+   "member": "FGFramePacingTuning",
+   "read": "Bool"
+  },
+  "FSRFG.UseMutexForSwapchain": {
+   "kind": "bool",
+   "member": "FGUseMutexForSwapchain",
+   "read": "Bool"
+  },
+  "FSRFGInputs.SkipConfigForHudless": {
+   "kind": "bool",
+   "member": "FSRFGSkipConfigForHudless",
+   "read": "Bool"
+  },
+  "FSRFGInputs.SkipDispatchForHudless": {
+   "kind": "bool",
+   "member": "FSRFGSkipDispatchForHudless",
+   "read": "Bool"
+  },
+  "FrameGen.AllowedFrameAhead": {
+   "kind": "int",
+   "member": "FGAllowedFrameAhead",
+   "read": "Int"
+  },
+  "FrameGen.DebugView": {
+   "kind": "bool",
+   "member": "FGDebugView",
+   "read": "Bool"
+  },
+  "FrameGen.DepthValidNow": {
+   "kind": "bool",
+   "member": "FGDepthValidNow",
+   "read": "Bool"
+  },
+  "FrameGen.DisableHudless": {
+   "kind": "bool",
+   "member": "FGDisableHudless",
+   "read": "Bool"
+  },
+  "FrameGen.DisableUI": {
+   "kind": "bool",
+   "member": "FGDisableUI",
+   "read": "Bool"
+  },
+  "FrameGen.DrawUIOverFG": {
+   "kind": "bool",
+   "member": "FGDrawUIOverFG",
+   "read": "Bool"
+  },
+  "FrameGen.Enabled": {
+   "kind": "bool",
+   "member": "FGEnabled",
+   "read": "Bool"
+  },
+  "FrameGen.FGInput": {
+   "kind": "enum:FGInput",
+   "member": "FGInput",
+   "read": "String"
+  },
+  "FrameGen.FGOutput": {
+   "kind": "enum:FGOutput",
+   "member": "FGOutput",
+   "read": "String"
+  },
+  "FrameGen.FTSource": {
+   "kind": "enum:FrameTimeSource",
+   "member": "FTInput",
+   "read": "Int"
+  },
+  "FrameGen.HudlessValidNow": {
+   "kind": "bool",
+   "member": "FGHudlessValidNow",
+   "read": "Bool"
+  },
+  "FrameGen.ModifyBufferState": {
+   "kind": "bool",
+   "member": "FGModifyBufferState",
+   "read": "Bool"
+  },
+  "FrameGen.ModifySCIndex": {
+   "kind": "bool",
+   "member": "FGModifySCIndex",
+   "read": "Bool"
+  },
+  "FrameGen.OnlyAcceptFirstHudless": {
+   "kind": "bool",
+   "member": "FGOnlyAcceptFirstHudless",
+   "read": "Bool"
+  },
+  "FrameGen.PreserveSwapChain": {
+   "kind": "bool",
+   "member": "FGPreserveSwapChain",
+   "read": "Bool"
+  },
+  "FrameGen.RectHeight": {
+   "kind": "int",
+   "member": "FGRectHeight",
+   "read": "Int"
+  },
+  "FrameGen.RectLeft": {
+   "kind": "int",
+   "member": "FGRectLeft",
+   "read": "Int"
+  },
+  "FrameGen.RectTop": {
+   "kind": "int",
+   "member": "FGRectTop",
+   "read": "Int"
+  },
+  "FrameGen.RectWidth": {
+   "kind": "int",
+   "member": "FGRectWidth",
+   "read": "Int"
+  },
+  "FrameGen.SkipReset": {
+   "kind": "bool",
+   "member": "FGSkipReset",
+   "read": "Bool"
+  },
+  "FrameGen.SkipResizeBuffers": {
+   "kind": "bool",
+   "member": "FGSkipResizeBuffers",
+   "read": "Bool"
+  },
+  "FrameGen.UIPremultipliedAlpha": {
+   "kind": "bool",
+   "member": "FGUIPremultipliedAlpha",
+   "read": "Bool"
+  },
+  "FrameGen.VelocityValidNow": {
+   "kind": "bool",
+   "member": "FGVelocityValidNow",
+   "read": "Bool"
+  },
+  "Framerate.FramerateLimit": {
+   "kind": "float",
+   "member": "FramerateLimit",
+   "read": "Float"
+  },
+  "HDR.ForceHDR": {
+   "kind": "bool",
+   "member": "ForceHDR",
+   "read": "Bool"
+  },
+  "HDR.SkipColorSpace": {
+   "kind": "bool",
+   "member": "SkipColorSpace",
+   "read": "Bool"
+  },
+  "HDR.UseHDR10": {
+   "kind": "bool",
+   "member": "UseHDR10",
+   "read": "Bool"
+  },
+  "Hooks.EarlyHooking": {
+   "kind": "bool",
+   "member": "EarlyHooking",
+   "read": "Bool"
+  },
+  "Hooks.HookOriginalNvngxOnly": {
+   "kind": "bool",
+   "member": "HookOriginalNvngxOnly",
+   "read": "Bool"
+  },
+  "Hooks.UseNtdllHooks": {
+   "kind": "bool",
+   "member": "UseNtdllHooks",
+   "read": "Bool"
+  },
+  "Hotfix.CheckForUpdate": {
+   "kind": "bool",
+   "member": "CheckForUpdate",
+   "read": "Bool"
+  },
+  "Hotfix.ColorMaskResourceBarrier": {
+   "kind": "int32_t",
+   "member": "MaskResourceBarrier",
+   "read": "Int"
+  },
+  "Hotfix.ColorResourceBarrier": {
+   "kind": "int32_t",
+   "member": "ColorResourceBarrier",
+   "read": "Int"
+  },
+  "Hotfix.CreateD3D12DeviceForLuma": {
+   "kind": "bool",
+   "member": "CreateD3D12DeviceForLuma",
+   "read": "Bool"
+  },
+  "Hotfix.DepthResourceBarrier": {
+   "kind": "int32_t",
+   "member": "DepthResourceBarrier",
+   "read": "Int"
+  },
+  "Hotfix.DisableOverlays": {
+   "kind": "bool",
+   "member": "DisableOverlays",
+   "read": "Bool"
+  },
+  "Hotfix.ExposureResourceBarrier": {
+   "kind": "int32_t",
+   "member": "ExposureResourceBarrier",
+   "read": "Int"
+  },
+  "Hotfix.ExtendedStateRestore": {
+   "kind": "bool",
+   "member": "ExtendedStateRestore",
+   "read": "Bool"
+  },
+  "Hotfix.ManualInputPolling": {
+   "kind": "bool",
+   "member": "ManualInputPolling",
+   "read": "Bool"
+  },
+  "Hotfix.MotionVectorResourceBarrier": {
+   "kind": "int32_t",
+   "member": "MVResourceBarrier",
+   "read": "Int"
+  },
+  "Hotfix.OutputResourceBarrier": {
+   "kind": "int32_t",
+   "member": "OutputResourceBarrier",
+   "read": "Int"
+  },
+  "Hotfix.PreferDedicatedGpu": {
+   "kind": "bool",
+   "member": "PreferDedicatedGpu",
+   "read": "Bool"
+  },
+  "Hotfix.PreferFirstDedicatedGpu": {
+   "kind": "bool",
+   "member": "PreferFirstDedicatedGpu",
+   "read": "Bool"
+  },
+  "Hotfix.RestoreComputeSignature": {
+   "kind": "bool",
+   "member": "RestoreComputeSignature",
+   "read": "Bool"
+  },
+  "Hotfix.RestoreGraphicSignature": {
+   "kind": "bool",
+   "member": "RestoreGraphicSignature",
+   "read": "Bool"
+  },
+  "Hotfix.RoundInternalResolution": {
+   "kind": "int",
+   "member": "RoundInternalResolution",
+   "read": "Int"
+  },
+  "Hotfix.SimulateWaitableObject": {
+   "kind": "bool",
+   "member": "SimulateWaitableObject",
+   "read": "Bool"
+  },
+  "Hotfix.SkipFirstFrames": {
+   "kind": "int",
+   "member": "SkipFirstFrames",
+   "read": "Int"
+  },
+  "Hotfix.UsePrecompiledShaders": {
+   "kind": "bool",
+   "member": "UsePrecompiledShaders",
+   "read": "Bool"
+  },
+  "InitFlags.AutoExposure": {
+   "kind": "bool",
+   "member": "AutoExposure",
+   "read": "Bool"
+  },
+  "InitFlags.DepthInverted": {
+   "kind": "bool",
+   "member": "DepthInverted",
+   "read": "Bool"
+  },
+  "InitFlags.DisableReactiveMask": {
+   "kind": "bool",
+   "member": "DisableReactiveMask",
+   "read": "Bool"
+  },
+  "InitFlags.DisplayResolution": {
+   "kind": "bool",
+   "member": "DisplayResolution",
+   "read": "Bool"
+  },
+  "InitFlags.HDR": {
+   "kind": "bool",
+   "member": "HDR",
+   "read": "Bool"
+  },
+  "InitFlags.JitterCancellation": {
+   "kind": "bool",
+   "member": "JitterCancellation",
+   "read": "Bool"
+  },
+  "Inputs.EnableDlssInputs": {
+   "kind": "bool",
+   "member": "EnableDlssInputs",
+   "read": "Bool"
+  },
+  "Inputs.EnableFfxInputs": {
+   "kind": "bool",
+   "member": "EnableFfxInputs",
+   "read": "Bool"
+  },
+  "Inputs.EnableFsr2Inputs": {
+   "kind": "bool",
+   "member": "EnableFsr2Inputs",
+   "read": "Bool"
+  },
+  "Inputs.EnableFsr3Inputs": {
+   "kind": "bool",
+   "member": "EnableFsr3Inputs",
+   "read": "Bool"
+  },
+  "Inputs.EnableHotSwapping": {
+   "kind": "bool",
+   "member": "EnableHotSwapping",
+   "read": "Bool"
+  },
+  "Inputs.EnableXeSSInputs": {
+   "kind": "bool",
+   "member": "EnableXeSSInputs",
+   "read": "Bool"
+  },
+  "Inputs.Fsr2Pattern": {
+   "kind": "bool",
+   "member": "Fsr2Pattern",
+   "read": "Bool"
+  },
+  "Inputs.Fsr3Pattern": {
+   "kind": "bool",
+   "member": "Fsr3Pattern",
+   "read": "Bool"
+  },
+  "Inputs.UseFfxInputs": {
+   "kind": "bool",
+   "member": "UseFfxInputs",
+   "read": "Bool"
+  },
+  "Inputs.UseFsr2Dx11Inputs": {
+   "kind": "bool",
+   "member": "UseFsr2Dx11Inputs",
+   "read": "Bool"
+  },
+  "Inputs.UseFsr2Inputs": {
+   "kind": "bool",
+   "member": "UseFsr2Inputs",
+   "read": "Bool"
+  },
+  "Inputs.UseFsr2VulkanInputs": {
+   "kind": "bool",
+   "member": "UseFsr2VulkanInputs",
+   "read": "Bool"
+  },
+  "Inputs.UseFsr3Inputs": {
+   "kind": "bool",
+   "member": "UseFsr3Inputs",
+   "read": "Bool"
+  },
+  "Libraries.FfxDx12FGPath": {
+   "kind": "std::wstring",
+   "member": "FfxDx12FGPath",
+   "read": "WString"
+  },
+  "Libraries.FfxDx12Path": {
+   "kind": "std::wstring",
+   "member": "FfxDx12Path",
+   "read": "WString"
+  },
+  "Libraries.FfxDx12RCPath": {
+   "kind": "std::wstring",
+   "member": "FfxDx12RCPath",
+   "read": "WString"
+  },
+  "Libraries.FfxDx12RRPath": {
+   "kind": "std::wstring",
+   "member": "FfxDx12RRPath",
+   "read": "WString"
+  },
+  "Libraries.FfxDx12SRPath": {
+   "kind": "std::wstring",
+   "member": "FfxDx12SRPath",
+   "read": "WString"
+  },
+  "Libraries.FfxVkPath": {
+   "kind": "std::wstring",
+   "member": "FfxVkPath",
+   "read": "WString"
+  },
+  "Libraries.NvapiPath": {
+   "kind": "std::wstring",
+   "member": "NvapiDllPath",
+   "read": "WString"
+  },
+  "Libraries.NvngxDlssPath": {
+   "kind": "std::wstring",
+   "member": "NVNGX_DLSS_Library",
+   "read": "WString"
+  },
+  "Libraries.NvngxFeaturePath": {
+   "kind": "std::wstring",
+   "member": "DLSSFeaturePath",
+   "read": "WString"
+  },
+  "Libraries.NvngxPath": {
+   "kind": "std::wstring",
+   "member": "NvngxPath",
+   "read": "WString"
+  },
+  "Libraries.OptiDllPath": {
+   "kind": "std::wstring",
+   "member": "MainDllPath",
+   "read": "WString"
+  },
+  "Libraries.XeFGPath": {
+   "kind": "std::wstring",
+   "member": "XeSSLibrary",
+   "read": "WString"
+  },
+  "Libraries.XeLLPath": {
+   "kind": "std::wstring",
+   "member": "XeSSLibrary",
+   "read": "WString"
+  },
+  "Libraries.XeSSDx11Path": {
+   "kind": "std::wstring",
+   "member": "XeSSDx11Library",
+   "read": "WString"
+  },
+  "Libraries.XeSSPath": {
+   "kind": "std::wstring",
+   "member": "XeSSLibrary",
+   "read": "WString"
+  },
+  "Log.DebugWait": {
+   "kind": "bool",
+   "member": "DebugWait",
+   "read": "Bool"
+  },
+  "Log.LogAsync": {
+   "kind": "bool",
+   "member": "LogAsync",
+   "read": "Bool"
+  },
+  "Log.LogAsyncThreads": {
+   "kind": "int",
+   "member": "LogAsyncThreads",
+   "read": "Int"
+  },
+  "Log.LogLevel": {
+   "kind": "int",
+   "member": "LogLevel",
+   "read": "Int"
+  },
+  "Log.LogToConsole": {
+   "kind": "bool",
+   "member": "LogToConsole",
+   "read": "Bool"
+  },
+  "Log.LogToDebug": {
+   "kind": "bool",
+   "member": "LogToDebug",
+   "read": "Bool"
+  },
+  "Log.LogToFile": {
+   "kind": "bool",
+   "member": "LogToFile",
+   "read": "Bool"
+  },
+  "Log.LogToNGX": {
+   "kind": "bool",
+   "member": "LogToNGX",
+   "read": "Bool"
+  },
+  "Log.OpenConsole": {
+   "kind": "bool",
+   "member": "OpenConsole",
+   "read": "Bool"
+  },
+  "Log.SingleFile": {
+   "kind": "bool",
+   "member": "LogSingleFile",
+   "read": "Bool"
+  },
+  "Menu.AccentColorB": {
+   "kind": "float",
+   "member": "MenuAccentColorB",
+   "read": "Float"
+  },
+  "Menu.AccentColorG": {
+   "kind": "float",
+   "member": "MenuAccentColorG",
+   "read": "Float"
+  },
+  "Menu.AccentColorR": {
+   "kind": "float",
+   "member": "MenuAccentColorR",
+   "read": "Float"
+  },
+  "Menu.BGColorA": {
+   "kind": "float",
+   "member": "MenuBGColorA",
+   "read": "Float"
+  },
+  "Menu.BGColorB": {
+   "kind": "float",
+   "member": "MenuBGColorB",
+   "read": "Float"
+  },
+  "Menu.BGColorG": {
+   "kind": "float",
+   "member": "MenuBGColorG",
+   "read": "Float"
+  },
+  "Menu.BGColorR": {
+   "kind": "float",
+   "member": "MenuBGColorR",
+   "read": "Float"
+  },
+  "Menu.DisableSplash": {
+   "kind": "bool",
+   "member": "DisableSplash",
+   "read": "Bool"
+  },
+  "Menu.ExtendedLimits": {
+   "kind": "bool",
+   "member": "ExtendedLimits",
+   "read": "Bool"
+  },
+  "Menu.FGShortcutKey": {
+   "kind": "int",
+   "member": "FGShortcutKey",
+   "read": "Int"
+  },
+  "Menu.FontSize": {
+   "kind": "float",
+   "member": "FontSize",
+   "read": "Float"
+  },
+  "Menu.FpsCycleShortcutKey": {
+   "kind": "int",
+   "member": "FpsCycleShortcutKey",
+   "read": "Int"
+  },
+  "Menu.FpsOverlayAlpha": {
+   "kind": "float",
+   "member": "FpsOverlayAlpha",
+   "read": "Float"
+  },
+  "Menu.FpsOverlayHorizontal": {
+   "kind": "bool",
+   "member": "FpsOverlayHorizontal",
+   "read": "Bool"
+  },
+  "Menu.FpsOverlayPos": {
+   "kind": "int",
+   "member": "FpsOverlayPos",
+   "read": "Int"
+  },
+  "Menu.FpsOverlayType": {
+   "kind": "enum:FpsOverlay",
+   "member": "FpsOverlayType",
+   "read": "UInt"
+  },
+  "Menu.FpsScale": {
+   "kind": "float",
+   "member": "FpsScale",
+   "read": "Float"
+  },
+  "Menu.FpsShortcutKey": {
+   "kind": "int",
+   "member": "FpsShortcutKey",
+   "read": "Int"
+  },
+  "Menu.LightTheme": {
+   "kind": "bool",
+   "member": "LightTheme",
+   "read": "Bool"
+  },
+  "Menu.OverlayMenu": {
+   "kind": "bool",
+   "member": "OverlayMenu",
+   "read": "Bool"
+  },
+  "Menu.Scale": {
+   "kind": "float",
+   "member": "MenuScale",
+   "read": "Float"
+  },
+  "Menu.ShortcutKey": {
+   "kind": "int",
+   "member": "ShortcutKey",
+   "read": "Int"
+  },
+  "Menu.ShowFps": {
+   "kind": "bool",
+   "member": "ShowFps",
+   "read": "Bool"
+  },
+  "Menu.TTFFontPath": {
+   "kind": "std::wstring",
+   "member": "TTFFontPath",
+   "read": "WString"
+  },
+  "Menu.UseHQFont": {
+   "kind": "bool",
+   "member": "UseHQFont",
+   "read": "Bool"
+  },
+  "Mipmap.MipmapBiasFixedOverride": {
+   "kind": "bool",
+   "member": "MipmapBiasFixedOverride",
+   "read": "Bool"
+  },
+  "Mipmap.MipmapBiasOverride": {
+   "kind": "float",
+   "member": "MipmapBiasOverride",
+   "read": "Float"
+  },
+  "Mipmap.MipmapBiasOverrideAll": {
+   "kind": "bool",
+   "member": "MipmapBiasOverrideAll",
+   "read": "Bool"
+  },
+  "Mipmap.MipmapBiasScaleOverride": {
+   "kind": "bool",
+   "member": "MipmapBiasScaleOverride",
+   "read": "Bool"
+  },
+  "Nukems.MakeDepthCopy": {
+   "kind": "bool",
+   "member": "MakeDepthCopy",
+   "read": "Bool"
+  },
+  "NvApi.DisableFlipMetering": {
+   "kind": "bool",
+   "member": "DisableFlipMetering",
+   "read": "Bool"
+  },
+  "NvApi.DontUseFakenvapiForXeLLOnNvidia": {
+   "kind": "bool",
+   "member": "DontUseFakenvapiForXeLLOnNvidia",
+   "read": "Bool"
+  },
+  "NvApi.OverrideNvapiDll": {
+   "kind": "bool",
+   "member": "OverrideNvapiDll",
+   "read": "Bool"
+  },
+  "OptiFG.AlwaysCaptureFSRFGSwapchain": {
+   "kind": "bool",
+   "member": "FGAlwaysCaptureFSRFGSwapchain",
+   "read": "Bool"
+  },
+  "OptiFG.AlwaysTrackHeaps": {
+   "kind": "bool",
+   "member": "FGAlwaysTrackHeaps",
+   "read": "Bool"
+  },
+  "OptiFG.DepthScaleMax": {
+   "kind": "float",
+   "member": "FGDepthScaleMax",
+   "read": "Float"
+  },
+  "OptiFG.DisableHUDFix": {
+   "kind": "bool",
+   "member": "FGDisableHUDFix",
+   "read": "Bool"
+  },
+  "OptiFG.EnableDepthScale": {
+   "kind": "bool",
+   "member": "FGEnableDepthScale",
+   "read": "Bool"
+  },
+  "OptiFG.HUDFix": {
+   "kind": "bool",
+   "member": "FGHUDFix",
+   "read": "Bool"
+  },
+  "OptiFG.HUDFixDontUseSwapchainBuffers": {
+   "kind": "bool",
+   "member": "FGDontUseSwapchainBuffers",
+   "read": "Bool"
+  },
+  "OptiFG.HUDFixExtended": {
+   "kind": "bool",
+   "member": "FGHUDFixExtended",
+   "read": "Bool"
+  },
+  "OptiFG.HUDFixImmediate": {
+   "kind": "bool",
+   "member": "FGImmediateCapture",
+   "read": "Bool"
+  },
+  "OptiFG.HUDFixRelaxedResolutionCheck": {
+   "kind": "bool",
+   "member": "FGRelaxedResolutionCheck",
+   "read": "Bool"
+  },
+  "OptiFG.HUDLimit": {
+   "kind": "int",
+   "member": "FGHUDLimit",
+   "read": "Int"
+  },
+  "OptiFG.HudfixDisableDI": {
+   "kind": "bool",
+   "member": "FGHudfixDisableDI",
+   "read": "Bool"
+  },
+  "OptiFG.HudfixDisableDII": {
+   "kind": "bool",
+   "member": "FGHudfixDisableDII",
+   "read": "Bool"
+  },
+  "OptiFG.HudfixDisableDispatch": {
+   "kind": "bool",
+   "member": "FGHudfixDisableDispatch",
+   "read": "Bool"
+  },
+  "OptiFG.HudfixDisableOM": {
+   "kind": "bool",
+   "member": "FGHudfixDisableOM",
+   "read": "Bool"
+  },
+  "OptiFG.HudfixDisableRTV": {
+   "kind": "bool",
+   "member": "FGHudfixDisableRTV",
+   "read": "Bool"
+  },
+  "OptiFG.HudfixDisableSCR": {
+   "kind": "bool",
+   "member": "FGHudfixDisableSCR",
+   "read": "Bool"
+  },
+  "OptiFG.HudfixDisableSGR": {
+   "kind": "bool",
+   "member": "FGHudfixDisableSGR",
+   "read": "Bool"
+  },
+  "OptiFG.HudfixDisableSRV": {
+   "kind": "bool",
+   "member": "FGHudfixDisableSRV",
+   "read": "Bool"
+  },
+  "OptiFG.HudfixDisableUAV": {
+   "kind": "bool",
+   "member": "FGHudfixDisableUAV",
+   "read": "Bool"
+  },
+  "OptiFG.MakeDepthCopy": {
+   "kind": "bool",
+   "member": "FGMakeDepthCopy",
+   "read": "Bool"
+  },
+  "OptiFG.MakeMVCopy": {
+   "kind": "bool",
+   "member": "FGMakeMVCopy",
+   "read": "Bool"
+  },
+  "OptiFG.ResourceBlocking": {
+   "kind": "bool",
+   "member": "FGResourceBlocking",
+   "read": "Bool"
+  },
+  "OptiFG.ResourceFlip": {
+   "kind": "bool",
+   "member": "FGResourceFlip",
+   "read": "Bool"
+  },
+  "OptiFG.ResourceFlipOffset": {
+   "kind": "bool",
+   "member": "FGResourceFlipOffset",
+   "read": "Bool"
+  },
+  "OptiFG.UseShards": {
+   "kind": "bool",
+   "member": "FGUseShards",
+   "read": "Bool"
+  },
+  "OutputScaling.Downscaler": {
+   "kind": "enum:Scaler",
+   "member": "OutputScalingDownscaler",
+   "read": "Int"
+  },
+  "OutputScaling.Enabled": {
+   "kind": "bool",
+   "member": "OutputScalingEnabled",
+   "read": "Bool"
+  },
+  "OutputScaling.Multiplier": {
+   "kind": "float",
+   "member": "OutputScalingMultiplier",
+   "read": "Float"
+  },
+  "Plugins.LateAsiPluginsDelay": {
+   "kind": "int",
+   "member": "LateAsiPluginsDelay",
+   "read": "Int"
+  },
+  "Plugins.LoadAsiPlugins": {
+   "kind": "bool",
+   "member": "LoadAsiPlugins",
+   "read": "Bool"
+  },
+  "Plugins.LoadReShade": {
+   "kind": "bool",
+   "member": "LoadReShade",
+   "read": "Bool"
+  },
+  "Plugins.LoadSpecialK": {
+   "kind": "bool",
+   "member": "LoadSpecialK",
+   "read": "Bool"
+  },
+  "Plugins.Path": {
+   "kind": "std::wstring",
+   "member": "PluginPath",
+   "read": "WString"
+  },
+  "ProcessFilter.ProcessExclusionList": {
+   "kind": "std::wstring",
+   "member": "ProcessExclusionList",
+   "read": "WString"
+  },
+  "ProcessFilter.TargetProcessName": {
+   "kind": "std::wstring",
+   "member": "TargetProcess",
+   "read": "WString"
+  },
+  "QualityOverrides.QualityRatioBalanced": {
+   "kind": "float",
+   "member": "QualityRatio_Balanced",
+   "read": "Float"
+  },
+  "QualityOverrides.QualityRatioDLAA": {
+   "kind": "float",
+   "member": "QualityRatio_DLAA",
+   "read": "Float"
+  },
+  "QualityOverrides.QualityRatioOverrideEnabled": {
+   "kind": "bool",
+   "member": "QualityRatioOverrideEnabled",
+   "read": "Bool"
+  },
+  "QualityOverrides.QualityRatioPerformance": {
+   "kind": "float",
+   "member": "QualityRatio_Performance",
+   "read": "Float"
+  },
+  "QualityOverrides.QualityRatioQuality": {
+   "kind": "float",
+   "member": "QualityRatio_Quality",
+   "read": "Float"
+  },
+  "QualityOverrides.QualityRatioUltraPerformance": {
+   "kind": "float",
+   "member": "QualityRatio_UltraPerformance",
+   "read": "Float"
+  },
+  "QualityOverrides.QualityRatioUltraQuality": {
+   "kind": "float",
+   "member": "QualityRatio_UltraQuality",
+   "read": "Float"
+  },
+  "Sharpness.OverrideSharpness": {
+   "kind": "bool",
+   "member": "OverrideSharpness",
+   "read": "Bool"
+  },
+  "Sharpness.Sharpness": {
+   "kind": "float",
+   "member": "Sharpness",
+   "read": "Float"
+  },
+  "Spoofing.D3DFeatureLevel": {
+   "kind": "bool",
+   "member": "SpoofFeatureLevel",
+   "read": "Bool"
+  },
+  "Spoofing.Dxgi": {
+   "kind": "bool",
+   "member": "DxgiSpoofing",
+   "read": "Bool"
+  },
+  "Spoofing.DxgiBlacklist": {
+   "kind": "std::string",
+   "member": "DxgiBlacklist",
+   "read": "String"
+  },
+  "Spoofing.DxgiFactoryWrapping": {
+   "kind": "bool",
+   "member": "DxgiFactoryWrapping",
+   "read": "Bool"
+  },
+  "Spoofing.DxgiVRAM": {
+   "kind": "int",
+   "member": "DxgiVRAM",
+   "read": "Int"
+  },
+  "Spoofing.Registry": {
+   "kind": "bool",
+   "member": "SpoofRegistry",
+   "read": "Bool"
+  },
+  "Spoofing.RegistryDriver": {
+   "kind": "std::wstring",
+   "member": "SpoofedDriver",
+   "read": "WString"
+  },
+  "Spoofing.SpoofHAGS": {
+   "kind": "bool",
+   "member": "SpoofHAGS",
+   "read": "Bool"
+  },
+  "Spoofing.SpoofedDeviceId": {
+   "kind": "uint32_t",
+   "member": "SpoofedDeviceId",
+   "read": "UInt"
+  },
+  "Spoofing.SpoofedGPUName": {
+   "kind": "std::wstring",
+   "member": "SpoofedGPUName",
+   "read": "WString"
+  },
+  "Spoofing.SpoofedVendorId": {
+   "kind": "uint32_t",
+   "member": "SpoofedVendorId",
+   "read": "UInt"
+  },
+  "Spoofing.StreamlineSpoofing": {
+   "kind": "bool",
+   "member": "StreamlineSpoofing",
+   "read": "Bool"
+  },
+  "Spoofing.TargetDeviceId": {
+   "kind": "uint32_t",
+   "member": "TargetDeviceId",
+   "read": "UInt"
+  },
+  "Spoofing.TargetVendorId": {
+   "kind": "uint32_t",
+   "member": "TargetVendorId",
+   "read": "UInt"
+  },
+  "Spoofing.UEIntelAtomics": {
+   "kind": "bool",
+   "member": "UESpoofIntelAtomics64",
+   "read": "Bool"
+  },
+  "Spoofing.User32": {
+   "kind": "bool",
+   "member": "SpoofUser32",
+   "read": "Bool"
+  },
+  "Spoofing.Vulkan": {
+   "kind": "bool",
+   "member": "VulkanSpoofing",
+   "read": "Bool"
+  },
+  "Spoofing.VulkanExtensionSpoofing": {
+   "kind": "bool",
+   "member": "VulkanExtensionSpoofing",
+   "read": "Bool"
+  },
+  "Spoofing.VulkanVRAM": {
+   "kind": "int",
+   "member": "VulkanVRAM",
+   "read": "Int"
+  },
+  "UpscaleRatio.UpscaleRatioOverrideEnabled": {
+   "kind": "bool",
+   "member": "UpscaleRatioOverrideEnabled",
+   "read": "Bool"
+  },
+  "UpscaleRatio.UpscaleRatioOverrideValue": {
+   "kind": "float",
+   "member": "UpscaleRatioOverrideValue",
+   "read": "Float"
+  },
+  "Upscalers.Dx11Upscaler": {
+   "kind": "std::string",
+   "member": "Dx11Upscaler",
+   "read": "String"
+  },
+  "Upscalers.Dx12Upscaler": {
+   "kind": "std::string",
+   "member": "Dx12Upscaler",
+   "read": "String"
+  },
+  "Upscalers.VulkanUpscaler": {
+   "kind": "std::string",
+   "member": "VulkanUpscaler",
+   "read": "String"
+  },
+  "V-Sync.ForceVsync": {
+   "kind": "bool",
+   "member": "ForceVsync",
+   "read": "Bool"
+  },
+  "V-Sync.OverrideVsync": {
+   "kind": "bool",
+   "member": "OverrideVsync",
+   "read": "Bool"
+  },
+  "V-Sync.SyncInterval": {
+   "kind": "UINT",
+   "member": "VsyncInterval",
+   "read": "Int"
+  },
+  "XeFG.DebugView": {
+   "kind": "bool",
+   "member": "FGXeFGDebugView",
+   "read": "Bool"
+  },
+  "XeFG.DepthInverted": {
+   "kind": "bool",
+   "member": "FGXeFGDepthInverted",
+   "read": "Bool"
+  },
+  "XeFG.ForceBorderless": {
+   "kind": "bool",
+   "member": "FGXeFGForceBorderless",
+   "read": "Bool"
+  },
+  "XeFG.HighResMV": {
+   "kind": "bool",
+   "member": "FGXeFGHighResMV",
+   "read": "Bool"
+  },
+  "XeFG.IgnoreInitChecks": {
+   "kind": "bool",
+   "member": "FGXeFGIgnoreInitChecks",
+   "read": "Bool"
+  },
+  "XeFG.InterpolationCount": {
+   "kind": "int",
+   "member": "FGXeFGInterpolationCount",
+   "read": "Int"
+  },
+  "XeFG.JitteredMV": {
+   "kind": "bool",
+   "member": "FGXeFGJitteredMV",
+   "read": "Bool"
+  },
+  "XeFG.UIComposition": {
+   "kind": "bool",
+   "member": "FGXeFGUIComposition",
+   "read": "Bool"
+  },
+  "XeSS.BuildPipelines": {
+   "kind": "bool",
+   "member": "BuildPipelines",
+   "read": "Bool"
+  },
+  "XeSS.CreateHeaps": {
+   "kind": "bool",
+   "member": "CreateHeaps",
+   "read": "Bool"
+  },
+  "XeSS.NetworkModel": {
+   "kind": "int32_t",
+   "member": "NetworkModel",
+   "read": "Int"
+  }
+ }
+}

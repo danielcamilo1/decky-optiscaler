@@ -1,0 +1,102 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and release (e.g. v0.0.1)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Resolve version
+        id: version
+        run: |
+          tag="${{ inputs.tag || github.ref_name }}"
+          version="${tag#v}"
+          package_version=$(python3 -c 'import json;print(json.load(open("package.json"))["version"])')
+          if [ "$version" != "$package_version" ]; then
+            echo "::error::tag $tag does not match package.json version $package_version"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Build frontend
+        run: pnpm build
+
+      - name: Backend selftest
+        run: python3 scripts/selftest.py
+
+      # scripts/package.py mirrors the layout `decky plugin build` produces: one
+      # top-level folder named after plugin.json's "name", runtime files only.
+      - name: Package
+        run: python3 scripts/package.py
+
+      - name: Name the asset after the release
+        id: asset
+        run: |
+          asset="out/Decky-OptiScaler-${{ steps.version.outputs.tag }}.zip"
+          mv "out/Decky OptiScaler.zip" "$asset"
+          echo "path=$asset" >> "$GITHUB_OUTPUT"
+
+      # The release body is the CHANGELOG entry, so the releases page and the
+      # repository carry the same notes.
+      - name: Release notes
+        run: |
+          python3 scripts/changelog_section.py "${{ steps.version.outputs.version }}" > notes.md
+          {
+            echo
+            echo "---"
+            echo
+            echo "### Install"
+            echo
+            echo "Decky Loader → gear icon → **Developer mode** → **Install Plugin from URL**, and paste:"
+            echo
+            echo '```'
+            echo "https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.tag }}/$(basename '${{ steps.asset.outputs.path }}')"
+            echo '```'
+            echo
+            echo "Or download the zip below and unpack it into \`~/homebrew/plugins/\`."
+          } >> notes.md
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.version.outputs.tag }}" \
+            --title "${{ steps.version.outputs.tag }}" \
+            --notes-file notes.md \
+            "${{ steps.asset.outputs.path }}"

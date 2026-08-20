@@ -1,0 +1,80 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build and test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The UI's controls, types, ranges and help text are derived from the
+      # comments in defaults/OptiScaler.reference.ini. Regenerating here proves
+      # the committed output still matches its source.
+      - name: Check generated schema is up to date
+        run: |
+          python3 scripts/generate_schema.py
+          git diff --exit-code -- src/config/generatedSchema.ts py_modules/optiscaler/schema_generated.py
+
+      # The ASI reads OptiScaler's memory at offsets the compiler computes from
+      # this mirror, so a stale one is a silently inert live-control feature.
+      - name: Check generated ASI layout is up to date
+        run: |
+          python3 scripts/generate_asi_layout.py
+          git diff --exit-code -- asi/generated/config_mirror.h py_modules/optiscaler/live_fields.json
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Build frontend
+        run: pnpm build
+
+      # Includes check_version_pin(), which holds asi/optiscaler_ref/ to the
+      # exact OptiScaler tag whose release sits in bin/.
+      - name: Backend selftest
+        run: python3 scripts/selftest.py
+
+      # The harnesses assert by printing; "React errors/warnings: 0" is the pass
+      # condition, so the output is checked rather than the exit code.
+      - name: UI harness
+        run: |
+          set -o pipefail
+          HARNESS=run.tsx node testharness/build-and-run.mjs 2>&1 | tee harness.log
+          grep -q "React errors/warnings: 0" harness.log
+
+      - name: All-options harness
+        run: |
+          set -o pipefail
+          HARNESS=all-options.tsx node testharness/build-and-run.mjs 2>&1 | tee all-options.log
+          grep -q "real React errors: 0" all-options.log
+
+      - name: Package
+        run: python3 scripts/package.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: decky-optiscaler-${{ github.sha }}
+          path: out/*.zip
+          if-no-files-found: error

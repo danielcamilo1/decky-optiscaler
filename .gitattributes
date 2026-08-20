@@ -1,0 +1,16 @@
+# The bundled OptiScaler release and the compiled ASI plugin are binary.
+*.7z binary
+*.asi binary
+*.dll binary
+
+# Generated — see CLAUDE.md. Collapsed in diffs and excluded from language stats.
+src/config/generatedSchema.ts linguist-generated=true
+py_modules/optiscaler/schema_generated.py linguist-generated=true
+asi/generated/config_mirror.h linguist-generated=true
+py_modules/optiscaler/live_fields.json linguist-generated=true
+
+# Vendored from the pinned OptiScaler tag; not this project's code.
+asi/optiscaler_ref/** linguist-vendored=true
+
+# The reference INI is shipped verbatim and parsed byte-for-byte; keep its CRLF.
+*.ini -text

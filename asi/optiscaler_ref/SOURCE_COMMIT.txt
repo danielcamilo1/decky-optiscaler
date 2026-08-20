@@ -1,0 +1,25 @@
+7534ad00bf9e590eedb99e8dd9fd8c89dae3654f
+
+Tag:      v0.9.4
+Date:     2026-07-18
+Source:   https://github.com/optiscaler/OptiScaler/tree/v0.9.4/OptiScaler
+
+These headers MUST match the OptiScaler build shipped in bin/. The layout
+mirror the ASI uses is generated from Config.h, so a mismatch means the ASI
+reads the wrong offsets - it fails its validation checks and stays inert.
+
+menu_common.cpp is vendored for reference only: it is where the in-game
+overlay's own live writes live, and it is the authority on which options can
+change at runtime and what OptiScaler calls each of them on screen.
+
+unordered_dense.h is the external/unordered_dense submodule at the commit this
+tag pins:
+
+    73f3cbb237e84d483afafc743f1f14ec53e12314
+
+It is here because State::changeBackend is one of its tables and the ASI has to
+find it in memory: the offsets of its value vector, its load factor and the
+std::string declared straight after it all come from this header's member
+declaration order. Guessing them instead is what silently disabled upscaler
+switching once already, so asi/live.cpp mirrors the layout and
+check_asi_backend_layout() in scripts/selftest.py holds the two together.
