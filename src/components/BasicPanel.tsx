@@ -210,8 +210,16 @@ export function BasicPanel({
   // The FFX frame generator, which only the FSR FG output runs. When the game
   // is attached its own reported list wins; otherwise the shipped INI's.
   const ffxOption = optionById(FFX_FG_ID);
-  const ffxUsable = usesFfxFrameGen(values);
   const ffxChoices = ffxFgOptions(live, ffxOption);
+  // A game that reports a generator list has OptiScaler's FidelityFX FG built
+  // for it, which is a firmer answer than the ini can give — FGOutput "auto"
+  // resolves at runtime and the file cannot say which way it went. Either is
+  // reason enough to show the control.
+  const ffxUsable = usesFfxFrameGen(values) || ffxChoices.fromGame;
+  // Nothing to pick when the runtime offers one generator, but which one the
+  // game got is still worth seeing, so the control stays and goes quiet
+  // instead of disappearing — it used to vanish on exactly those games.
+  const ffxFixed = ffxChoices.options.length < 2;
   const ffxSelected = ffxOption ? effectiveValue(values, ffxOption) : "0";
   // Attached, the user has moved it, and there is no way to act on it: the
   // in-game plugin did not find State's two FG change flags, so this was an ini
@@ -429,16 +437,18 @@ export function BasicPanel({
             method above it this one really does change mid-game: OptiScaler
             rebuilds the FG context when both of its change flags are raised,
             which is what the in-game plugin does alongside the write. */}
-        {ffxUsable && ffxChoices.options.length > 1 ? (
+        {ffxUsable && ffxChoices.options.length > 0 ? (
           <PanelSectionRow>
             <ValueDropdown
               label="FFX FG version"
               description={hint(
-                ffxChoices.fromGame
-                  ? "The frame generators this game's FidelityFX runtime reports."
-                  : "Which FidelityFX frame generator the FSR FG output runs."
+                ffxFixed
+                  ? "The only frame generator this game's FidelityFX runtime offers."
+                  : ffxChoices.fromGame
+                    ? "The frame generators this game's FidelityFX runtime reports."
+                    : "Which FidelityFX frame generator the FSR FG output runs."
               )}
-              disabled={disabled || !fgOn}
+              disabled={disabled || !fgOn || ffxFixed}
               bottomSeparator={ffxNotLive ? "none" : "standard"}
               options={ffxChoices.options}
               selected={ffxSelected}

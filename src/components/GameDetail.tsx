@@ -314,10 +314,16 @@ export function GameDetail({
               onLogs={() => setSetupView("logs")}
               onChanged={async () => {
                 await load();
+                config.forgetLocal();
                 await config.reload();
               }}
               onReloadPlan={() => reloadPlan(false)}
-              onResetConfig={config.reload}
+              onResetConfig={async () => {
+                // Reset copies the stock ini in; the record of what we last
+                // wrote belongs to the file that just went away.
+                config.forgetLocal();
+                await config.reload();
+              }}
             />
           ) : (
             <>
@@ -333,6 +339,7 @@ export function GameDetail({
                   live={liveStatus}
                   onChanged={async () => {
                     await load();
+                    config.forgetLocal();
                     await config.reload();
                   }}
                 />

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { readConfig, writeConfig } from "../api";
 import { AUTO } from "../config/values";
 import { optionsInSection } from "../config/tabs";
+import { forgetWrites, overlayWrites, rememberWrites } from "../config/writeRecord";
 import type { ConfigValues, LiveApplyResult, OptionChange, OptionMeta } from "../types";
 
 const FLUSH_DELAY_MS = 400;
@@ -25,6 +26,10 @@ const changeId = (change: OptionChange) => `${change.section}.${change.key}`;
  *   game, so leaving it on screen is the UI claiming a change that exists
  *   nowhere. Rejections put the option back to what the file says and are
  *   reported.
+ *
+ * The same race outlives this hook — closing the Quick Access panel unmounts it
+ * mid-write — so what was written is also recorded in `config/writeRecord`,
+ * which the next instance reads before it trusts the file.
  */
 export function useConfig(targetDir: string | null, enabled: boolean, reloadKey?: unknown) {
   const [values, setValues] = useState<ConfigValues>({});
@@ -43,16 +48,22 @@ export function useConfig(targetDir: string | null, enabled: boolean, reloadKey?
   const seen = useRef<string | null>(null);
 
   /** A freshly-read file with every edit newer than it laid back on top. */
-  const overlay = useCallback((base: ConfigValues): ConfigValues => {
-    const next: ConfigValues = {};
-    for (const [section, keys] of Object.entries(base)) next[section] = { ...keys };
-    for (const newer of [inFlight.current, pending.current]) {
-      for (const change of newer.values()) {
-        next[change.section] = { ...(next[change.section] ?? {}), [change.key]: change.value };
+  const overlay = useCallback(
+    (base: ConfigValues): ConfigValues => {
+      // Writes this plugin made before the panel was last closed come first;
+      // this instance's own queue is newer still and goes over the top.
+      const disk = overlayWrites(targetDir, base);
+      const next: ConfigValues = {};
+      for (const [section, keys] of Object.entries(disk)) next[section] = { ...keys };
+      for (const newer of [inFlight.current, pending.current]) {
+        for (const change of newer.values()) {
+          next[change.section] = { ...(next[change.section] ?? {}), [change.key]: change.value };
+        }
       }
-    }
-    return next;
-  }, []);
+      return next;
+    },
+    [targetDir]
+  );
 
   const load = useCallback(async () => {
     if (!targetDir || !enabled) return;
@@ -105,6 +116,8 @@ export function useConfig(targetDir: string | null, enabled: boolean, reloadKey?
         // Out of the in-flight set first: the re-read below has to be allowed
         // to bring these keys back to whatever the file actually holds.
         for (const change of rejected) inFlight.current.delete(changeId(change));
+        // Never written, so never ours to remember.
+        forgetWrites(targetDir, rejected);
         // Put the controls back first — the read clears the error line, so
         // saying why has to come after it.
         await load();
@@ -127,14 +140,20 @@ export function useConfig(targetDir: string | null, enabled: boolean, reloadKey?
   }, [targetDir, load]);
 
   const queue = useCallback(
-    (changes: OptionChange[]) => {
+    (changes: OptionChange[], immediate = false) => {
       for (const change of changes) {
         pending.current.set(changeId(change), change);
       }
+      rememberWrites(targetDir, changes);
       if (timer.current !== null) window.clearTimeout(timer.current);
+      if (immediate) {
+        timer.current = null;
+        void flush();
+        return;
+      }
       timer.current = window.setTimeout(() => void flush(), FLUSH_DELAY_MS);
     },
-    [flush]
+    [flush, targetDir]
   );
 
   const setOption = useCallback(
@@ -148,7 +167,14 @@ export function useConfig(targetDir: string | null, enabled: boolean, reloadKey?
     [queue]
   );
 
-  /** Apply several keys at once, for Basic mode's composite controls. */
+  /**
+   * Apply several keys at once, for Basic mode's composite controls.
+   *
+   * Written straight away rather than on the debounce. The debounce is there so
+   * dragging a slider does not write per frame; picking from a dropdown happens
+   * once, and this is the surface that drives a running game, so the 400ms is
+   * pure delay — and a window in which closing the panel races the write.
+   */
   const setOptions = useCallback(
     (changes: OptionChange[]) => {
       if (changes.length === 0) return;
@@ -159,7 +185,7 @@ export function useConfig(targetDir: string | null, enabled: boolean, reloadKey?
         }
         return next;
       });
-      queue(changes);
+      queue(changes, true);
     },
     [queue]
   );
@@ -196,6 +222,8 @@ export function useConfig(targetDir: string | null, enabled: boolean, reloadKey?
     setOptions,
     resetSection,
     reload: load,
+    /** The ini has been replaced behind us; nothing we wrote applies to it. */
+    forgetLocal: () => forgetWrites(targetDir),
     clearDirty: () => setDirty(false),
     clearLive: () => setLive(null),
   };

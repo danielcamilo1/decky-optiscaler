@@ -16,6 +16,7 @@ import { act } from "react";
 import { fixtures } from "@decky/api";
 import { GENERATED_OPTIONS } from "../src/config/generatedSchema";
 import { QuickPanel } from "../src/components/QuickPanel";
+import { forgetWrites } from "../src/config/writeRecord";
 
 // ---- a backend that keeps state -------------------------------------------
 const ini: Record<string, Record<string, string>> = {};
@@ -63,7 +64,7 @@ const detail = {
 
 // Three generators, which is one more than the shipped ini documents — the
 // running game is the authority on this list and a real one can be longer.
-const FFX_VERSIONS = ["4.0.0", "3.1.6", "3.1.4"];
+const FFX_VERSIONS: string[] = ["4.0.0", "3.1.6", "3.1.4"];
 let liveFgIndex = 0;
 let liveBackend = "fsr31";
 let liveFgEnabled = true;
@@ -128,6 +129,22 @@ async function settle(ms = 5) {
       await new Promise((r) => setTimeout(r, ms));
     });
   }
+}
+
+/**
+ * Rewrite the ini behind the plugin's back, as a fresh session would find it.
+ *
+ * The plugin remembers what it wrote so that reopening the panel does not read
+ * a file the write has not reached yet, and that record outlives a render root.
+ * Editing the fixture directly is the harness playing a different session, so
+ * it has to drop the record too — otherwise the previous case's writes are
+ * still, correctly, winning.
+ */
+function setIni(entries: Record<string, Record<string, string>>) {
+  for (const [section, keys] of Object.entries(entries)) {
+    ini[section] = { ...(ini[section] ?? {}), ...keys };
+  }
+  forgetWrites(detail.install.path);
 }
 
 const all = (node: Element, selector: string) => Array.from(node.querySelectorAll(selector));
@@ -203,11 +220,11 @@ const selected = (host: Element, label: string) =>
   console.log("=== an ini the presets have no name for ===");
   // The Advanced page and the wiki plan write the same file. A value with no
   // preset used to be displayed as "Auto", which is the opposite of the truth.
-  ini.Upscalers.Dx12Upscaler = "fsr21";
-  ini.FSR.Fsr4Update = "auto";
-  ini.FrameGen.Enabled = "true";
-  ini.FrameGen.FGInput = "dlssg";
-  ini.FrameGen.FGOutput = "xefg";
+  setIni({
+    Upscalers: { Dx12Upscaler: "fsr21" },
+    FSR: { Fsr4Update: "auto" },
+    FrameGen: { Enabled: "true", FGInput: "dlssg", FGOutput: "xefg" },
+  });
   const host3 = document.createElement("div");
   document.body.appendChild(host3);
   const root3 = createRoot(host3);
@@ -237,12 +254,12 @@ const selected = (host: Element, label: string) =>
   // A rejected write reaches neither the file nor the running game. The control
   // has to go back to what the file says and the panel has to say why — and the
   // re-read that does it must not blank the controls on the way past.
-  ini.Upscalers.Dx12Upscaler = "fsr31";
-  ini.FSR.Fsr4Update = "false";
-  ini.FrameGen.Enabled = "true";
-  ini.FrameGen.FGInput = "fsrfg";
-  ini.FrameGen.FGOutput = "fsrfg";
-  ini.XeFG.InterpolationCount = "auto";
+  setIni({
+    Upscalers: { Dx12Upscaler: "fsr31" },
+    FSR: { Fsr4Update: "false" },
+    FrameGen: { Enabled: "true", FGInput: "fsrfg", FGOutput: "fsrfg" },
+    XeFG: { InterpolationCount: "auto" },
+  });
   const host4 = document.createElement("div");
   document.body.appendChild(host4);
   const root4 = createRoot(host4);
@@ -285,6 +302,80 @@ const selected = (host: Element, label: string) =>
   await settle(200);
   check("a later edit sticks", selected(host4, "Override upscaler with"), "xess");
   await act(async () => root4.unmount());
+
+  console.log("=== closing the panel while the write is in flight ===");
+  // Closing the Quick Access panel unmounts everything, which is what you do to
+  // look at the game after changing something. Reopening starts a read that can
+  // be issued before the write has landed, and the panel then comes up showing
+  // the value from before the change — one step behind, for ever.
+  setIni({
+    Upscalers: { Dx12Upscaler: "xess" },
+    FSR: { Fsr4Update: "false" },
+    FrameGen: { Enabled: "true", FGInput: "fsrfg", FGOutput: "fsrfg" },
+  });
+  let releaseWrite: () => void = () => {};
+  fixtures.write_config = async (_dir: string, changes: any[]) => {
+    await new Promise<void>((r) => {
+      releaseWrite = r;
+    });
+    for (const c of changes) {
+      ini[c.section] = ini[c.section] ?? {};
+      ini[c.section][c.key] = String(c.value);
+    }
+    return { ok: true, applied: changes, rejected: [], live: { sent: true, deferred: [] } };
+  };
+
+  const open = async () => {
+    const node = document.createElement("div");
+    document.body.appendChild(node);
+    const r = createRoot(node);
+    await act(async () => {
+      r.render(
+        <QuickPanel
+          runningGame={{ appid: 1091500, name: "Cyberpunk 2077", gameid: "1091500" }}
+          onOpenManager={() => {}}
+        />
+      );
+    });
+    await settle();
+    return { node, root: r };
+  };
+
+  let panel = await open();
+  check("opens on XeSS", selected(panel.node, "Override upscaler with"), "xess");
+  await act(async () => {
+    (all(control(panel.node, "Override upscaler with"), '[data-opt-value="fsr4"]')[0] as HTMLElement)
+      .click();
+  });
+  await settle();
+  // Close it before the write has been answered, exactly as the panel closing
+  // over a running game does.
+  await act(async () => panel.root.unmount());
+  panel = await open();
+  check("reopening does not show the value from before the change",
+    selected(panel.node, "Override upscaler with"), "fsr4");
+  // Now let the write through and reopen once more: the file agrees, and the
+  // record retires itself.
+  await act(async () => {
+    releaseWrite();
+    await new Promise((r) => setTimeout(r, 5));
+  });
+  await settle();
+  await act(async () => panel.root.unmount());
+  panel = await open();
+  check("and still agrees once the write lands",
+    selected(panel.node, "Override upscaler with"), "fsr4");
+  check("the file has it", ini.Upscalers.Dx12Upscaler, "fsr31");
+
+  console.log("=== the FFX FG control on a game with one generator ===");
+  FFX_VERSIONS.length = 0;
+  FFX_VERSIONS.push("3.1.6");
+  await act(async () => panel.root.unmount());
+  panel = await open();
+  const single = control(panel.node, "FFX FG version");
+  check("the control is still there", Boolean(single), true);
+  check("but there is nothing to pick", single?.getAttribute("data-disabled"), "true");
+  await act(async () => panel.root.unmount());
 
   const real = errors.filter((e) => !e.includes("not wrapped in act"));
   console.log(`\nreal React errors: ${real.length}`);

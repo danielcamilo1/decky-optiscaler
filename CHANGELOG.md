@@ -7,6 +7,29 @@ All notable changes to this project are documented here. The format follows
 Each release ships `Decky OptiScaler.zip`, installable through Decky Loader's
 *Install from URL* (Developer mode).
 
+## [0.0.3] - 2026-08-20
+
+### Fixed
+
+- **The upscaler dropdown lagged one change behind.** Closing the Quick Access
+  panel unmounts it — which is what you do to look at the game after changing
+  something — and settings are written on a short debounce that is flushed on
+  the way out. Reopening started a read that could be issued before that write
+  landed, so the panel came up showing the value from *before* the change, and
+  doing it again showed the one before that, while the running game was correct
+  throughout. What this plugin writes is now remembered outside the panel and
+  laid over anything a read brings back until the file agrees. Basic mode's
+  picks also skip the debounce: it is there so a slider does not write per
+  frame, and a dropdown is pressed once.
+- **The FFX FG version control disappeared on some games.** It was hidden
+  whenever the game's FidelityFX runtime reported fewer than two generators.
+  It now stays on screen with whatever the game offers — quiet when there is
+  only one, because which generator the game got is still worth seeing — and is
+  shown whenever the game reports a list at all, which is a firmer answer than
+  an INI whose FG output reads "auto".
+
+[0.0.3]: https://github.com/danielcamilo1/decky-optiscaler/releases/tag/v0.0.3
+
 ## [0.0.2] - 2026-08-20
 
 Fixes for the Quick Access panel's live controls, where a dropdown could end up
