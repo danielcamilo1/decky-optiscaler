@@ -667,10 +667,14 @@ static_assert(FG_BLOCK_OFF(ClearCapturedHudlesses) == 64, "the bool follows the 
 static_assert(FG_BLOCK_OFF(NVNGX_ApplicationId) == 72, "the application id confirms the table");
 
 /**
- * State, from changeBackend to the FFX version lists OptiScaler fills in at
- * startup. Same trick as above, in the other direction: every type between the
- * two is fixed width, so the version list is at an offset the compiler computes
+ * State, from changeBackend to the frame times OptiScaler keeps for its own
+ * overlay. Same trick as above, in the other direction: every type in the run
+ * is fixed width, so everything in it is at an offset the compiler computes
  * from the map rather than one this plugin goes looking for.
+ *
+ * The run reaches three things: the two FFX version lists (which turn an index
+ * into a name), and the pair of frame-interval measurements that separate the
+ * rendered frame rate from the presented one.
  */
 struct state_tail {
     ud_table changeBackend;
@@ -707,14 +711,40 @@ struct state_tail {
     msvc_vector_raw ffxUpscalerVersionIds;
     msvc_vector_raw ffxFGVersionNames;
     msvc_vector_raw ffxFGVersionIds;
+    msvc_optional<uint32_t> currentFsr4Preset;
+    bool isRunningOnLinux;
+    bool isRunningOnDXVK;
+    bool isRunningOnNvidia;
+    msvc_optional<bool> isRunningOnRDNA4;
+    msvc_optional<bool> isRunningOnRDNA3;
+    bool isPascalOrOlder;
+    uint32_t workingMode;  // WorkingMode
+    bool vulkanCreatingSC;
+    bool creatingD3DDevice;
+    bool vulkanSkipHooks;
+    void* VulkanInstance;  // VkInstance, an opaque handle
+    msvc_deque_raw upscaleTimes;
+    msvc_deque_raw frameTimes;
+    double lastFGFrameTime;
+    double presentFrameTime;
 };
 
 static_assert(offsetof(state_tail, newBackend) == sizeof(ud_table),
               "the string this plugin already validates must still follow the map");
+static_assert(offsetof(state_tail, ffxUpscalerVersionNames) == 208,
+              "unexpected State tail layout");
 static_assert(offsetof(state_tail, ffxFGVersionNames) == 256, "unexpected State tail layout");
 static_assert(offsetof(state_tail, ffxFGVersionIds) ==
                   offsetof(state_tail, ffxFGVersionNames) + sizeof(msvc_vector_raw),
               "the ids vector is declared straight after the names vector");
+static_assert(offsetof(state_tail, ffxUpscalerVersionIds) ==
+                  offsetof(state_tail, ffxUpscalerVersionNames) + sizeof(msvc_vector_raw),
+              "the upscaler ids vector is declared straight after its names vector");
+static_assert(sizeof(msvc_deque_raw) == 32, "MSVC's deque is four words");
+static_assert(offsetof(state_tail, lastFGFrameTime) == 400, "unexpected State tail layout");
+static_assert(offsetof(state_tail, presentFrameTime) ==
+                  offsetof(state_tail, lastFGFrameTime) + sizeof(double),
+              "the present interval is declared straight after the rendered one");
 
 /** Where the two flags OptiScaler's FG dispatch watches live, once identified. */
 struct FgFlags {
@@ -813,11 +843,18 @@ static bool FindFgFlags(const StateLoc* state, const BackendMap* map, FgFlags* o
     return true;
 }
 
-// The FFX SDK reports the frame generators it can offer, and OptiScaler stores
-// their names and ids in two parallel vectors. Config::FfxFGIndex is an index
-// into them, so reading them is what turns "index 1" into something a user can
-// be shown -- and what makes an index the running game does not have refusable
-// rather than silently clamped.
+// The FFX SDK reports what it can offer this game -- both the frame generators
+// and the upscaler versions -- and OptiScaler stores each list as two parallel
+// vectors of names and ids. Config::FfxFGIndex and Config::FfxUpscalerIndex are
+// indexes into them, so reading them is what turns "index 1" into something a
+// user can be shown -- and what makes an index the running game does not have
+// refusable rather than silently clamped to 0, which is what OptiScaler would
+// do with it.
+//
+// The upscaler list is also the only place the exact FSR version is written
+// down: FSR31Feature_Dx12::CreateContext parses its feature name straight out
+// of ffxUpscalerVersionNames[FfxUpscalerIndex], which is why the overlay's
+// title bar and its "FFX Upscaler" combo always agree.
 
 #define FFX_FG_MAX 16
 #define FFX_FG_NAME_MAX 32
@@ -837,18 +874,19 @@ static bool ReadCString(const char* s, char* out, size_t outLen) {
 }
 
 /**
- * Read State::ffxFGVersionNames, which is only populated once the FFX SDK has
- * been queried -- so "not yet" is a normal answer and not an error.
+ * Read one of State's two FFX version lists, which are only populated once the
+ * game has queried the SDK -- so "not yet" is a normal answer and not an error.
+ *
+ * Both lists have the same shape and the same relationship to the map already
+ * located, so the offsets of the pair are the only thing that differs.
  */
-static bool ReadFfxFgVersions(const BackendMap* map, char names[FFX_FG_MAX][FFX_FG_NAME_MAX],
-                              int* countOut) {
+static bool ReadFfxVersions(const BackendMap* map, size_t namesOffset, size_t idsOffset,
+                            char names[FFX_FG_MAX][FFX_FG_NAME_MAX], int* countOut) {
     if (!map->table) return false;
     ScopedScanCache cache;
     const unsigned char* base = (const unsigned char*) map->table;
-    const msvc_vector_raw* nameVec =
-        (const msvc_vector_raw*) (base + offsetof(state_tail, ffxFGVersionNames));
-    const msvc_vector_raw* idVec =
-        (const msvc_vector_raw*) (base + offsetof(state_tail, ffxFGVersionIds));
+    const msvc_vector_raw* nameVec = (const msvc_vector_raw*) (base + namesOffset);
+    const msvc_vector_raw* idVec = (const msvc_vector_raw*) (base + idsOffset);
 
     size_t nameCount = 0, idCount = 0;
     if (!VectorOfStride(nameVec, sizeof(const char*), &nameCount)) return false;
@@ -863,6 +901,41 @@ static bool ReadFfxFgVersions(const BackendMap* map, char names[FFX_FG_MAX][FFX_
     return true;
 }
 
+/**
+ * OptiScaler's own two frame-interval measurements, which is what separates the
+ * rendered frame rate from the presented one.
+ *
+ * With frame generation running, the game holds the FidelityFX FG swapchain and
+ * presents to it once per rendered frame; the FFX runtime then pushes both that
+ * frame and the generated ones through the swapchain OptiScaler wraps. Each
+ * side times itself:
+ *
+ *   State::lastFGFrameTime   set in FGHooks::FGPresent, once per *rendered*
+ *                            frame -- and by the wrapped swapchain instead when
+ *                            no frame generator exists, so with FG absent the
+ *                            two simply agree.
+ *   State::presentFrameTime  set in wrapped_swapchain's LocalPresent, once per
+ *                            *presented* frame, generated ones included.
+ *
+ * Both are plain doubles inside State, at offsets the compiler computes from
+ * the map above, and both are only ever read.
+ */
+struct FrameTimes {
+    const double* rendered;   // State::lastFGFrameTime
+    const double* presented;  // State::presentFrameTime
+};
+
+static bool FindFrameTimes(const BackendMap* map, FrameTimes* out) {
+    if (!map->table) return false;
+    const unsigned char* base = (const unsigned char*) map->table;
+    const double* rendered = (const double*) (base + offsetof(state_tail, lastFGFrameTime));
+    const double* presented = (const double*) (base + offsetof(state_tail, presentFrameTime));
+    if (!Readable(rendered, sizeof(double) * 2)) return false;
+    out->rendered = rendered;
+    out->presented = presented;
+    return true;
+}
+
 // ------------------------------------------------------------ apply actions --
 
 static Config* g_config = NULL;
@@ -871,9 +944,19 @@ static BackendMap g_backends = { NULL, NULL };
 static msvc_string* g_newBackend = NULL;
 static uint64_t* g_frameCount = NULL;
 static FgFlags g_fgFlags = { NULL, NULL };
+static FrameTimes g_frameTimes = { NULL, NULL };
 // The frame generators the FFX SDK reported to this game, in FfxFGIndex order.
 static char g_ffxFgNames[FFX_FG_MAX][FFX_FG_NAME_MAX];
 static int g_ffxFgCount = 0;
+// The upscaler versions it reported, in FfxUpscalerIndex order. These are the
+// exact FSR versions -- "4.1.1", "3.1.5" -- that OptiScaler's overlay shows.
+static char g_ffxUpscalerNames[FFX_FG_MAX][FFX_FG_NAME_MAX];
+static int g_ffxUpscalerCount = 0;
+// Exponentially smoothed copies of the two intervals above, in milliseconds.
+// Each is the last frame's delta rather than an average, so a single reading is
+// as noisy as one frame; the panel wants a number that holds still.
+static double g_renderedMs = 0.0;
+static double g_presentedMs = 0.0;
 static uint64_t g_lastFrames = 0;
 static DWORD g_lastFrameTick = 0;
 static double g_fps = 0.0;
@@ -1131,6 +1214,59 @@ static bool SetFfxFgIndex(int index) {
     return true;
 }
 
+/**
+ * Change which FFX upscaler version runs -- the overlay's "FFX Upscaler" combo
+ * and the "Change Upscaler" button beside it, which is
+ *
+ *     config->FfxUpscalerIndex = _ffxUpscalerIndex;
+ *     state.newBackend = currentBackend;
+ *     MARK_ALL_BACKENDS_CHANGED();
+ *
+ * The index is read when FSR31Feature_*::CreateContext builds its context, so
+ * as with the FFX frame generator this is a Config write and what makes it take
+ * effect now is forcing the feature to be rebuilt.
+ *
+ * Where the overlay names the current backend explicitly, this leaves
+ * State::newBackend alone: FeatureProvider_*::ChangeFeature reads it as "use
+ * whatever Config holds for this API" when it is empty, and OptiScaler clears
+ * it itself once a rebuild has succeeded. That is the same rebuild by a route
+ * that cannot pick the wrong graphics API -- and it composes with a real
+ * upscaler switch in the same command, which writing over newBackend would
+ * cancel.
+ *
+ * The mark is left to the caller so that a command doing both arrives as one
+ * change rather than two: OptiScaler acts on the mark the next frame, and
+ * marking before the index is written would rebuild on the old value.
+ */
+static bool SetFfxUpscalerIndex(int index) {
+    if (index < 0 || index >= FFX_FG_MAX) {
+        snprintf(g_error, sizeof(g_error), "%d is not an FFX upscaler index", index);
+        return false;
+    }
+    // Out of range, OptiScaler resets the index to 0 and runs a version nobody
+    // asked for. Refuse instead, exactly as the FFX FG index does.
+    if (g_ffxUpscalerCount > 0 && index >= g_ffxUpscalerCount) {
+        snprintf(g_error, sizeof(g_error),
+                 "this game reports %d FFX upscaler version(s); %d is not one of them",
+                 g_ffxUpscalerCount, index);
+        return false;
+    }
+    if (!g_backends.table) {
+        snprintf(g_error, sizeof(g_error),
+                 "changeBackend not located; the FFX upscaler version cannot change now");
+        return false;
+    }
+
+    char value[16];
+    snprintf(value, sizeof(value), "%d", index);
+    if (!SetField("FfxUpscalerIndex", "i32", value)) {
+        snprintf(g_error, sizeof(g_error), "could not write FfxUpscalerIndex");
+        return false;
+    }
+    LogLine("FfxUpscalerIndex = %d", index);
+    return true;
+}
+
 // --------------------------------------------------------------- IPC files --
 
 static char* ReadWholeFile(const wchar_t* path, DWORD* sizeOut) {
@@ -1177,6 +1313,155 @@ static void SampleFps() {
     // a counter that is; the search latches once it succeeds or gives up, so a
     // game that is genuinely paused does not restart it.
     if (g_fps <= 0.0) SearchFrameCounter();
+}
+
+/**
+ * Fold this tick's frame intervals into the smoothed pair the status reports.
+ *
+ * Called on every pass of the worker loop rather than only when the status file
+ * is written: each slot holds one frame's delta, so five readings a second and
+ * a slow-moving average is the difference between a frame rate and a flicker.
+ * Anything outside a plausible interval is dropped rather than averaged in --
+ * OptiScaler leaves both at 0.0 until the first pair of frames, and a game that
+ * has just resumed from a stall reports one enormous delta.
+ */
+// ---------------------------------------------- frame intervals, part two --
+//
+// FindFrameTimes knows where the two doubles are *declared*, at an offset the
+// compiler works out from the mirror. That was not enough: on a real Deck both
+// slots read as zero for a whole session while the frame counter eight bytes in
+// front of the same table was perfectly correct, so the run of declarations
+// between them contains a size this cannot see. Every type in that run is a
+// standard one, which is exactly what makes the mistake invisible -- the
+// arithmetic looks right and the readings simply never arrive.
+//
+// So the declared pair is a first guess, the way the frame counter's declared
+// slot is, and when it never produces a reading the plugin goes looking for the
+// pair instead. What it looks for is specific: two adjacent doubles, both
+// inside the range a frame interval can occupy, both changing from one sample
+// to the next, and at least one of them agreeing with the interval the frame
+// counter implies. Read-only throughout, and two separate matches is a refusal
+// rather than a coin toss.
+//
+// Which of the pair is which is deliberately not decided here. The host sorts
+// them -- interpolation can only add frames, so the shorter interval is the
+// presented one whichever slot it came out of -- so all this has to find is the
+// pair.
+
+#define FT_SCAN_FIRST 280   // past the last offset the version lists validate
+#define FT_SCAN_LAST 704    // comfortably past where the pair is declared
+#define FT_MAX_SLOTS ((FT_SCAN_LAST - FT_SCAN_FIRST) / 8)
+#define FT_MAX_ROUNDS 12
+
+static double g_ftSnapshot[FT_MAX_SLOTS];
+static bool g_ftHaveSnapshot = false;
+static int g_ftRounds = 0;
+static bool g_ftDone = false;
+
+static bool PlausibleInterval(double ms) { return ms > 0.05 && ms < 2000.0; }
+
+/**
+ * A double that is positively a frame interval: in range, remeasured since the
+ * last sample, and agreeing with the interval the frame counter implies.
+ *
+ * Only one of the two has to pass this. The other is on the far side of the
+ * generator and is free to differ from the counted rate -- and it can be
+ * sitting at zero, because OptiScaler leaves a slot at 0.0 until the hook that
+ * writes it has run, which for the frame-generation hook may be never.
+ */
+static bool FrameTimeAnchor(double now, double before, double expected) {
+    if (!PlausibleInterval(now)) return false;
+    // A frame interval is remeasured every frame. Anything that held still
+    // across a whole tick is a constant that happens to sit in the range.
+    if (now == before) return false;
+    double ratio = now / expected;
+    return ratio > 0.65 && ratio < 1.35;
+}
+
+static void SearchFrameTimes() {
+    if (g_ftDone || !g_backends.table) return;
+    // Without a frame rate there is nothing to recognise the pair by, and
+    // matching only "two plausible doubles" would latch onto the first pair of
+    // anything in the window.
+    if (g_fps <= 0.0) return;
+    if (++g_ftRounds > FT_MAX_ROUNDS) {
+        LogLine("no frame-interval pair found in State; both rates stay unavailable");
+        g_ftDone = true;
+        return;
+    }
+
+    const unsigned char* base = (const unsigned char*) g_backends.table;
+    if (!Readable(base + FT_SCAN_FIRST, FT_SCAN_LAST - FT_SCAN_FIRST + sizeof(double))) {
+        g_ftDone = true;
+        return;
+    }
+
+    double current[FT_MAX_SLOTS];
+    for (int i = 0; i < FT_MAX_SLOTS; i++)
+        memcpy(&current[i], base + FT_SCAN_FIRST + i * 8, sizeof(double));
+
+    if (!g_ftHaveSnapshot) {
+        memcpy(g_ftSnapshot, current, sizeof(current));
+        g_ftHaveSnapshot = true;
+        return;
+    }
+
+    const double expected = 1000.0 / g_fps;
+    int anchor = -1;
+    bool ambiguous = false;
+    for (int i = 0; i < FT_MAX_SLOTS; i++) {
+        if (!FrameTimeAnchor(current[i], g_ftSnapshot[i], expected)) continue;
+        // The two are adjacent, and when nothing is being generated they hold
+        // the same interval and both pass -- that is one pair, not two answers.
+        if (anchor >= 0 && i > anchor + 1) { ambiguous = true; break; }
+        if (anchor < 0) anchor = i;
+    }
+
+    memcpy(g_ftSnapshot, current, sizeof(current));
+
+    if (ambiguous) {
+        LogLine("more than one frame interval in State; refusing to guess");
+        g_ftDone = true;
+        return;
+    }
+    if (anchor < 0) return;
+
+    // The anchor is one of the pair; the other is the neighbour. Prefer the one
+    // below when it also looks like an interval, so a pair found by its second
+    // member is still reported as a pair. When neither neighbour looks like
+    // anything the anchor is still adopted -- one real interval reported is
+    // worth more than none, and each value is range-checked again on the way
+    // out, so an unrelated neighbour reports as no reading rather than as a
+    // number.
+    int start = anchor;
+    if (anchor > 0 && PlausibleInterval(current[anchor - 1])) start = anchor - 1;
+    if (start + 1 >= FT_MAX_SLOTS) start = FT_MAX_SLOTS - 2;
+
+    size_t offset = (size_t) (FT_SCAN_FIRST + start * 8);
+    g_frameTimes.rendered = (const double*) (base + offset);
+    g_frameTimes.presented = (const double*) (base + offset + 8);
+    LogLine("frame intervals found at +%zu (%.2f ms / %.2f ms), declared at +%zu",
+            offset, current[start], current[start + 1],
+            (size_t) offsetof(state_tail, lastFGFrameTime));
+    g_ftDone = true;
+}
+
+static void SampleFrameTimes() {
+    if (g_frameTimes.rendered && Readable(g_frameTimes.rendered, sizeof(double) * 2)) {
+        const double samples[2] = { *g_frameTimes.rendered, *g_frameTimes.presented };
+        double* averages[2] = { &g_renderedMs, &g_presentedMs };
+        for (int i = 0; i < 2; i++) {
+            double value = samples[i];
+            if (!PlausibleInterval(value)) continue;
+            *averages[i] = *averages[i] > 0.0
+                ? *averages[i] + (value - *averages[i]) * 0.12
+                : value;
+        }
+    }
+    // Nothing has ever come out of the declared pair. Go and find one that is
+    // actually being written; the search latches once it succeeds or gives up,
+    // so this does not restart every tick for the rest of the session.
+    if (g_renderedMs <= 0.0 && g_presentedMs <= 0.0) SearchFrameTimes();
 }
 
 /**
@@ -1228,12 +1513,13 @@ static int ReadIntField(const char* name) {
     return opt->value_or_default();
 }
 
-/** The FFX FG version names, joined for one status line. */
-static void FfxFgVersionList(char* out, size_t outLen) {
+/** One of the FFX version lists, joined for a single status line. */
+static void FfxVersionList(const char names[FFX_FG_MAX][FFX_FG_NAME_MAX], int count,
+                           char* out, size_t outLen) {
     out[0] = 0;
     size_t used = 0;
-    for (int i = 0; i < g_ffxFgCount; i++) {
-        int n = snprintf(out + used, outLen - used, "%s%s", used ? "|" : "", g_ffxFgNames[i]);
+    for (int i = 0; i < count; i++) {
+        int n = snprintf(out + used, outLen - used, "%s%s", used ? "|" : "", names[i]);
         if (n < 0 || (size_t) n >= outLen - used) { out[used] = 0; return; }
         used += (size_t) n;
     }
@@ -1241,6 +1527,7 @@ static void FfxFgVersionList(char* out, size_t outLen) {
 
 static void WriteStatus(const char* status) {
     SampleFps();
+    SampleFrameTimes();
 
     char dx12[32] = "", dx11[32] = "", vk[32] = "", live[32] = "";
     ReadStringField("Dx12Upscaler", dx12, sizeof(dx12));
@@ -1255,11 +1542,13 @@ static void WriteStatus(const char* status) {
     NarrowCopy(dir, sizeof(dir), g_dir);
 
     char ffxFg[FFX_FG_MAX * FFX_FG_NAME_MAX];
-    FfxFgVersionList(ffxFg, sizeof(ffxFg));
+    FfxVersionList(g_ffxFgNames, g_ffxFgCount, ffxFg, sizeof(ffxFg));
+    char ffxUpscaler[FFX_FG_MAX * FFX_FG_NAME_MAX];
+    FfxVersionList(g_ffxUpscalerNames, g_ffxUpscalerCount, ffxUpscaler, sizeof(ffxUpscaler));
 
-    char body[2048];
+    char body[4096];
     int n = snprintf(body, sizeof(body),
-                     "schema 4\n"
+                     "schema 5\n"
                      "status %s\n"
                      "seq %ld\n"
                      "applied %d\n"
@@ -1280,12 +1569,18 @@ static void WriteStatus(const char* status) {
                      "fgflags %p\n"
                      "fg_index %d\n"
                      "ffx_fg_versions %s\n"
+                     "ffx_upscaler_index %d\n"
+                     "ffx_upscaler_versions %s\n"
+                     "rendered_ms %.3f\n"
+                     "presented_ms %.3f\n"
                      "error %s\n",
                      status, g_seq, g_lastApplied, (void*) g_config, (void*) g_state.base,
                      (void*) g_backends.table, (void*) g_newBackend, (void*) g_frameCount,
                      BackendEntryCount(), (unsigned long long) g_framesSeen,
                      dir, g_fps, ReadBoolField("FGEnabled"), dx12, dx11, vk, live,
-                     (void*) g_fgFlags.fgChanged, ReadIntField("FfxFGIndex"), ffxFg, g_error);
+                     (void*) g_fgFlags.fgChanged, ReadIntField("FfxFGIndex"), ffxFg,
+                     ReadIntField("FfxUpscalerIndex"), ffxUpscaler,
+                     g_renderedMs, g_presentedMs, g_error);
     if (n < 0) return;
     HANDLE h = CreateFileW(g_statusPath, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS,
                            FILE_ATTRIBUTE_NORMAL, NULL);
@@ -1322,6 +1617,10 @@ static int ApplyCommands(char* text) {
             if (SwitchBackend(a)) applied++;
         } else if (parts >= 2 && strcmp(verb, "fgindex") == 0) {
             if (SetFfxFgIndex(atoi(a))) applied++;
+        } else if (parts >= 2 && strcmp(verb, "ffxupscaler") == 0) {
+            // The rebuild it needs is deferred to the end of the command, so a
+            // "backend" line in the same one supplies it instead of racing it.
+            if (SetFfxUpscalerIndex(atoi(a))) { applied++; wantBackendChange = true; }
         } else if (strcmp(verb, "apply-backend") == 0) {
             wantBackendChange = true;
         }
@@ -1350,31 +1649,43 @@ static bool DiscoverBackendMap() {
     g_backends = found;
     g_newBackend = found.newBackend;
     g_frameCount = FindFrameCount(&g_backends);
+    FindFrameTimes(&g_backends, &g_frameTimes);
+    return true;
+}
+
+/** Copy one of the FFX version lists out of State, once it exists. */
+static bool AdoptFfxVersions(size_t namesOffset, size_t idsOffset, const char* what,
+                             char into[FFX_FG_MAX][FFX_FG_NAME_MAX], int* countInto) {
+    char names[FFX_FG_MAX][FFX_FG_NAME_MAX];
+    int count = 0;
+    if (!ReadFfxVersions(&g_backends, namesOffset, idsOffset, names, &count)) return false;
+    for (int i = 0; i < count; i++) {
+        memcpy(into[i], names[i], FFX_FG_NAME_MAX);
+        LogLine("FFX %s version %d: %s", what, i, into[i]);
+    }
+    *countInto = count;
     return true;
 }
 
 /**
- * The rest of what State has to offer, both of which depend on the map above.
+ * The rest of what State has to offer, all of which depends on the map above.
  *
- * Kept apart from DiscoverBackendMap because neither is required for the
- * upscaler switch, and because the FFX version list is genuinely not there
- * until the game has asked the FFX SDK what it can do -- so this is retried,
- * and a failure here never costs anything that already works.
+ * Kept apart from DiscoverBackendMap because none of it is required for the
+ * upscaler switch, and because both version lists are genuinely not there until
+ * the game has asked the FFX SDK what it can do -- so this is retried, and a
+ * failure here never costs anything that already works.
  */
-static void DiscoverFgControls() {
+static void DiscoverStateExtras() {
     if (!g_state.base || !g_backends.table) return;
     if (!g_fgFlags.fgChanged) FindFgFlags(&g_state, &g_backends, &g_fgFlags);
-    if (g_ffxFgCount == 0) {
-        char names[FFX_FG_MAX][FFX_FG_NAME_MAX];
-        int count = 0;
-        if (ReadFfxFgVersions(&g_backends, names, &count)) {
-            for (int i = 0; i < count; i++) {
-                memcpy(g_ffxFgNames[i], names[i], FFX_FG_NAME_MAX);
-                LogLine("FFX FG version %d: %s", i, g_ffxFgNames[i]);
-            }
-            g_ffxFgCount = count;
-        }
-    }
+    if (g_ffxFgCount == 0)
+        AdoptFfxVersions(offsetof(state_tail, ffxFGVersionNames),
+                         offsetof(state_tail, ffxFGVersionIds), "FG",
+                         g_ffxFgNames, &g_ffxFgCount);
+    if (g_ffxUpscalerCount == 0)
+        AdoptFfxVersions(offsetof(state_tail, ffxUpscalerVersionNames),
+                         offsetof(state_tail, ffxUpscalerVersionIds), "upscaler",
+                         g_ffxUpscalerNames, &g_ffxUpscalerCount);
 }
 
 /** Poll ticks between status rewrites; the loop sleeps 200ms per tick. */
@@ -1419,7 +1730,7 @@ static DWORD WINAPI Worker(LPVOID) {
         if (!g_config) g_config = FindConfig(opti);
         if (!g_state.base) FindState(opti, exeName, &g_state);
         if (g_state.base && !g_backends.table) DiscoverBackendMap();
-        DiscoverFgControls();
+        DiscoverStateExtras();
         if (g_config && g_state.base && g_backends.table) break;
         WriteStatus("searching");
         Sleep(1000);
@@ -1463,13 +1774,18 @@ static DWORD WINAPI Worker(LPVOID) {
             if (g_state.base && DiscoverBackendMap()) WriteStatus("ready");
         }
 
-        // The FFX version list appears only once the game has queried the SDK,
-        // and the flags need the map, so keep asking as long as either is
-        // missing. Both are cheap the moment they are found.
-        if ((!g_fgFlags.fgChanged || g_ffxFgCount == 0) && ++rediscoverFg >= 25) {
+        // The FFX version lists appear only once the game has queried the SDK,
+        // and the flags need the map, so keep asking as long as any of them is
+        // missing. All are cheap the moment they are found.
+        if ((!g_fgFlags.fgChanged || g_ffxFgCount == 0 || g_ffxUpscalerCount == 0)
+            && ++rediscoverFg >= 25) {
             rediscoverFg = 0;
-            DiscoverFgControls();
+            DiscoverStateExtras();
         }
+
+        // Each of these two slots holds one frame's interval, so they are read
+        // at the loop's own rate and smoothed, not sampled once every heartbeat.
+        SampleFrameTimes();
 
         WIN32_FILE_ATTRIBUTE_DATA info;
         if (GetFileAttributesExW(g_cmdPath, GetFileExInfoStandard, &info)) {

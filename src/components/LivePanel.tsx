@@ -1,8 +1,9 @@
 import { ButtonItem, Field, PanelSection, PanelSectionRow } from "@decky/ui";
 import { useState } from "react";
 import { getLiveLog, installLive } from "../api";
+import { liveFrameRates } from "../config/basic";
 import type { LiveStatus } from "../types";
-import { Mono, Notice } from "./Common";
+import { KeyValue, Mono, Notice } from "./Common";
 
 interface Props {
   targetDir: string;
@@ -30,6 +31,66 @@ function upscalerBlockedReason(status: LiveStatus) {
     return "Upscaler switching turns on once the game has drawn its first upscaled frame.";
   }
   return "Upscaler switching is unavailable: OptiScaler's backend list could not be read.";
+}
+
+/**
+ * What the in-game plugin is actually measuring, when it is attached.
+ *
+ * The two frame rates come from three separate readings — a frame counter and
+ * two frame intervals — and when one of them is missing the panel above simply
+ * shows fewer numbers, which is indistinguishable from a game that is not
+ * generating any frames. This is where the difference is visible: an interval
+ * of "—" is a reading the plugin could not take, and an interval that matches
+ * the other is a generator that is not running.
+ */
+function Measurements({ status }: Readonly<{ status: LiveStatus }>) {
+  if (!status.attached) return null;
+  const ms = (value: number | null | undefined) =>
+    typeof value === "number" && value > 0 ? `${value.toFixed(2)} ms` : "—";
+  const fps = (value: number | null | undefined) =>
+    typeof value === "number" && value > 0 ? `${value.toFixed(1)} fps` : "—";
+  const rates = liveFrameRates(status);
+  return (
+    <PanelSectionRow>
+      <div style={{ padding: "2px 0" }}>
+        <KeyValue label="Presented" value={fps(status.total_fps)} />
+        <KeyValue label="Rendered" value={fps(status.base_fps)} />
+        {/* The raw slots, named after where in State they came from rather than
+            after a role: which one is the presented interval is decided from
+            the numbers above, and seeing both is how a slot that was never
+            written tells itself apart from a generator that is idle. */}
+        <KeyValue
+          label="Intervals"
+          value={`${ms(status.presented_ms)} present · ${ms(status.rendered_ms)} fg · ${fps(status.fps)} counted`}
+        />
+        {/* Which build of the in-game plugin produced the line above. An older
+            one does not report the intervals at all, and the two rates are then
+            missing for a reason that has nothing to do with how they are
+            derived — so the version belongs next to the numbers, not somewhere
+            else on the page. */}
+        <KeyValue
+          label="In-game plugin"
+          value={
+            status.schema === null || status.schema === undefined
+              ? "did not report a version"
+              : `format ${status.schema}${
+                  status.asi_current === false
+                    ? " · older than the one shipped here"
+                    : status.asi_current
+                      ? " · current"
+                      : ""
+                }`
+          }
+        />
+        {rates && !rates.generating ? (
+          <KeyValue
+            label="Frame generation"
+            value="on, but no frames are being generated"
+          />
+        ) : null}
+      </div>
+    </PanelSectionRow>
+  );
 }
 
 export function LivePanel({ targetDir, status, onChanged }: Props) {
@@ -88,6 +149,8 @@ export function LivePanel({ targetDir, status, onChanged }: Props) {
     <PanelSection title="Live in-game control">
       <PanelSectionRow>{body}</PanelSectionRow>
 
+      <Measurements status={status} />
+
       {/* The plugin derives its own folder from where OptiScaler loaded it. If
           that ever disagrees with the folder being managed, it is writing where
           nothing is reading — which is exactly how it failed silently before. */}
@@ -96,6 +159,26 @@ export function LivePanel({ targetDir, status, onChanged }: Props) {
           <Notice tone="warn" title="Reporting from a different folder">
             The in-game plugin is writing to <Mono>{status.dir}</Mono>, which is not this
             game's OptiScaler folder. Reinstall live control below.
+          </Notice>
+        </PanelSectionRow>
+      ) : null}
+
+      {/* The plugin ships an ASI; each game holds its own copy of it, taken at
+          set-up time. Updating the plugin does not update those, so a game can
+          be attached and answering while missing everything added since — which
+          reads as the new feature not existing rather than as an old plugin.
+          The copy is deliberately not offered while the game is running: the
+          DLL is mapped into it, and truncating a mapped file is how you take
+          the game down with you. */}
+      {status.asi_current === false ? (
+        <PanelSectionRow>
+          <Notice tone="warn" title="The in-game plugin is out of date">
+            This game has an older build of the live-control plugin than the one shipped here.
+            It still works, but anything added since is missing — including the rendered frame
+            rate and the FSR version list.
+            {status.attached
+              ? " Close the game, then reinstall live control here."
+              : " Reinstall live control below."}
           </Notice>
         </PanelSectionRow>
       ) : null}

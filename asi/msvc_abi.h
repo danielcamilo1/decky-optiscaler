@@ -107,4 +107,15 @@ struct msvc_vector_raw {
     void* end;
 };
 
+// std::deque<T> on MSVC: the block map, how many blocks it holds, the offset of
+// the first element and the element count. Nothing here ever walks one -- the
+// two deques in State are only skipped over to reach the frame times declared
+// after them -- so the block layout does not matter, only the size.
+struct msvc_deque_raw {
+    void* map;
+    size_t mapsize;
+    size_t offset;
+    size_t size;
+};
+
 } // namespace optimirror

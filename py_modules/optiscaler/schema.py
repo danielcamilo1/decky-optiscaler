@@ -8,7 +8,7 @@ picked in the UI, and the wiki plan builder for keys mined out of prose, where
 the need is greater still.
 """
 
-from .live import FFX_FG_MAX
+from .live import FFX_FG_MAX, FFX_UPSCALER_MAX
 from .schema_generated import OPTIONS
 
 #: (section, key) -> option metadata.
@@ -60,8 +60,13 @@ def resolve(key_name, section=None):
 #: control ends up showing a choice that reached neither the file nor the game.
 #: The real constraint is that it is an index, bounded by the same ceiling the
 #: live channel uses.
+#:
+#: ``FSR.UpscalerIndex`` is the same snapshot one step over: the ini documents
+#: "0 = FSR 4.0.2 | 1 = FSR 3.1.5 | 2 = FSR 2.3.4" while the game in front of
+#: you reports 4.1.1 and however many others its FidelityFX runtime carries.
 INDEX_RANGES = {
     ("FSR", "FGIndex"): (0, FFX_FG_MAX - 1),
+    ("FSR", "UpscalerIndex"): (0, FFX_UPSCALER_MAX - 1),
 }
 
 

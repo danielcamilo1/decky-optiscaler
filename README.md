@@ -38,8 +38,10 @@ OptiScaler v0.9.4 is bundled, so installing works offline and every game gets th
   from the comments in `OptiScaler.ini`, so they match the shipped build, and edits keep every
   comment in the file. Names are the overlay's own, so `fsr31` shows up as "FSR 3.1 / FSR 4".
 - **Changes settings while you play.** A bundled ASI plugin applies frame generation, FidelityFX
-  FG version and upscaler changes immediately from the Quick Access panel, next to the live frame
-  rate and what the game actually ended up running. See [Live in-game control](#live-in-game-control).
+  FG version, the upscaler and the FSR version immediately from the Quick Access panel — next to
+  what the game actually ended up running and, with frame generation on, both frame rates: what
+  the game renders and what reaches the screen. See
+  [Live in-game control](#live-in-game-control).
 - **Doesn't lose your files.** Anything an install would overwrite is moved into
   `decky_optiscaler_backup_files/` and put back when you uninstall.
 - **Odds and ends.** `OptiScaler.log` is parsed for the backend that actually got created, the
@@ -48,6 +50,11 @@ OptiScaler v0.9.4 is bundled, so installing works offline and every game gets th
   menu in the Steam library.
 
 ## Screenshots
+
+<img src="assets/quick-access-live-tiles.jpg" alt="The Quick Access panel over a running game, showing base and frame-generated frame rates side by side, frame generation on, and FSR 4.1.1 as the upscaler" />
+
+Over the running game: what it renders, what reaches the screen, and the exact
+FSR version it ended up with — above the controls that change them.
 
 | | |
 |---|---|
@@ -81,6 +88,14 @@ which is what lets the Quick Access panel change these three things mid-game:
 - **FidelityFX FG version** — writes `Config::FfxFGIndex`, then sets `State::FGchanged` and
   `State::SCchanged` so the generator's context gets destroyed and rebuilt on the new index. The
   versions you pick from are the ones the SDK reported to *that* game, read back out of `State`.
+- **FSR version** — writes `Config::FfxUpscalerIndex` and asks for the same feature rebuild the
+  upscaler switch uses, which is what the overlay's "Change Upscaler" under FFX Settings does.
+  One backend id covers every FSR from 2.3.4 to 4.1.1, so the exact version comes from the list
+  the running game reported — the same list its overlay names in the title bar.
+
+It also reads out both frame rates. Frame generation gives a game two of them, and OptiScaler
+times both sides; the panel shows what the game renders next to what reaches the screen, and says
+when the generator is switched on but not actually inserting frames.
 
 ## Steam launch options
 

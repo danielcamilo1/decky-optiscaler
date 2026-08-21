@@ -3,6 +3,7 @@ import { useState } from "react";
 import { switchUpscaler } from "../api";
 import {
   FFX_FG_ID,
+  FFX_UPSCALER_ID,
   FG_PRESETS,
   MULTIPLIER_KEY,
   MULTIPLIER_SECTION,
@@ -13,9 +14,13 @@ import {
   enableFrameGenChanges,
   enableFrameGenWith,
   ffxFgChanges,
+  ffxUpscalerChanges,
   frameGenEnabled,
+  isFfxBackend,
+  runningBackend,
   supportsMultiplier,
   usesFfxFrameGen,
+  usesFfxUpscaler,
 } from "../config/basic";
 import { curatedLabel } from "../config/labels";
 import { optionById } from "../config/tabs";
@@ -24,6 +29,7 @@ import type { Preset } from "../config/basic";
 import type {
   AutoPlan,
   ConfigValues,
+  FfxUpscalerInfo,
   GpuInfo,
   LiveStatus,
   OptionChange,
@@ -36,6 +42,11 @@ interface Props {
   disabled?: boolean;
   gpu?: GpuInfo | null;
   live?: LiveStatus | null;
+  /**
+   * The FidelityFX upscaler library sitting next to the game, which is what
+   * names the newest FSR version before a running game can be asked.
+   */
+  ffx?: FfxUpscalerInfo | null;
   /**
    * Where OptiScaler is installed. Supplying it turns on the upscaler switch,
    * which only belongs where the running game is being driven — the Quick
@@ -61,32 +72,63 @@ interface Props {
 const MULTIPLIER_ID = `${MULTIPLIER_SECTION}.${MULTIPLIER_KEY}`;
 
 /**
- * The FFX FG versions to offer, and where the list came from.
+ * One of the two FidelityFX version lists to offer, and where it came from.
  *
- * A running game is the authority: OptiScaler asks the FidelityFX SDK what it
- * can offer and that answer depends on the game's own runtime, so the shipped
- * INI's documented pair is only a stand-in for when nothing is attached to ask.
+ * A running game is the authority for both: OptiScaler asks the FidelityFX SDK
+ * what it can offer and that answer depends on the game's own runtime, so the
+ * shipped INI's documented list is only a stand-in for when nothing is attached
+ * to ask. OptiScaler's overlay names each entry "FSR " and the SDK's own
+ * version string, and so does this.
+ *
+ * That stand-in is a snapshot of a *different* build. The reference ini this
+ * plugin generates its schema from documents the versions the OptiScaler
+ * release it came with provided — for the upscaler, "0 = FSR 4.0.2" — while the
+ * library actually shipped here is 4.1.1, which is the version the game reports
+ * and the overlay prints. So when the FidelityFX library next to the game can
+ * be read, `newest` names entry 0 from the file rather than from the comment,
+ * and only the older compatibility providers below it stay as documented.
  */
-function ffxFgOptions(live: LiveStatus | null | undefined, option: OptionMeta | undefined) {
-  const reported = live?.ffx_fg_versions ?? [];
-  if (reported.length > 0) {
+function ffxVersionOptions(
+  reported: string[] | undefined,
+  option: OptionMeta | undefined,
+  newest?: string | null
+) {
+  if (reported && reported.length > 0) {
     return {
       fromGame: true,
-      options: reported.map((name, index) => ({ data: String(index), label: `FSR ${name}` })),
+      options: reported.map((name, index) => ({
+        data: String(index),
+        label: `FSR ${name}`,
+        version: name,
+      })),
     };
   }
   return {
     fromGame: false,
-    options: (option?.options ?? []).map((value) => ({
-      data: value,
-      label: labelFor(option as OptionMeta, value),
-    })),
+    options: (option?.options ?? []).map((value) => {
+      const label =
+        value === "0" && newest ? `FSR ${newest}` : labelFor(option as OptionMeta, value);
+      return { data: value, label, version: label.replace(/^FSR\s+/i, "") };
+    }),
   };
+}
+
+/**
+ * The FidelityFX library's version as OptiScaler would name it.
+ *
+ * The file carries four components ("4.1.1.2740"); the SDK reports three, and
+ * three is what the overlay shows.
+ */
+function ffxVersionName(ffx: FfxUpscalerInfo | null | undefined): string | null {
+  const parts = (ffx?.version ?? "").split(".").filter(Boolean);
+  return parts.length >= 3 ? parts.slice(0, 3).join(".") : null;
 }
 
 interface Choice {
   data: string;
   label: string;
+  /** The FidelityFX version this entry names, where the entry is one. */
+  version?: string;
 }
 
 /**
@@ -104,9 +146,20 @@ interface Choice {
  * then readable here instead of being displayed as something it is not.
  *
  * The `key` is the same problem from the other end. Nothing here can see
- * whether Steam's control picked a new value up, so it is rebuilt whenever the
- * value changes; the value is derived state, so there is nothing in the control
- * worth preserving across that.
+ * whether Steam's control picked a new value up, so it is rebuilt whenever what
+ * it should be displaying changes; the value is derived state, so there is
+ * nothing in the control worth preserving across that.
+ *
+ * "What it should be displaying" is the label, not the value — and the label
+ * can change while the value does not. Both FidelityFX lists start as the
+ * shipped INI's snapshot and are replaced the moment the running game reports
+ * its own, under an index that does not move: index 0 goes from "FSR 4.0.2",
+ * which is what OptiScaler's reference ini documents, to "FSR 4.1.1", which is
+ * what the game actually has. Re-keying on the value alone left the first name
+ * on screen for ever. It showed up as the full page and the Quick Access panel
+ * disagreeing about the same install — the panel mounts its controls only after
+ * the config read resolves, by which time the first live poll has landed, so it
+ * built the right label first time and the page never did.
  */
 function ValueDropdown({
   options,
@@ -127,9 +180,10 @@ function ValueDropdown({
 }>) {
   const known = options.some((choice) => choice.data === selected);
   const rgOptions = known ? options : [...options, { data: selected, label: describe(selected) }];
+  const shown = `${selected}\u0000${rgOptions.map((choice) => choice.label).join("\u0000")}`;
   return (
     <DropdownItem
-      key={selected}
+      key={shown}
       {...rest}
       rgOptions={rgOptions}
       selectedOption={selected}
@@ -152,6 +206,7 @@ export function BasicPanel({
   disabled,
   gpu,
   live,
+  ffx,
   targetDir,
   compact,
   plan,
@@ -166,6 +221,7 @@ export function BasicPanel({
   const [picked, setPicked] = useState<string | null>(null);
   const [methodChanged, setMethodChanged] = useState(false);
   const [ffxFgChanged, setFfxFgChanged] = useState(false);
+  const [ffxUpscalerChanged, setFfxUpscalerChanged] = useState(false);
   const [switching, setSwitching] = useState(false);
   const [switchError, setSwitchError] = useState<string | null>(null);
 
@@ -210,7 +266,7 @@ export function BasicPanel({
   // The FFX frame generator, which only the FSR FG output runs. When the game
   // is attached its own reported list wins; otherwise the shipped INI's.
   const ffxOption = optionById(FFX_FG_ID);
-  const ffxChoices = ffxFgOptions(live, ffxOption);
+  const ffxChoices = ffxVersionOptions(live?.ffx_fg_versions, ffxOption);
   // A game that reports a generator list has OptiScaler's FidelityFX FG built
   // for it, which is a firmer answer than the ini can give — FGOutput "auto"
   // resolves at runtime and the file cannot say which way it went. Either is
@@ -226,19 +282,34 @@ export function BasicPanel({
   // write only. Only worth saying once it has actually been asked for.
   const ffxNotLive = ffxFgChanged && Boolean(live?.attached) && !live?.can_change_fg;
 
+  // Which version of FSR the FidelityFX backend runs — the overlay's "FFX
+  // Upscaler" combo, and the only place the exact version is written down.
+  const ffxUpsOption = optionById(FFX_UPSCALER_ID);
+  const ffxUpsChoices = ffxVersionOptions(
+    live?.ffx_upscaler_versions, ffxUpsOption, ffxVersionName(ffx));
+  const ffxUpsSelected = ffxUpsOption ? effectiveValue(values, ffxUpsOption) : "0";
+  const ffxUpsFixed = ffxUpsChoices.options.length < 2;
+
   const liveFg = typeof live?.fg_enabled === "boolean" ? live.fg_enabled : null;
   // The same order the live tiles read it in — a DX11 game reports its backend
   // under dx11 and nowhere else, and leaving that out made the switch compare
   // the pick against nothing at all.
-  const runningBackend =
-    live?.upscaler?.dx12 ?? live?.upscaler?.vulkan ?? live?.upscaler?.dx11 ?? null;
+  const liveBackend = runningBackend(live);
+  // Only the FidelityFX backend has versions to choose between. The ini answers
+  // for a game that is not running; a game that *is* running has already picked
+  // one, which settles it for the "auto" the ini can only leave open.
+  const ffxUpsUsable = live?.attached ? isFfxBackend(liveBackend) : usesFfxUpscaler(values);
+  // Attached, the user has moved it, and there was nothing to act on: no
+  // upscaler is registered yet, so this was an ini write only.
+  const ffxUpsNotLive =
+    ffxUpscalerChanged && Boolean(live?.attached) && !live?.can_change_ffx_upscaler;
   const wanted = backendCode(UPSCALER_PRESETS.find((preset) => preset.id === picked));
   // Nothing to apply once the game is already on it, or if the choice cannot be
   // pushed at all — the plugin has to be attached with an upscaler registered.
   const canSwitchNow =
     Boolean(targetDir) &&
     Boolean(wanted) &&
-    wanted !== runningBackend &&
+    wanted !== liveBackend &&
     Boolean(live?.attached) &&
     Boolean(live?.can_switch_upscaler);
   // Attached, a different upscaler picked, and still no switch on offer. The
@@ -247,7 +318,7 @@ export function BasicPanel({
   const switchNotReady =
     Boolean(targetDir) &&
     Boolean(wanted) &&
-    wanted !== runningBackend &&
+    wanted !== liveBackend &&
     Boolean(live?.attached) &&
     !live?.can_switch_upscaler;
 
@@ -542,6 +613,56 @@ export function BasicPanel({
             }}
           />
         </PanelSectionRow>
+
+        {/* The second half of the same question. "fsr31" is every FSR from
+            2.3.4 to 4.1.1 and OptiScaler names it "FSR 3.X/4" for exactly that
+            reason; which one it actually runs is this index, which the overlay
+            asks for separately under "FFX Settings" as its "FFX Upscaler"
+            combo. It sits directly under the backend it qualifies, and only
+            when that backend is the FidelityFX one — nothing else reads it. */}
+        {ffxUpsUsable && ffxUpsChoices.options.length > 0 ? (
+          <PanelSectionRow>
+            <ValueDropdown
+              label="FSR version"
+              description={hint(
+                ffxUpsFixed
+                  ? "The only FSR version this game's FidelityFX runtime offers."
+                  : ffxUpsChoices.fromGame
+                    ? "The FSR versions this game's FidelityFX runtime reports."
+                    : "Which version of FSR the FidelityFX backend runs."
+              )}
+              disabled={disabled || ffxUpsFixed}
+              bottomSeparator={ffxUpsNotLive ? "none" : "standard"}
+              options={ffxUpsChoices.options}
+              selected={ffxUpsSelected}
+              // The ini can hold an index this game's runtime does not offer —
+              // it was set for another game, or written from the list a
+              // different FidelityFX build reported.
+              describe={(index) => `Version ${index} (not offered here)`}
+              onPick={(index) => {
+                setFfxUpscalerChanged(true);
+                onApply(
+                  ffxUpscalerChanges(
+                    index,
+                    ffxUpsChoices.options.find((choice) => choice.data === index)?.version
+                  )
+                );
+              }}
+            />
+          </PanelSectionRow>
+        ) : null}
+
+        {/* Attached, but nothing to rebuild: the game has not built an upscaler
+            yet, so this was recorded and no more. Said plainly rather than left
+            to look as though the version changed. */}
+        {ffxUpsNotLive ? (
+          <PanelSectionRow>
+            <Notice tone="info">
+              Saved. The game has not started upscaling yet, so the version changes as soon
+              as it does.
+            </Notice>
+          </PanelSectionRow>
+        ) : null}
 
         {/* Immediately below the dropdown it belongs to, and only once a
             different upscaler has been picked: OptiScaler rebuilds the feature

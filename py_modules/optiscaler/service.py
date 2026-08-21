@@ -644,8 +644,9 @@ class OptiScalerService:
 
     async def get_live_status(self, target_dir):
         """Whether settings can currently be changed without a restart."""
-        report = await self._run(live.status, target_dir)
-        report["asi_available"] = self.live_asi_path() is not None
+        source = self.live_asi_path()
+        report = await self._run(live.status, target_dir, source)
+        report["asi_available"] = source is not None
         report["live_keys"] = sorted(live.LIVE_FIELDS)
         return report
 

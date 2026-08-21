@@ -12,6 +12,24 @@ menu_common.cpp is vendored for reference only: it is where the in-game
 overlay's own live writes live, and it is the authority on which options can
 change at runtime and what OptiScaler calls each of them on screen.
 
+wrapped_swapchain.cpp and FG_Hooks.cpp are here for the same reason, for one
+claim each. They are the two sides of frame generation, and between them they
+are why there are two frame rates to report: LocalPresent times and counts every
+frame that reaches the screen (State::presentFrameTime, State::frameCount),
+while FGHooks::FGPresent times the game's own presents into the FidelityFX FG
+swapchain (State::lastFGFrameTime), which is one per *rendered* frame. Reading
+those two slots the wrong way round would swap the base frame rate with the
+total, and nothing about the numbers themselves would look wrong.
+
+FeatureProvider_{Dx11,Dx12,Vk}.cpp are here for one claim too, and it is what
+lets the FSR version change without a restart. Each one's ChangeFeature() reads
+an empty State::newBackend as "use whatever Config holds for *this* API", and
+clears it again once a rebuild has succeeded. That is why changing the version
+marks every backend changed and leaves newBackend alone, where the overlay
+names the current backend explicitly: it is the same rebuild by a route that
+cannot pick the wrong graphics API, and it does not overwrite a real upscaler
+switch travelling in the same command.
+
 unordered_dense.h is the external/unordered_dense submodule at the commit this
 tag pins:
 

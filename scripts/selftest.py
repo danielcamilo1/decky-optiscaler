@@ -448,6 +448,37 @@ def check_live_control():
                   {"section": live.FFX_FG_SECTION, "key": live.FFX_FG_KEY,
                    "value": "auto"}])["deferred"] == [live.FFX_FG_ID])
 
+        # The FSR version travels the same way and for the same reason one
+        # step out: the index is read when the *upscaler* builds its context,
+        # so what makes it take effect now is the feature being rebuilt.
+        ups = live.apply_changes(str(target), [
+            {"section": live.FFX_UPSCALER_SECTION, "key": live.FFX_UPSCALER_KEY,
+             "value": "2"},
+        ])
+        ups_body = (target / live.CMD_FILE).read_text()
+        check("an ffx upscaler version change is sent as its own command",
+              ups_body.splitlines()[1] == "ffxupscaler 2" and ups["ffx_upscaler_change"],
+              ups_body.splitlines())
+        check("it is not also sent as a plain field write",
+              "set FfxUpscalerIndex" not in ups_body, ups_body)
+        check("an index this game could not have is refused rather than clamped",
+              not _accepts(live.LIVE_FIELDS[live.FFX_UPSCALER_ID], "99")
+              and not _accepts(live.LIVE_FIELDS[live.FFX_UPSCALER_ID], "-1"))
+
+        # Both are answered by one rebuild, and the rebuild reads the index --
+        # so the index has to be written before the rebuild is asked for. A
+        # preset that picks the backend *and* the version sends both at once.
+        both = live.apply_changes(str(target), [
+            {"section": "Upscalers", "key": "Dx12Upscaler", "value": "fsr31"},
+            {"section": live.FFX_UPSCALER_SECTION, "key": live.FFX_UPSCALER_KEY,
+             "value": "0"},
+        ])
+        both_body = (target / live.CMD_FILE).read_text()
+        check("the version is written before the switch that rebuilds on it",
+              both_body.splitlines()[1:3] == ["ffxupscaler 0", "backend fsr31"],
+              both_body.splitlines())
+        check("and both are reported", both["backend_change"] and both["ffx_upscaler_change"])
+
         # DX12 and DX11 name the same upscaler differently; only one id can go
         # into newBackend, and DX12 is the one that wins.
         multi = live.apply_changes(str(target), [
@@ -566,6 +597,94 @@ def check_live_diagnostics():
         shutil.rmtree(root, ignore_errors=True)
 
 
+def check_reported_folder():
+    """The folder the in-game plugin reports, against the one being managed.
+
+    The plugin reports a Windows path and Proton's drive letters are what make
+    this more than a string compare. ``Z:`` is the filesystem root, so that case
+    shares a tail outright -- but a library on the SD card gets its own letter,
+    and ``S:\\steamapps\\common\\...`` shares no tail at all with
+    ``/run/media/.../steamapps/common/...``. A healthy install on a card
+    therefore reported itself as writing to the wrong folder, in a warning that
+    told the user to reinstall something that was working.
+    """
+    from optiscaler.live import _same_dir
+
+    print("\nThe folder the in-game plugin reports")
+    check("a library on the SD card matches through its drive letter",
+          _same_dir("S:\\steamapps\\common\\Expedition 33\\Sandfall\\Binaries\\Win64",
+                    "/run/media/mmcblk0p1/steamapps/common/Expedition 33/"
+                    "Sandfall/Binaries/Win64") is True)
+    check("and so does internal storage, where Z: is the root",
+          _same_dir("Z:\\home\\deck\\.steam\\steam\\steamapps\\common\\Game\\Bin",
+                    "/home/deck/.steam/steam/steamapps/common/Game/Bin") is True)
+    check("a genuinely different game is still a mismatch",
+          _same_dir("S:\\steamapps\\common\\Other\\Binaries\\Win64",
+                    "/run/media/mmcblk0p1/steamapps/common/Expedition 33/"
+                    "Sandfall/Binaries/Win64") is False)
+    # Whole components only: "Win64" is every Unreal game's last folder, and
+    # one shared name is not a shared path.
+    check("one shared folder name is not a match",
+          _same_dir("S:\\somewhere\\Win64", "/games/Expedition 33/Win64") is False)
+    check("a path that says nothing gives no answer",
+          _same_dir("", "/games/x") is None)
+
+
+def check_asi_staleness():
+    """A game keeps the in-game plugin it was set up with, for ever.
+
+    Updating the Decky plugin copies a new ASI into ``bin/`` and nothing else:
+    every game still holds the build it was set up with, which attaches,
+    heartbeats and answers exactly like a current one -- it simply has nothing
+    to say about fields added since. That is indistinguishable from a feature
+    that was never built, which is precisely how it was reported.
+    """
+    import tempfile
+    from optiscaler import live
+
+    print("\nAn out-of-date in-game plugin")
+    root = Path(tempfile.mkdtemp(prefix="optiscaler-asi-"))
+    try:
+        target = root / "game"
+        (target / live.PLUGIN_SUBDIR).mkdir(parents=True)
+        shipped = root / "bin" / live.ASI_NAME
+        shipped.parent.mkdir()
+        shipped.write_bytes(b"MZ" + b"new" * 40)
+
+        check("nothing to compare against is unknown, not out of date",
+              live.asi_current(str(target), None) is None)
+        check("and neither is a game that has no plugin at all",
+              live.asi_current(str(target), str(shipped)) is None)
+
+        installed = live.asi_path(str(target))
+        installed.write_bytes(b"MZ" + b"old" * 40)
+        check("a same-sized older build is still caught",
+              live.asi_current(str(target), str(shipped)) is False)
+        installed.write_bytes(b"MZ" + b"old" * 10)
+        check("so is one of a different size",
+              live.asi_current(str(target), str(shipped)) is False)
+        installed.write_bytes(shipped.read_bytes())
+        check("the shipped build compares equal",
+              live.asi_current(str(target), str(shipped)) is True)
+
+        # The shipped bytes are cached against the source file's stat, so a
+        # rebuilt ASI has to invalidate it -- otherwise every game reads as
+        # current for the rest of the session.
+        import os
+        shipped.write_bytes(b"MZ" + b"newer" * 40)
+        os.utime(shipped, ns=(0, 0))
+        check("a rebuilt plugin is noticed rather than served from the cache",
+              live.asi_current(str(target), str(shipped)) is False)
+
+        report = live.status(str(target), str(shipped))
+        check("and the status report carries the answer",
+              report["asi_current"] is False, report["asi_current"])
+        check("a report asked without a source says nothing either way",
+              live.status(str(target))["asi_current"] is None)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def check_asi_reporting():
     """The in-game plugin has to report what the panel needs to explain itself.
 
@@ -589,6 +708,81 @@ def check_asi_reporting():
           '"fgflags %p\\n"' in source)
     check("the status file carries the configured ffx fg index",
           '"fg_index %d\\n"' in source)
+    # The FSR version list is the only place the exact version is written down;
+    # the backend id says "fsr31" for every FSR from 2.3.4 to 4.1.1.
+    check("the status file carries the ffx upscaler version list",
+          '"ffx_upscaler_versions %s\\n"' in source)
+    check("the status file carries the configured ffx upscaler index",
+          '"ffx_upscaler_index %d\\n"' in source)
+    # Two frame rates need two measurements. Both are read-only, and both are
+    # sampled at the worker's own rate rather than once a heartbeat, because
+    # each slot holds one frame's interval and not an average.
+    check("the status file carries both frame intervals",
+          '"rendered_ms %.3f\\n"' in source and '"presented_ms %.3f\\n"' in source)
+    check("the frame intervals are sampled every tick, not every heartbeat",
+          source.count("SampleFrameTimes();") >= 2, source.count("SampleFrameTimes();"))
+    check("the frame intervals are only ever read",
+          "const double* rendered" in source and "*g_frameTimes.rendered =" not in source)
+    check("an implausible interval is dropped rather than averaged in",
+          "if (!PlausibleInterval(value)) continue;" in source
+          and "return ms > 0.05 && ms < 2000.0;" in source)
+    # The declared offset produced nothing at all on a real Deck while the
+    # counter eight bytes in front of the same table was correct, so there has
+    # to be a way back from a mirror whose arithmetic is wrong.
+    check("a pair that never reports is searched for instead",
+          "if (g_renderedMs <= 0.0 && g_presentedMs <= 0.0) SearchFrameTimes();" in source)
+    check("and the search identifies an interval rather than accepting any double",
+          "static bool FrameTimeAnchor(double now, double before, double expected)" in source
+          and "ratio > 0.65 && ratio < 1.35" in source)
+    check("two separate intervals are a refusal, not a choice",
+          "refusing to guess" in source)
+    check("the search is read-only and gives up rather than running for ever",
+          "g_ftDone = true;" in source and "FT_MAX_ROUNDS" in source)
+
+
+def check_live_frame_rates():
+    """Reporting the rendered frame rate separately from the presented one.
+
+    With frame generation on there are two frame rates and only one of them is
+    the one the frame counter counts. OptiScaler measures both intervals for its
+    own overlay and the plugin reads both.
+
+    Which slot holds which was assumed once, from reading the two hooks that
+    write them, and it was wrong: the panel showed the rendered rate labelled as
+    the total and never showed a base at all, because the ratio came out above 1
+    and was refused. Both numbers look like frame rates either way round, which
+    is why nothing is assumed now -- interpolation can only add frames, so the
+    shorter interval is the presented one whichever slot it came from, and which
+    rate the counter counts is settled by which interval agrees with it.
+    """
+    from optiscaler.live import _frame_rates
+
+    print("\nLive frame rates")
+    # Two frames out for every one in, and the counter is on the presented side:
+    # 60 fps presented, 30 rendered.
+    check("a counter on the presented side gives the base below it",
+          _frame_rates(60.0, 16.6, 33.2) == (30.0, 60.0))
+    # The same session with the slots the other way round must give the same
+    # answer -- that is the whole point.
+    check("and the same answer with the two slots swapped",
+          _frame_rates(60.0, 33.2, 16.6) == (30.0, 60.0))
+    # The counter on the rendered side: 30 counted, so 60 reach the screen.
+    check("a counter on the rendered side gives the total above it",
+          _frame_rates(30.0, 16.6, 33.2) == (30.0, 60.0))
+    check("and again with the slots swapped",
+          _frame_rates(30.0, 33.2, 16.6) == (30.0, 60.0))
+    check("tripled frames third the base", _frame_rates(90.0, 11.0, 33.0) == (30.0, 90.0))
+    check("with nothing generated the two rates agree",
+          _frame_rates(60.0, 16.6, 16.6) == (60.0, 60.0))
+    # A counter that agrees with neither interval is not counting either of
+    # them, and averaging over that would produce two plausible wrong numbers.
+    check("a counter matching neither interval is refused",
+          _frame_rates(200.0, 16.6, 33.2) == (None, None))
+    check("an unmeasured interval means no answer",
+          _frame_rates(60.0, None, 16.6) == (None, None)
+          and _frame_rates(60.0, 16.6, None) == (None, None))
+    check("no frame rate to scale means no answer",
+          _frame_rates(None, 16.6, 33.2) == (None, None))
 
 
 def check_remembered_choices():
@@ -672,6 +866,18 @@ def check_version_pin():
     check("the shipped archive matches the pinned version",
           constants.OPTISCALER_VERSION in constants.PAYLOAD_ARCHIVE,
           constants.PAYLOAD_ARCHIVE)
+
+    # And the archive is the one the hash names. This pins more than OptiScaler
+    # itself: the FidelityFX libraries inside it are what decide the FSR
+    # versions a game reports, and the panel names the newest one by reading
+    # that library rather than by trusting the reference ini, which documents
+    # whichever build *it* shipped with (4.0.2, where this carries 4.1.1).
+    archive = ROOT / "bin" / constants.PAYLOAD_ARCHIVE
+    check("the shipped archive is present", archive.is_file(), str(archive))
+    if archive.is_file():
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        check("the shipped archive is the one the hash pins",
+              digest == constants.PAYLOAD_SHA256, digest)
 
     # The header must be the one the mirror was generated from.
     config_h = (ROOT / "asi" / "optiscaler_ref" / "Config.h").read_text(encoding="utf-8")
@@ -922,6 +1128,14 @@ def check_asi_state_layout():
         ("uint64_t NVNGX_ApplicationId = 1337;", "the value that confirms that table"),
         ("std::vector<const char*> ffxFGVersionNames {};", "the FFX FG version names"),
         ("std::vector<uint64_t> ffxFGVersionIds {};", "the ids declared beside them"),
+        ("std::vector<const char*> ffxUpscalerVersionNames {};",
+         "the FSR versions, the only place the exact one is written down"),
+        ("std::vector<uint64_t> ffxUpscalerVersionIds {};",
+         "the ids declared beside those"),
+        ("std::deque<double> upscaleTimes;", "the first deque the tail steps over"),
+        ("std::deque<double> frameTimes;", "the second"),
+        ("double lastFGFrameTime = 0.0;", "the frame-generation hook's interval"),
+        ("double presentFrameTime = 0.0;", "the wrapped swapchain's interval"),
     ):
         check(f"State still declares {why}", text in state_h, text)
 
@@ -936,6 +1150,10 @@ def check_asi_state_layout():
         ("FG_BLOCK_OFF(SCchanged) == -20", "the flag beside it"),
         ("FG_BLOCK_OFF(NVNGX_ApplicationId) == 72", "the value that confirms the table"),
         ("offsetof(state_tail, ffxFGVersionNames) == 256", "where the version list sits"),
+        ("offsetof(state_tail, ffxUpscalerVersionNames) == 208",
+         "where the FSR version list sits"),
+        ("offsetof(state_tail, lastFGFrameTime) == 400", "where the frame intervals sit"),
+        ("sizeof(msvc_deque_raw) == 32", "the width of the deques the tail steps over"),
         ("sizeof(hudless_entry) == 24", "the stride the table's elements are checked at"),
     ) :
         check(f"live.cpp pins {why}", f"static_assert({text}," in source, text)
@@ -955,9 +1173,55 @@ def check_asi_state_layout():
     check("the overlay's Change FG button is still config, then both flags",
           re.search(r'ImGui::Button\("Change FG"\).*?config->FfxFGIndex = _ffxFGIndex;\s*'
                     r'state\.FGchanged = true;\s*state\.SCchanged = true;', menu, re.S) is not None)
+    # And the same for the FFX upscaler, whose button is the ordinary upscaler
+    # switch pointed at the backend that is already running: the index into
+    # Config, then a rebuild. This plugin leaves newBackend empty instead of
+    # naming the current backend, because ChangeFeature reads that as "use
+    # whatever Config holds for this API" -- which is the same rebuild by a
+    # route that cannot pick the wrong graphics API.
+    check("the overlay's FFX Change Upscaler is still config, then a rebuild",
+          re.search(r'ImGui::Button\("Change Upscaler"\).*?'
+                    r'config->FfxUpscalerIndex = _ffxUpscalerIndex;\s*'
+                    r'state\.newBackend = currentBackend;\s*'
+                    r'MARK_ALL_BACKENDS_CHANGED\(\);', menu, re.S) is not None)
+    # What lets this plugin leave newBackend alone: every provider reads an
+    # empty one as "use Config", and clears it again after a rebuild, so an
+    # empty one is also the normal resting state.
+    for provider in ("Dx12", "Dx11", "Vk"):
+        text = (ROOT / "asi" / "optiscaler_ref" / f"FeatureProvider_{provider}.cpp") \
+            .read_text(encoding="utf-8")
+        check(f"an empty newBackend still means \u201cuse Config\u201d on {provider}",
+              'State::Instance().newBackend == ""' in text)
+        check(f"and {provider} still clears it once the rebuild succeeded",
+              'State::Instance().newBackend = "";' in text)
+
     config_cpp = (ROOT / "asi" / "optiscaler_ref" / "Config.cpp").read_text(encoding="utf-8")
     check("FfxFGIndex is still the ini's [FSR] FGIndex",
           'FfxFGIndex.set_from_config(readInt("FSR", "FGIndex"))' in config_cpp)
+    check("FfxUpscalerIndex is still the ini's [FSR] UpscalerIndex",
+          'FfxUpscalerIndex.set_from_config(readInt("FSR", "UpscalerIndex"))' in config_cpp)
+
+    # There are two intervals and one counter, and which hook writes which is
+    # deliberately *not* relied on: reading these two files says presentFrameTime
+    # is the presented side, and on a real Deck running FSR-FG the numbers said
+    # the opposite. What is checked here is only that both writers still exist
+    # and that the counter still moves with one of them -- `live._frame_rates`
+    # works out which from the values themselves.
+    swapchain = (ROOT / "asi" / "optiscaler_ref" / "wrapped_swapchain.cpp") \
+        .read_text(encoding="utf-8")
+    check("presentFrameTime is still timed in the wrapped swapchain",
+          "State::Instance().presentFrameTime = ftDelta;" in swapchain)
+    check("and the frame counter still ticks beside it",
+          "State::Instance().frameCount = _frameCounter;" in swapchain)
+    fg_hooks = (ROOT / "asi" / "optiscaler_ref" / "FG_Hooks.cpp").read_text(encoding="utf-8")
+    check("lastFGFrameTime is still timed in the frame-generation hook",
+          "State::Instance().lastFGFrameTime = ftDelta;" in fg_hooks
+          and "State::Instance().FGPresentIsCalled = true;" in fg_hooks)
+    # OptiScaler's own overlay derives the pair the same way round this now
+    # does: one measured rate, and the other from a ratio.
+    menu = (ROOT / "asi" / "optiscaler_ref" / "menu_common.cpp").read_text(encoding="utf-8")
+    check("the overlay still shows one rate divided into two",
+          "frameRate / (float) (fg->GetInterpolatedFrameCount() + 1)" in menu)
 
 
 def check_auto_plan():
@@ -1158,8 +1422,12 @@ def check_option_validation():
     FidelityFX runtime reports its own list, and the plugin lists what the game
     reports. Validating a pick against the ini's two entries therefore refused
     every generator past the second one that a game actually offered.
+
+    FSR.UpscalerIndex is the same snapshot one step over -- the ini names the
+    three FSR versions the reference build shipped, and the game in the
+    screenshot this was written from reports 4.1.1, which is in none of them.
     """
-    from optiscaler.live import FFX_FG_MAX
+    from optiscaler.live import FFX_FG_MAX, FFX_UPSCALER_MAX
     from optiscaler.schema import SCHEMA, valid
 
     print("\nOption validation")
@@ -1173,6 +1441,16 @@ def check_option_validation():
     check("an index that is not one is still refused",
           not valid(fg_index, "-1") and not valid(fg_index, "fsr"))
     check("auto still means auto", valid(fg_index, "auto"))
+
+    ups_index = SCHEMA[("FSR", "UpscalerIndex")]
+    check("the reference ini only documents three FSR versions",
+          ups_index["options"] == ["0", "1", "2"], ups_index["options"])
+    check("but a fourth the game reports is accepted", valid(ups_index, "3"))
+    check("up to the same ceiling",
+          valid(ups_index, str(FFX_UPSCALER_MAX - 1))
+          and not valid(ups_index, str(FFX_UPSCALER_MAX)))
+    check("an index that is not one is still refused",
+          not valid(ups_index, "-1") and not valid(ups_index, "fsr4"))
 
     # Everything else keeps the closed-set treatment: these lists are the
     # backends OptiScaler has, not a snapshot of one runtime's answer.
@@ -1206,6 +1484,9 @@ def main():
     check_live_diagnostics()
     check_remembered_choices()
     check_asi_reporting()
+    check_asi_staleness()
+    check_reported_folder()
+    check_live_frame_rates()
     check_wiki_tls()
     check_version_pin()
     check_optipatcher()

@@ -84,7 +84,29 @@ export const ButtonItem = box("ButtonItem");
 export const ToggleField = box("ToggleField");
 export const SliderField = box("SliderField");
 export const TextField = box("TextField");
-export const DropdownItem = box("DropdownItem");
+/**
+ * Steam's DropdownItem, including the part `ValueDropdown` exists to work
+ * around: it builds the label for the selected option once and then *keeps* it.
+ * A value matching none of the options leaves the old label on screen, and so
+ * does an option list that changes underneath a value that does not.
+ *
+ * Modelled here at its strictest: what the control displays is decided when it
+ * mounts and never recomputed, so the only way to change it is to remount —
+ * which is exactly the invariant `ValueDropdown`'s `key` has to keep. Tests
+ * read `data-shown` for what the user would see and `data-selected` for the
+ * prop, and the two disagreeing is the bug this models.
+ */
+const DropdownBox = box("DropdownItem");
+
+export function DropdownItem(props: any) {
+  const displayed = React.useRef<string | undefined>(undefined);
+  if (displayed.current === undefined) {
+    const match = (props.rgOptions ?? []).find((o: any) => o.data === props.selectedOption);
+    displayed.current = match ? String(match.label) : "";
+  }
+  return <DropdownBox {...props} data-shown={displayed.current} />;
+}
+
 export const Field = box("Field");
 export const Focusable = box("Focusable");
 export const DialogButton = box("DialogButton");

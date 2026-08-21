@@ -7,6 +7,79 @@ All notable changes to this project are documented here. The format follows
 Each release ships `Decky OptiScaler.zip`, installable through Decky Loader's
 *Install from URL* (Developer mode).
 
+## [0.0.4] - 2026-08-21
+
+### Added
+
+- **The exact FSR version, where the backend id could only say "FSR 3.X/4".**
+  One OptiScaler backend id covers every FSR from 2.3.4 to 4.1.1, which is why
+  it is named that way — but the running game knows which one it built, and its
+  overlay prints it. The Quick Access panel's upscaler tile now says the same
+  thing the overlay's title bar does.
+- **A second upscaler control, for which version of FSR to run.** The overlay
+  asks two questions under "FFX Settings" and this now asks both: which upscaler
+  (FSR / XeSS / DLSS) and, under it, which FSR. The versions offered are the
+  ones the running game's FidelityFX runtime reports rather than the three the
+  shipped INI documents, and picking one applies without a restart wherever an
+  upscaler switch would — OptiScaler rebuilds the feature and re-reads the
+  index, which is exactly what its own "Change Upscaler" button does.
+- **Two frame rates while frame generation is running.** Frame generation gives
+  a game two of them and the old tile only ever showed one. Both now appear
+  whenever frame generation is on: what the game renders, and what reaches the
+  screen. OptiScaler times both sides for its own overlay and the in-game plugin
+  reads both — but which measurement is which is worked out from the numbers
+  rather than assumed, because interpolation can only ever add frames and the
+  frame counter does not always count the frames that reach the screen. A
+  reading that agrees with neither is refused instead of guessed at. The setting
+  being on is not the same as the generator running — OptiScaler reports FSR-FG
+  as off until the game selects frame generation in its own options — so when
+  the two rates come out equal the frame-generation tile says "idle" rather than
+  leaving two identical numbers to look like a fault.
+- **A live-control readout that says why a number is missing.** The manual setup
+  page prints both raw frame intervals, the raw frame count and which build of
+  the in-game plugin produced them. A missing rate has several causes with
+  different fixes, and they are indistinguishable from the rate alone.
+- **A warning when a game's in-game plugin is out of date.** Updating this
+  plugin does not update any game — the ASI is copied into the game's folder at
+  set-up time and stays at that version — so a feature added here can be missing
+  from a game for reasons that have nothing to do with the feature. The Quick
+  Access panel marks it, and the live-control page offers the reinstall once the
+  game is closed.
+
+### Fixed
+
+- **A dropdown could keep a name the list no longer uses.** Both FidelityFX
+  version lists start as the shipped INI's snapshot and are replaced the moment
+  the running game reports its own — under an index that does not move. Steam's
+  dropdown builds its label once and keeps it, and the control was rebuilt only
+  when its *value* changed, so the first name stayed on screen. It showed as the
+  full page and the Quick Access panel disagreeing about the same install: the
+  panel builds its controls only after the config read resolves, by which time
+  the first live poll has landed, so it got "FSR 4.1.1" and the page was stuck
+  on "FSR 4.0.2". Controls are now rebuilt when what they display changes, not
+  only when the value does.
+- **Asking for FSR 4 could silently give you FSR 3.** OptiScaler only reaches
+  FSR 4 when the upgrade path is on, an RDNA 4 GPU is present, or the int8
+  override is set — none of which is true by default on a Steam Deck — so
+  choosing an FSR 4 version on its own fell back to FSR 3 with nothing said
+  about it. Choosing one now switches on the path that makes it reachable.
+  Choosing an older version does not switch it back off: that flag makes FSR 4
+  available rather than requested.
+- **A game on the SD card reported itself as "writing to a different folder".**
+  Proton gives each library its own drive letter, so the in-game plugin reports
+  `S:\steamapps\common\…` where the plugin is managing
+  `/run/media/…/steamapps/common/…` — two paths with no shared tail. A perfectly
+  healthy install was told to reinstall its live control. The drive letter is
+  now dropped and what is left compared folder by folder.
+- **The newest FSR version was named after the wrong build.** With no game
+  running there is nothing to ask, and the fallback came from the reference INI,
+  which documents whatever FidelityFX the OptiScaler release *it* shipped with
+  carried — "0 = FSR 4.0.2". The library bundled here is 4.1.1. The version is
+  now read from the FidelityFX library sitting next to the game, and the shipped
+  archive is checked against its pinned hash so this cannot drift again.
+
+[0.0.4]: https://github.com/danielcamilo1/decky-optiscaler/releases/tag/v0.0.4
+
 ## [0.0.3] - 2026-08-20
 
 ### Fixed

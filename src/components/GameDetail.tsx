@@ -378,6 +378,7 @@ export function GameDetail({
                   disabled={config.loading}
                   gpu={detail.gpu}
                   live={liveStatus}
+                  ffx={detail.install.fsr4?.ffx}
                   plan={plan}
                   auto={auto}
                   onAutoChange={(enabled) => void changeAuto(enabled)}

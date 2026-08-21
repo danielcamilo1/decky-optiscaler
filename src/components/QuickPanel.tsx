@@ -214,6 +214,7 @@ function NowPlayingTab({
               values={config.values}
               gpu={detail.gpu}
               live={live}
+              ffx={detail.install.fsr4?.ffx}
               targetDir={detail.install.path}
               plan={plan}
               auto={auto}
@@ -277,6 +278,10 @@ function InstallPill({
 function LivePill({ live }: Readonly<{ live: LiveStatus | null }>) {
   if (!live) return null;
   if (live.attached) {
+    // An in-game plugin older than the one this build ships attaches and
+    // answers normally, so the only sign of it is what it leaves out. Say so
+    // here; the Setup tab's Logs page explains it and offers the reinstall.
+    if (live.asi_current === false) return <Pill color="#5a4a20">live · outdated</Pill>;
     return <Pill color="#2f6b3f">live{live.can_switch_upscaler ? "" : " · fg only"}</Pill>;
   }
   if (!live.asi_installed) return <Pill color="#5a4a20">live control off</Pill>;
