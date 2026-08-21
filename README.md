@@ -47,6 +47,15 @@ OptiScaler v0.9.4 is bundled, so installing works offline and every game gets th
   for the games that need it. An **OptiScaler Settings** entry is added to the game's context
   menu in the Steam library.
 
+## Screenshots
+
+| | |
+|---|---|
+| <img src="assets/library-context-menu.jpg" alt="The Steam library context menu with an OptiScaler Settings entry" /> | <img src="assets/setup-checklist.jpg" alt="The setup checklist for a game matched on the OptiScaler wiki" /> |
+| **OptiScaler Settings** in the game's library context menu. | Setup is a checklist, and it says what it will write before it writes it. |
+| <img src="assets/quick-access-frame-generation.jpg" alt="The Quick Access panel showing the frame generation toggle, the in-game state and the frame rate" /> | <img src="assets/quick-access-upscaler.jpg" alt="The Quick Access panel showing the upscaler override and the FG method the wiki recommends" /> |
+| Frame generation, the FidelityFX FG version and the live frame rate, over the running game. | The upscaler applies live too; what doesn't is under **Needs a restart**, with the wiki's recommendation under it. |
+
 ## Installing
 
 Grab `Decky-OptiScaler-v*.zip` from the
