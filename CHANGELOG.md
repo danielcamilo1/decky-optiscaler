@@ -7,61 +7,48 @@ All notable changes to this project are documented here. The format follows
 Each release ships `Decky OptiScaler.zip`, installable through Decky Loader's
 *Install from URL* (Developer mode).
 
-## [0.0.4.6-testing] - 2026-08-23
+## [0.0.5] - 2026-08-23
 
-### Fixed
+Released after testing across the `0.0.4.x-testing` prereleases on the `testing`
+branch. Bundled OptiScaler release is unchanged at 0.9.4.
 
-- **"Reading this game's entry…" could stay on screen for ever, and the panel
-  flickered.** Three separate faults behind one symptom:
-  - A detail page the wiki would not serve was re-fetched on *every* question
-    asked about that game, and each attempt is two URLs deep — so a refresh was
-    permanently in flight. The UI reads "a refresh is running" as "the answer
-    may still change", so it never stopped waiting for one that was never going
-    to arrive. A page that fails is now left alone for five minutes.
-  - A **pinned** wiki entry answered with metadata it invented, carrying no
-    revision at all. The watch compares revisions, so against a missing one
-    every check read as "something changed" — the plan reloaded every two
-    seconds, for ever. A pinned entry now carries the real list metadata, with
-    "pinned by hand" recorded alongside it rather than instead of it.
-  - Each of those reloads raised the loading flag, which swapped the whole panel
-    back to "Checking the OptiScaler wiki…" and back again. Only the first
-    answer for a game is a wait worth showing now; a refresh behind an answer
-    already on screen replaces it in place.
-- **Reloading twice for the same revision is now refused outright**, so a
-  revision the watch can never match costs one reload rather than one every two
-  seconds — the flicker is structurally impossible rather than merely fixed.
-- **The "still reading" notice and the install button follow the same bounded
-  condition.** A page that is pending but no longer being fetched is one the
-  wiki would not serve: the notice stops saying otherwise and the install goes
-  ahead with the compatibility-list answer, which is the honest outcome.
+### Added
 
-## [0.0.4.5-testing] - 2026-08-23
-
-### Fixed
-
-- **A game whose wiki page had never been downloaded could hang the Setup tab
-  for ever.** 0.0.4.4-testing stopped waiting on *stale* detail pages but not on
-  missing ones, and a page that had never been cached was still fetched in front
-  of the answer — two URLs deep, the second attempt only starting once the first
-  had timed out. On a Deck whose route to the wiki stalls rather than refusing,
-  that is a lookup that never returns, so the tab sat on "Checking the OptiScaler
-  wiki…" indefinitely — for exactly the games whose page had not happened to be
-  cached already, while a game whose page was cached answered fine.
-  The compatibility-list row now answers on its own and the page arrives behind
-  it, the same way the list does.
-- **When the page lands, the answer is rebuilt.** A page arriving moves the same
-  revision a changed list does, so the watch that was already there notices it.
-  Re-fetching an unchanged page moves nothing.
-- **The install button waits for a page that is still arriving**, and says so,
-  because the page is what names the filename to install as — acting in that
-  window would install under the default name when the entry says otherwise. It
-  waits only while the watch is still running, never once it has given up.
-- **"Checking the OptiScaler wiki…" now gives up after 8 seconds.** Every answer
-  is meant to come from cache and arrive in milliseconds, so anything near that
-  is a fault; the cause above is fixed, and this is so the symptom cannot come
-  back whatever the cause. The answer is still applied if it does arrive.
-
-## [0.0.4.4-testing] - 2026-08-23
+- **Removing OptiScaler asks what to do with the Steam launch options.**
+  Installing it is two changes, not one — a folder full of files and a
+  `WINEDLLOVERRIDES` entry in Steam — and removing it only ever undid the first.
+  A game that had been "removed" kept an override for a DLL that was no longer
+  there, and on the one path that did clear the field it cleared whatever else
+  the game had in it too. Removing now offers: put back exactly what was there
+  before the install, take only the OptiScaler override out and keep the rest,
+  or change nothing. The answer can be remembered.
+- **The launch options are backed up the way files are.** Installing records
+  what Steam was passing beforehand into a plain text file next to the manifest
+  and the backup folder, and removing takes it out again. Written once per
+  install, so a reinstall — or the launch-options step being switched off and on
+  — cannot overwrite the original with the override this plugin itself wrote.
+  Three states stay distinct, and each means something different: recorded and
+  empty (the game had none, so the field can be cleared outright), recorded and
+  not empty (restore it verbatim), and not recorded at all (only the override
+  this plugin recognises comes out; the rest is not ours to guess about).
+- **A Settings tab on the main page.** Both launch-options prompts offer
+  "Remember my choice", and an answer that can only be given and never taken
+  back is a trap: every stored answer is listed by name with what it will do and
+  a row that puts the question back, alongside the switch that stops answers
+  being kept at all — which also drops the ones already stored, so turning it on
+  again does not silently restore decisions just disowned. The same tab reports
+  the compatibility list: how many games are on it, how old it is and where it
+  came from, and when a refresh is failing, the error, the address and which
+  certificates were tried, with a button to fetch it again.
+- **The plugin ships a copy of the compatibility list.** A Deck that has never
+  reached the wiki matches games against 685 bundled entries instead of
+  reporting "no wiki entry matched this game" for every game it owns — which was
+  indistinguishable from the wiki being broken. It is only a floor: the first
+  successful fetch replaces it. `scripts/fetch_compat_seed.py` refreshes it
+  before a release.
+- **The manual setup page states what Steam is passing and what was recorded**
+  before the install. "The plugin cannot read them" and "they are empty" look
+  identical from the outside.
 
 ### Changed
 
@@ -70,139 +57,45 @@ Each release ships `Decky OptiScaler.zip`, installable through Decky Loader's
   does not route, and the wiki used to sit in front of every question asked of
   it: a cache older than a day was thrown away rather than used, so each of
   those cost a full timeout before anything appeared. Whatever is on disk is now
-  returned at once — stale or not — and the refresh runs behind it. Detail pages
-  follow the same rule; a stale one used to mean two HTTP attempts in front of
-  the answer, and the second only starts after the first has timed out.
+  returned at once — stale or not — and the refresh runs behind it, single-flight
+  so opening three games in a row is one download rather than three. Detail
+  pages follow the same rule.
 - **A refresh that brings something new updates what is on screen.** The list
   carries a content fingerprint, so "something arrived" is exactly "the
-  fingerprint changed" — the game's plan is rebuilt when it does, and a refresh
-  that brought back the same list redraws nothing. The watch is bounded and
-  only runs while a refresh is actually in flight.
+  fingerprint changed"; a refresh that brought back the same list redraws
+  nothing.
 - **A failed refresh cannot make things worse.** Nothing is written unless the
   download both succeeded and parsed, so a working cache is never turned into an
-  empty one. The failure is remembered and shown next to the list it could not
-  replace, rather than replacing the list with an error.
-- Refreshes are single-flight: opening three games in a row starts one download,
-  not three. One is also started when the plugin loads, so the list is current
-  before anything asks for it.
-
-### Added
-
-- **The plugin ships a copy of the compatibility list.** A Deck that has never
-  reached the wiki now matches games against 685 entries instead of reporting
-  "no wiki entry matched this game" for every game it owns — which was
-  indistinguishable from the wiki being broken. It is only a floor: the first
-  successful fetch replaces it. `scripts/fetch_compat_seed.py` refreshes it
-  before a release.
-- **Settings says how old the list is and where it came from** — the bundled
-  copy, or a download and when — and, when a refresh is failing behind a list
-  that still works, says that without calling the list broken.
-
-## [0.0.4.3-testing] - 2026-08-23
+  empty one. The failure is shown next to the list it could not replace, rather
+  than replacing the list with an error.
 
 ### Fixed
 
+- **Removing OptiScaler no longer leaves its launch options behind.** See above.
+- **The launch options are read from three sources, not one.**
+  `SteamClient.Apps.GetAppLaunchOptions` is undocumented and absent from some
+  client builds entirely, and everything here depended on it. Where it is
+  missing, every launch-options question answered itself with "cannot tell" and
+  every action taken on that answer became nothing at all. The app details store
+  the library's own Properties dialog uses is tried next, and finally
+  `localconfig.vdf` — Steam's own record on disk, which depends on no
+  undocumented method existing.
 - **A wiki that will not download is no longer reported as "your game is not on
   the list".** The two produced the same empty result and the setup checklist
   printed the same sentence for each, so a network fault presented as every game
-  in the library being unknown to the compatibility list — with nothing anywhere
-  saying otherwise. The checklist now separates them, prints the failure in the
-  words of whatever actually failed, and offers a **Try again** button. There
-  was previously no way to retry from the interface at all: the backend has had
-  a refresh call since the first release and nothing ever called it.
-- **A stalled connection is retried over IPv4.** The classic "works on one
-  network, not another" fault is a router that advertises IPv6 it cannot route:
-  the address resolves, nothing connects, and Python's urllib has no Happy
-  Eyeballs to fall back the way a browser does — so it waits out the timeout
-  every time while everything else on the Deck works. A server that *answered*
-  is not retried, because asking again says the same thing.
+  in the library being unknown to the wiki. They are now separated, the failure
+  is printed in the words of whatever actually failed, and there is a **Try
+  again** button — there was previously no way to retry from the interface at
+  all.
+- **A stalled connection is retried over IPv4.** A router advertising IPv6 it
+  cannot route is the classic works-on-one-network fault, and Python's urllib
+  has no Happy Eyeballs to fall back the way a browser does. A server that
+  answered is not retried, because asking again says the same thing.
 - **The last-resort unverified TLS context no longer builds its own trust
   store.** It was created with `create_default_context`, which reads the system
   certificates — so on the one machine where that is what is broken, the
   fallback meant to survive it was the single construction that could throw the
   whole chain away.
-- Requests now time out in 12 seconds rather than 20, which two attempts still
-  fit inside.
-
-### Added
-
-- **A Compatibility list section in Settings.** How many games are on the list,
-  when it was last downloaded, and — when it will not download — the error, the
-  address, and which certificates were tried, with a button to fetch it again.
-  Enough to tell a broken network from a broken plugin without opening a log.
-
-## [0.0.4.2-testing] - 2026-08-23
-
-Fixes 0.0.4.1-testing, which did not work on every Steam client.
-
-### Fixed
-
-- **The launch options are read from Steam's own config when the client will
-  not report them.** `SteamClient.Apps.GetAppLaunchOptions` is undocumented and
-  simply absent from some client builds, and 0.0.4.1-testing leaned on it alone.
-  Where it is missing, every launch-options question answered itself with
-  "cannot tell" and every action taken on that answer became nothing at all:
-  the install recorded nothing to put back, and removing OptiScaler left its own
-  override in place because it could not see it. That is also why the original
-  bug existed — the 0.0.4 check that decided whether to clear the field needed
-  the same read. Three sources are now tried in order: the client getter, the
-  app details store the library's own Properties dialog uses, and finally
-  `localconfig.vdf`, which is Steam's own record on disk and depends on no
-  undocumented method existing.
-- **Removing can always act, even when nothing can be read.** Offering no
-  choices was the honest answer to knowing nothing, and it is how the dialog
-  became inert. Clearing the field is now offered even then — last, never as
-  the default, and saying plainly that it empties the field rather than pruning
-  it. Doing nothing has to be a choice the user makes, not one made for them by
-  a missing API.
-- **What was written is shown, rather than read straight back.** Steam flushes
-  its config on its own schedule, so a read landing in that window reported the
-  old value and the row looked as though the change had not taken.
-- **Removing says what it did to the launch options**, instead of changing them
-  silently or failing silently.
-
-### Added
-
-- **The manual setup page states what Steam is passing and what was recorded.**
-  "The plugin cannot read them" and "they are empty" look identical from the
-  outside, and telling the two apart took a source-code read the last time it
-  mattered.
-
-## [0.0.4.1-testing] - 2026-08-23
-
-A testing build. Same OptiScaler release (0.9.4) as 0.0.4.
-
-### Added
-
-- **Removing OptiScaler now asks about the Steam launch options.** Installing it is two
-  changes, not one — a folder full of files and a `WINEDLLOVERRIDES` entry in Steam — and
-  removing it only ever undid the first. A game that had been "removed" kept an override
-  for a DLL that was no longer there, and on the one path that did clear the field it
-  cleared whatever else the game had in it too. The removal dialog now offers what to do:
-  put back exactly what was there before the install, take only the OptiScaler override
-  out and leave the rest, or change nothing.
-- **The launch options are backed up the way files are.** Installing records what Steam was
-  passing beforehand into a plain text file next to the manifest and the backup folder, and
-  removing takes it out again with everything else. It is written once per install, so a
-  reinstall — or the launch-options step being switched off and on — cannot overwrite the
-  original with the override this plugin itself wrote. Only Steam can report launch options
-  and only the frontend can ask it, which is why the value is handed to the backend rather
-  than read there.
-- **"Put back what was there" is only offered when there was something.** The record tells
-  three states apart, and each means something different: recorded and empty (the game had
-  no launch options, so the field can be cleared outright), recorded and not empty (there is
-  something to restore, verbatim), and not recorded at all — an older install, or a Steam
-  client build that will not report them — in which case only the override this plugin
-  recognises is removed and anything else is left alone. A choice that would write back what
-  Steam already has, or that duplicates another choice's outcome, is not shown.
-- **A Settings tab on the main page.** Both launch-options prompts offer "Remember my
-  choice", and an answer that can only be given and never taken back is a trap. Whatever is
-  remembered is now listed by name with what it will do, each with a way to put the question
-  back, alongside the switch that stops answers being kept at all — turning it off also drops
-  the ones already stored, so turning it on again does not silently restore decisions the user
-  just said they wanted to be asked about. It is deliberately not in the Quick Access panel:
-  that panel drives the game that is running, and this changes how the plugin behaves for
-  every game.
 
 ## [0.0.4] - 2026-08-21
 
