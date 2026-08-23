@@ -83,6 +83,14 @@ export interface Fsr4Source {
   files: string[];
 }
 
+/** The Steam launch options a game had before OptiScaler was installed. */
+export interface LaunchRecord {
+  /** False when nothing was kept — an older install, or Steam would not say. */
+  recorded: boolean;
+  /** Recorded and empty means the game genuinely had none. */
+  value: string;
+}
+
 export interface InstallInfo {
   path: string;
   installed: boolean;
@@ -98,6 +106,7 @@ export interface InstallInfo {
   extra_proxies: string[];
   backup_dir: string;
   backed_up: string[];
+  launch_record: LaunchRecord;
   fsr4: Fsr4Status;
 }
 

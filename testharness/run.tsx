@@ -34,6 +34,9 @@ const detail = {
     candidates: ["dxgi.dll"], extra_proxies: [],
     backup_dir: "/games/Cyberpunk 2077/bin/x64/decky_optiscaler_backup_files",
     backed_up: ["dxgi.dll", "amd_fidelityfx_upscaler_dx12.dll"],
+    // What Steam was passing before OptiScaler went in, kept so removing it
+    // can put it back rather than clearing a field it never owned.
+    launch_record: { recorded: true, value: "gamemoderun %command%" },
     fsr4: { files: { "amdxcffx64.dll": false, "amdxc64.dll": false }, ready: false,
             required: ["amdxcffx64.dll", "amdxc64.dll"],
             // The version OptiScaler's overlay prints in its FFX Settings box.
@@ -155,8 +158,14 @@ Object.assign(fixtures, {
     ffx_fg_versions: ["4.0.0", "3.1.6"],
   },
   switch_upscaler: { ok: true, sent: true, backend: "xess" },
-  get_pref: { key: "launch_options", value: null },
+  // Answered per key: the Settings tab reads each remembered question in turn,
+  // and a single fixture would make every one of them look answered.
+  get_pref: (key: string, fallback?: unknown) =>
+    key === "remove_launch_options"
+      ? { key, value: "restore" }
+      : { key, value: fallback ?? null },
   set_pref: { ok: true },
+  record_launch_options: { ok: true, recorded: true, value: "gamemoderun %command%" },
   get_live_log: { lines: ["decky_optiscaler_live loaded", "config at 0x1234"] },
   install_live: { ok: true },
   get_fsr4_info: { status: { files: {}, ready: false, required: [] }, sources: [], gpu: {} },
@@ -678,6 +687,185 @@ async function render(name: string, element: React.ReactElement) {
       findAll(gdMode.host, "[data-tab]").map((n) => n.getAttribute("data-tab"))
         .includes("framegen")}`);
     (globalThis as any).window.localStorage.setItem("decky-optiscaler:advanced", "0");
+  }
+
+  // -- the launch options, and taking them back out -------------------------
+  // Installing OptiScaler writes a WINEDLLOVERRIDES entry into Steam; removing
+  // it used to leave that behind, and when it did clear it, it cleared whatever
+  // else the game had too. Both halves are decided from what was recorded at
+  // install time, so the rules are worth asserting on their own.
+  console.log("\n=== launch options on removal ===");
+  {
+    const lo = await import("../src/launchOptions");
+    const ours = 'WINEDLLOVERRIDES="dxgi=n,b" %command%';
+
+    console.log(`  our own override is recognised: ${
+      lo.hasOverride(ours, "dxgi.dll") && !lo.hasOverride(ours, "winmm.dll")}`);
+    console.log(`  an .asi install needs no override: ${
+      lo.launchOptionFor("OptiScaler.asi") === "%command%"}`);
+    // Someone else's flags are not ours to delete.
+    console.log(`  stripping ours keeps the user's own flags: ${
+      lo.stripOverride('WINEDLLOVERRIDES="dxgi=n,b" mangohud %command% -dx12', "dxgi.dll")
+        === "mangohud %command% -dx12"}`);
+    console.log(`  a bare %command% left over is an empty field: ${
+      lo.stripOverride(ours, "dxgi.dll") === ""}`);
+    console.log(`  another mod's override is left alone: ${
+      lo.stripOverride('WINEDLLOVERRIDES="dxgi=n,b" %command%', "winmm.dll") !== ""}`);
+
+    // Recorded and not empty: putting it back is the exact answer.
+    const withRecord = lo.launchChoices({
+      current: 'WINEDLLOVERRIDES="dxgi=n,b" gamemoderun %command%',
+      recorded: "gamemoderun %command%",
+      filename: "dxgi.dll",
+    });
+    console.log(`  a recorded value is offered first, verbatim: ${
+      withRecord[0].action === "restore" && withRecord[0].value === "gamemoderun %command%"}`);
+    // Restoring and stripping would land on the same string here, and a dialog
+    // offering the same outcome twice is one nobody can answer.
+    console.log(`  an identical second choice is collapsed away: ${
+      withRecord.map((c) => c.action).join(",") === "restore,keep"}`);
+
+    // Recorded and empty: the game genuinely had none, so clearing is honest.
+    const wasEmpty = lo.launchChoices({ current: ours, recorded: "", filename: "dxgi.dll" });
+    console.log(`  "there were none before" offers no restore: ${
+      !wasEmpty.some((c) => c.action === "restore") &&
+      wasEmpty[0].action === "clear" && wasEmpty[0].value === ""}`);
+
+    // No record at all: only what we recognise as ours comes out.
+    const noRecord = lo.launchChoices({
+      current: 'WINEDLLOVERRIDES="dxgi=n,b" %command% -dx12',
+      recorded: null,
+      filename: "dxgi.dll",
+    });
+    console.log(`  with nothing recorded only our override is removed: ${
+      noRecord[0].action === "clear" && noRecord[0].value === "%command% -dx12"}`);
+    console.log(`  leaving them alone is always on offer, and changes nothing: ${
+      noRecord[noRecord.length - 1].action === "keep" &&
+      noRecord[noRecord.length - 1].value === null}`);
+    // Steam will not report launch options on every client build. With nothing
+    // recorded either, nothing here is known to be ours, so nothing is offered.
+    console.log(`  an unreadable field with no record is left alone entirely: ${
+      lo.launchChoices({ current: null, recorded: null, filename: "dxgi.dll" })
+        .map((c) => c.action).join(",") === "keep"}`);
+    console.log(`  but a record still answers it: ${
+      lo.launchChoices({ current: null, recorded: "mangohud %command%", filename: "dxgi.dll" })[0]
+        .action === "restore"}`);
+    // Somebody else's launch options, no override of ours in them.
+    console.log(`  a field with none of our override in it is not touched: ${
+      lo.launchChoices({ current: "mangohud %command%", recorded: null, filename: "dxgi.dll" })
+        .map((c) => c.action).join(",") === "keep"}`);
+    console.log(`  a game with no launch options has nothing to ask: ${
+      !lo.hasLaunchQuestion("1091500", { current: "", recorded: "", filename: "dxgi.dll" })}`);
+    console.log(`  and neither has a game Steam does not own: ${
+      !lo.hasLaunchQuestion(null, { current: ours, recorded: "", filename: "dxgi.dll" })}`);
+    // A remembered answer that no longer applies must not be forced through.
+    console.log(`  a remembered choice that no longer applies falls back: ${
+      lo.resolveChoice(wasEmpty, "restore")?.action === "clear" &&
+      lo.resolveChoice(noRecord, "keep")?.action === "keep"}`);
+    // A game Steam does not own has no choices at all, and asking for one back
+    // must not be a crash on the way to the dialog.
+    console.log(`  nothing to choose between resolves to nothing: ${
+      lo.resolveChoice([], "restore") === undefined}`);
+
+    // -- the dialog itself ---------------------------------------------------
+    const { RemovePrompt } = await import("../src/components/RemovePrompt");
+    const prompt = await render(
+      "RemovePrompt",
+      <RemovePrompt
+        gameName="Cyberpunk 2077"
+        filename="dxgi.dll"
+        backedUp={2}
+        launch={{
+          current: 'WINEDLLOVERRIDES="dxgi=n,b" gamemoderun %command%',
+          recorded: "gamemoderun %command%",
+          filename: "dxgi.dll",
+        }}
+        remembered={null}
+        canRemember
+        onConfirm={() => {}}
+      />
+    );
+    const promptText = prompt.host.textContent!;
+    console.log(`  removing still says what happens to the files: ${
+      promptText.includes("2 files it set aside")}`);
+    console.log(`  and now asks about the launch options: ${
+      findAll(prompt.host, '[data-mock="DropdownItem"][data-label="Steam launch options"]')
+        .length === 1}`);
+    console.log(`  naming what will be put back: ${
+      promptText.includes("gamemoderun %command%")}`);
+    console.log(`  with a way to stop being asked: ${
+      findAll(prompt.host, '[data-mock="ToggleField"][data-label="Remember my choice"]')
+        .length === 1}`);
+    // Picking one has to be visible on the control and change what the dialog
+    // explains, or the dropdown is decoration.
+    await act(async () => {
+      (findAll(prompt.host, '[data-mock="DropdownItem"] [data-opt-value="keep"]')[0] as HTMLElement).click();
+    });
+    await settle();
+    const picked = findAll(
+      prompt.host, '[data-mock="DropdownItem"][data-label="Steam launch options"]')[0];
+    console.log(`  picking one is reflected back: ${
+      picked.getAttribute("data-selected") === "keep" &&
+      prompt.host.textContent!.includes("Steam keeps passing")}`);
+
+    // A remembered answer is shown rather than applied invisibly, and the
+    // question is not asked again.
+    const remembered = await render(
+      "RemovePrompt (remembered)",
+      <RemovePrompt
+        gameName="Cyberpunk 2077"
+        filename="dxgi.dll"
+        backedUp={0}
+        launch={{ current: ours, recorded: "", filename: "dxgi.dll" }}
+        remembered="clear"
+        canRemember
+        onConfirm={() => {}}
+      />
+    );
+    console.log(`  a remembered answer replaces the question: ${
+      findAll(remembered.host, '[data-mock="DropdownItem"]').length === 0 &&
+      remembered.host.textContent!.includes("asked to be remembered")}`);
+    console.log(`  and says where to take it back: ${
+      remembered.host.textContent!.includes("Settings")}`);
+
+    // Nothing to decide: the dialog says so rather than showing an empty control.
+    const nothing = await render(
+      "RemovePrompt (no launch options)",
+      <RemovePrompt gameName="Test" filename="dxgi.dll" backedUp={0} launch={null}
+        remembered={null} canRemember onConfirm={() => {}} />
+    );
+    console.log(`  a game with none says so: ${
+      findAll(nothing.host, '[data-mock="DropdownItem"]').length === 0 &&
+      nothing.host.textContent!.includes("no launch options")}`);
+  }
+
+  // -- the plugin's own settings --------------------------------------------
+  console.log("\n=== global settings tab ===");
+  {
+    // An earlier deep-link test left a request pending; this page is the
+    // library list, not a game.
+    const { takePendingTarget } = await import("../src/navigation");
+    takePendingTarget();
+    const settings = await render("ManagerPage (settings)", <ManagerPage />);
+    const tabIds = findAll(settings.host, "[data-tab]").map((n) => n.getAttribute("data-tab"));
+    console.log(`  the main page has a settings tab: ${tabIds.includes("settings")}`);
+    const settingsBody = findAll(settings.host, '[data-tab="settings"]')[0];
+    const settingsText = settingsBody.textContent!;
+    console.log(`  it carries the switch that stops answers being kept: ${
+      findAll(settingsBody, '[data-mock="ToggleField"][data-label="Remember my choices"]')
+        .length === 1}`);
+    console.log(`  it lists what is remembered, in words: ${
+      settingsText.includes("when OptiScaler is removed") &&
+      settingsText.includes("Put back what was there before the install")}`);
+    console.log(`  each one can be put back to a question: ${
+      findAll(settingsBody, '[data-forget="remove_launch_options"]').length === 1}`);
+    console.log(`  unanswered questions are not listed: ${
+      findAll(settingsBody, '[data-forget="launch_options"]').length === 0}`);
+    console.log(`  and the bundled OptiScaler version is stated: ${
+      settingsText.includes("0.9.4")}`);
+    // It is plugin-wide, so it must not turn up in the sidebar.
+    console.log(`  the quick panel does not carry it: ${
+      !findAll(qp.host, "[data-tab]").some((n) => n.getAttribute("data-tab") === "settings")}`);
   }
 
   console.log("\n=== backend calls made ===");

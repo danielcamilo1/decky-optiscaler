@@ -22,6 +22,7 @@ from .constants import (
     FSR4_SOURCE_HINTS,
     FSR4_SUPPORT_FILES,
     INI_NAME,
+    LAUNCH_RECORD_NAME,
     LOG_NAME,
     MANIFEST_NAME,
     OPTISCALER_VERSION,
@@ -67,6 +68,54 @@ def backup_dir(target_dir):
     return Path(target_dir) / BACKUP_DIR
 
 
+def launch_record_path(target_dir):
+    return Path(target_dir) / LAUNCH_RECORD_NAME
+
+
+def read_launch_record(target_dir):
+    """The Steam launch options this game had before OptiScaler went in.
+
+    ``recorded`` is what separates "there was nothing there" from "nobody
+    looked": an empty string is a real answer and the reason uninstalling can
+    offer to clear the launch options outright, while a missing file means the
+    install predates this record or Steam would not say, and only the override
+    this plugin added can safely be taken back out.
+    """
+    path = launch_record_path(target_dir)
+    if not path.is_file():
+        return {"recorded": False, "value": ""}
+    try:
+        return {"recorded": True, "value": path.read_text(encoding="utf-8")}
+    except OSError:
+        return {"recorded": False, "value": ""}
+
+
+def record_launch_options(target_dir, options, logger=None):
+    """Keep the pre-install launch options, once.
+
+    Write-once for the same reason ``_stash`` keeps the oldest backup: the value
+    worth putting back is the one from before this plugin first touched the
+    game, and a reinstall — or turning the launch-options step off and on again
+    — must not overwrite it with the override we ourselves wrote.
+    """
+    path = launch_record_path(target_dir)
+    if path.exists():
+        return {"recorded": True, "value": read_launch_record(target_dir)["value"],
+                "written": False}
+    path.write_text(options or "", encoding="utf-8")
+    if logger:
+        logger.info("recorded previous launch options for %s", target_dir)
+    return {"recorded": True, "value": options or "", "written": True}
+
+
+def forget_launch_options(target_dir):
+    """Drop the record. Called by uninstall: it belongs to one install."""
+    path = launch_record_path(target_dir)
+    existed = path.is_file()
+    path.unlink(missing_ok=True)
+    return existed
+
+
 def detect(target_dir):
     """Report whether (and how) OptiScaler is installed in a directory."""
     target = Path(target_dir)
@@ -85,10 +134,13 @@ def detect(target_dir):
         "extra_proxies": [],
         "backup_dir": str(backup_dir(target)),
         "backed_up": [],
+        "launch_record": {"recorded": False, "value": ""},
         "fsr4": {},
     }
     if not target.is_dir():
         return result
+
+    result["launch_record"] = read_launch_record(target)
 
     ini = target / INI_NAME
     result["ini_present"] = ini.is_file()
@@ -428,6 +480,11 @@ def uninstall(target_dir, remove_ini=True, logger=None):
         if path.is_file():
             path.unlink()
             removed.append(name)
+
+    # The record of what Steam was passing before is ours and belongs to this
+    # install; whoever asked for the uninstall has already been shown it.
+    if forget_launch_options(target):
+        removed.append(LAUNCH_RECORD_NAME)
 
     restored.extend(restore_backups(target, logger))
 

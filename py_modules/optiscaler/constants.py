@@ -11,6 +11,11 @@ MANIFEST_NAME = ".decky-optiscaler.json"
 # Anything OptiScaler would overwrite is moved here instead, and moved back on
 # uninstall. Kept as a visible folder so it is obvious what happened.
 BACKUP_DIR = "decky_optiscaler_backup_files"
+# The same idea for the one thing that is not a file in this folder: the Steam
+# launch options the game had before OptiScaler went in. Only the frontend can
+# read them out of Steam, so they are handed here and written verbatim, and
+# removing OptiScaler can then offer to put them back.
+LAUNCH_RECORD_NAME = "decky_optiscaler_previous_launch_options.txt"
 
 # OptiPatcher (https://github.com/optiscaler/OptiPatcher) is a separate ASI from
 # the OptiScaler project. It patches supported games so their DLSS/DLSS-FG

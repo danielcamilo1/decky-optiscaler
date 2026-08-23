@@ -1,5 +1,4 @@
 import {
-  ConfirmModal,
   DialogButton,
   Field,
   Focusable,
@@ -21,6 +20,16 @@ import {
   uninstall,
 } from "../api";
 import { readLaunchOptions, setLaunchOptions } from "../hooks/useRunningGame";
+import {
+  hasOverride,
+  launchChoices,
+  launchOptionFor,
+  recordPreviousLaunchOptions,
+  recordedValue,
+  resolveChoice,
+} from "../launchOptions";
+import type { LaunchAction, LaunchState } from "../launchOptions";
+import { PREF_REMOVE_LAUNCH, isRemembering, recallLaunchAction, remember } from "../prefs";
 import type {
   AutoPlan,
   GameDetail,
@@ -29,6 +38,7 @@ import type {
   Recommendation,
 } from "../types";
 import { Mono, Notice, Pill } from "./Common";
+import { RemovePrompt } from "./RemovePrompt";
 
 /**
  * Setting a game up, as a checklist rather than a page of panels.
@@ -161,7 +171,7 @@ export function SetupChecklist({
   // An .asi build is loaded by an ASI loader, so Proton has nothing to shadow
   // and there is no override to set.
   const needsOverride = !filename.toLowerCase().endsWith(".asi");
-  const launchWanted = planned?.launch_options ?? `WINEDLLOVERRIDES="${filename.replace(/\.dll$/i, "")}=n,b" %command%`;
+  const launchWanted = planned?.launch_options ?? launchOptionFor(filename);
 
   const [withLaunch, setWithLaunch] = useState(true);
   const [withSettings, setWithSettings] = useState(true);
@@ -196,12 +206,14 @@ export function SetupChecklist({
     })();
   }, [installed, detail.install.path]);
 
-  const overrideSet =
-    launchNow !== null &&
-    launchNow.toLowerCase().includes(`${filename.replace(/\.dll$/i, "").toLowerCase()}=n,b`);
+  const overrideSet = launchNow !== null && hasOverride(launchNow, filename);
 
-  const applyLaunchOptions = (value: string) => {
+  const applyLaunchOptions = async (value: string) => {
     if (!appid) return;
+    // Before writing our own override, keep whatever Steam is passing now: this
+    // is the last moment it is still the game's own answer rather than ours.
+    // Write-once in the backend, so the install's record wins if there is one.
+    if (value && installed) await recordPreviousLaunchOptions(appid, detail.install.path);
     if (setLaunchOptions(Number(appid), value)) {
       void refreshLaunch();
       toaster.toast({
@@ -239,6 +251,7 @@ export function SetupChecklist({
         await setAutoMode(detail.path, false);
       }
       if (withLaunch && appid && needsOverride) {
+        await recordPreviousLaunchOptions(appid, detail.target);
         setLaunchOptions(Number(appid), planned.launch_options);
       }
       toaster.toast({
@@ -271,13 +284,30 @@ export function SetupChecklist({
     }
   };
 
-  const doUninstall = async () => {
+  /**
+   * What Steam is passing now, and what it was passing before the install.
+   *
+   * The pair is what makes the removal question answerable: with a record,
+   * "put it back" is exact and "there were none" is a fact rather than a
+   * guess; without one, only the override this plugin recognises comes out.
+   */
+  const launchState: LaunchState = {
+    current: launchNow,
+    recorded: recordedValue(detail.install.launch_record),
+    filename: detail.install.filename ?? filename,
+  };
+
+  const doUninstall = async (action: LaunchAction, rememberIt: boolean) => {
     setBusy(true);
     try {
+      if (rememberIt) await remember(PREF_REMOVE_LAUNCH, action);
       const result = await uninstall(detail.install.path, true);
       if (result.ok) {
         toaster.toast({ title: "OptiScaler removed", body: detail.name });
-        if (appid && overrideSet) setLaunchOptions(Number(appid), "");
+        const chosen = launchChoices(launchState).find((choice) => choice.action === action);
+        if (appid && chosen && chosen.value !== null) {
+          setLaunchOptions(Number(appid), chosen.value);
+        }
         await onChanged();
         await refreshLaunch();
       } else {
@@ -288,24 +318,34 @@ export function SetupChecklist({
     }
   };
 
-  const confirmUninstall = () =>
+  const confirmUninstall = async () => {
+    // Both reads happen before the modal opens: it is a plain render of an
+    // answer already known, so nothing on it can arrive after the user has
+    // looked at it and moved on.
+    const [rememberedAction, canRemember] = await Promise.all([
+      recallLaunchAction(PREF_REMOVE_LAUNCH),
+      isRemembering(),
+    ]);
+    // A remembered answer is only honoured while it still applies to this game:
+    // "put back what was there" means nothing for a game with no record, and a
+    // game Steam does not own has no choices at all.
+    const choices = appid ? launchChoices(launchState) : [];
+    const applicable =
+      resolveChoice(choices, rememberedAction)?.action === rememberedAction
+        ? rememberedAction
+        : null;
     showModal(
-      <ConfirmModal
-        strTitle="Remove OptiScaler?"
-        strOKButtonText="Remove"
-        strCancelButtonText="Keep it"
-        onOK={() => void doUninstall()}
-      >
-        <div style={{ fontSize: "14px", lineHeight: 1.5 }}>
-          {detail.install.backed_up.length > 0
-            ? `The ${detail.install.backed_up.length} file${
-                detail.install.backed_up.length === 1 ? "" : "s"
-              } it set aside are put back, and its settings are removed.`
-            : "Its files and settings are removed from this game's folder."}
-          {overrideSet ? " The Steam launch options are cleared too." : ""}
-        </div>
-      </ConfirmModal>
+      <RemovePrompt
+        gameName={detail.name}
+        filename={detail.install.filename}
+        backedUp={detail.install.backed_up.length}
+        launch={appid ? launchState : null}
+        remembered={applicable}
+        canRemember={canRemember}
+        onConfirm={(action, rememberIt) => void doUninstall(action, rememberIt)}
+      />
     );
+  };
 
   const doReset = async () => {
     setBusy(true);
@@ -568,7 +608,7 @@ export function SetupChecklist({
                 checked={overrideSet}
                 disabled={busy}
                 bottomSeparator="standard"
-                onChange={(checked) => applyLaunchOptions(checked ? launchWanted : "")}
+                onChange={(checked) => void applyLaunchOptions(checked ? launchWanted : "")}
               />
             </PanelSectionRow>
           ) : (
@@ -577,8 +617,8 @@ export function SetupChecklist({
                 label={<StepLabel>Steam launch options</StepLabel>}
                 description={`Steam did not report this game's launch options, so they cannot be
                   checked from here. Setting them again is harmless.`}
-                onClick={() => applyLaunchOptions(launchWanted)}
-                onActivate={() => applyLaunchOptions(launchWanted)}
+                onClick={() => void applyLaunchOptions(launchWanted)}
+                onActivate={() => void applyLaunchOptions(launchWanted)}
                 focusable
                 bottomSeparator="standard"
                 childrenLayout="inline"
@@ -685,7 +725,7 @@ export function SetupChecklist({
             </DialogButton>
             <DialogButton
               disabled={busy}
-              onClick={confirmUninstall}
+              onClick={() => void confirmUninstall()}
               onOKActionDescription="Remove OptiScaler"
               style={{
                 flex: "1 1 0",

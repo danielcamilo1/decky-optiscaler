@@ -10,14 +10,10 @@ import {
 } from "@decky/ui";
 import { toaster } from "@decky/api";
 import { useEffect, useState } from "react";
-import {
-  getPref,
-  install,
-  setGameTarget,
-  setPref,
-  setWikiEntry,
-} from "../api";
+import { install, setGameTarget, setWikiEntry } from "../api";
 import { setLaunchOptions } from "../hooks/useRunningGame";
+import { launchOptionFor, recordPreviousLaunchOptions } from "../launchOptions";
+import { PREF_INSTALL_LAUNCH, isRemembering, recall, remember } from "../prefs";
 import { useAutoPlan } from "../hooks/useAutoPlan";
 import type { GameDetail, LiveStatus, PayloadStatus } from "../types";
 import { KeyValue, Mono, Notice, Pill } from "./Common";
@@ -34,9 +30,6 @@ interface Props {
   onChanged: () => Promise<void> | void;
 }
 
-/** Remembered answer to the launch-options question: "always" | "never". */
-const LAUNCH_OPTIONS_PREF = "launch_options";
-
 /**
  * Asked once, right after an install that needs it.
  *
@@ -48,23 +41,26 @@ const LAUNCH_OPTIONS_PREF = "launch_options";
 function LaunchOptionsPrompt({
   filename,
   launchOption,
+  canRemember,
   closeModal,
   onDecide,
 }: Readonly<{
   filename: string;
   launchOption: string;
+  /** False once the user has turned remembering off under Settings. */
+  canRemember: boolean;
   closeModal?: () => void;
   onDecide: (apply: boolean, remember: boolean) => void;
 }>) {
-  const [remember, setRemember] = useState(false);
+  const [rememberIt, setRememberIt] = useState(false);
   return (
     <ConfirmModal
       strTitle="Set the Steam launch options?"
       strOKButtonText="Set them for me"
       strCancelButtonText="Not now"
       closeModal={closeModal}
-      onOK={() => onDecide(true, remember)}
-      onCancel={() => onDecide(false, remember)}
+      onOK={() => onDecide(true, rememberIt)}
+      onCancel={() => onDecide(false, rememberIt)}
     >
       <div style={{ fontSize: "14px", lineHeight: 1.5 }}>
         Proton loads its own <Mono>{filename}</Mono> unless this override is set, and
@@ -73,12 +69,14 @@ function LaunchOptionsPrompt({
           <Mono>{launchOption}</Mono>
         </div>
       </div>
-      <ToggleField
-        label="Remember my choice"
-        checked={remember}
-        bottomSeparator="none"
-        onChange={setRemember}
-      />
+      {canRemember ? (
+        <ToggleField
+          label="Remember my choice"
+          checked={rememberIt}
+          bottomSeparator="none"
+          onChange={setRememberIt}
+        />
+      ) : null}
     </ConfirmModal>
   );
 }
@@ -114,9 +112,7 @@ export function InstallPanel({ detail, status, appid, live, onChanged }: Props) 
 
   // An .asi build is loaded by an ASI loader, so Proton has nothing to shadow.
   const needsNoOverride = filename.toLowerCase().endsWith(".asi");
-  const launchOption = needsNoOverride
-    ? "%command%"
-    : `WINEDLLOVERRIDES="${filename.replace(/\.dll$/i, "")}=n,b" %command%`;
+  const launchOption = launchOptionFor(filename);
 
   const doInstall = async () => {
     setBusy(true);
@@ -128,6 +124,9 @@ export function InstallPanel({ detail, status, appid, live, onChanged }: Props) 
           body: `${filename} in ${target.split("/").slice(-2).join("/")}`,
         });
         await setGameTarget(detail.path, target);
+        // Before anything of ours reaches Steam: what the game was launched
+        // with until now is what removing OptiScaler will offer to put back.
+        await recordPreviousLaunchOptions(appid, target);
         await onChanged();
         await offerLaunchOptions();
       } else {
@@ -144,23 +143,20 @@ export function InstallPanel({ detail, status, appid, live, onChanged }: Props) 
    */
   const offerLaunchOptions = async () => {
     if (!appid || needsNoOverride) return;
-    let remembered: unknown = null;
-    try {
-      remembered = (await getPref(LAUNCH_OPTIONS_PREF)).value;
-    } catch {
-      /* a missing preference is just an unanswered question */
-    }
+    const remembered = await recall(PREF_INSTALL_LAUNCH);
     if (remembered === "never") return;
     if (remembered === "always") {
       applyLaunchOptions();
       return;
     }
+    const canRemember = await isRemembering();
     showModal(
       <LaunchOptionsPrompt
         filename={filename}
         launchOption={launchOption}
-        onDecide={(apply, remember) => {
-          if (remember) void setPref(LAUNCH_OPTIONS_PREF, apply ? "always" : "never");
+        canRemember={canRemember}
+        onDecide={(apply, rememberIt) => {
+          if (rememberIt) void remember(PREF_INSTALL_LAUNCH, apply ? "always" : "never");
           if (apply) applyLaunchOptions();
         }}
       />

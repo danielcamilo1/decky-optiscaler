@@ -194,6 +194,19 @@ async def run():
         info = installer.detect(str(target))
         check("install detected", info["installed"] and info["filename"] == "dxgi.dll")
 
+        # The launch options are Steam's, so only the frontend can read them --
+        # but they are the other half of an install and have to be recoverable.
+        recorded = await service.record_launch_options(str(target), "gamemoderun %command%")
+        check("previous launch options recorded", recorded["ok"] and recorded["written"])
+        again = await service.record_launch_options(
+            str(target), 'WINEDLLOVERRIDES="dxgi=n,b" %command%')
+        check("recording again keeps the original, not our own override",
+              not again["written"] and again["value"] == "gamemoderun %command%",
+              again["value"])
+        check("the record travels with the install detail",
+              installer.detect(str(target))["launch_record"]
+              == {"recorded": True, "value": "gamemoderun %command%"})
+
         # Live control has to arrive with the install, and OptiScaler has to be
         # told to load it -- an .asi it never looks for would do nothing.
         from optiscaler import live as live_mod
@@ -336,6 +349,8 @@ async def run():
         check("game's own Licenses folder restored",
               (target / "Licenses" / "game.txt").read_text() == "GAME LICENSE")
         check("backup folder cleaned up", not stash.exists())
+        check("the launch-options record goes with the install",
+              not installer.detect(str(target))["launch_record"]["recorded"])
         check("imported FSR4 files removed too",
               not (target / "amdxcffx64.dll").exists())
     finally:
@@ -810,6 +825,54 @@ def check_remembered_choices():
               Settings(path).get_pref("launch_options") is None)
         check("prefs do not disturb the rest of the file",
               Settings(path).get("custom_libraries") == [])
+        # "Remember my choices" is stored as a boolean and defaults to on, so
+        # False has to survive as an answer rather than reading as "unset" —
+        # otherwise turning remembering off would silently turn itself back on.
+        settings.set_pref("remember_choices", False)
+        check("switching remembering off is itself remembered",
+              Settings(path).get_pref("remember_choices", True) is False)
+        check("an untouched switch defaults to on",
+              Settings(path).get_pref("never_asked", True) is True)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def check_launch_record():
+    """Removing OptiScaler has to be able to undo the launch options too.
+
+    Three states have to stay distinguishable, because each means a different
+    thing on the removal dialog: no record at all (an older install, or a Steam
+    build that would not report them - take out only our own override), a
+    recorded empty string (the game genuinely had none - the field can be
+    cleared outright), and a recorded value (put exactly that back).
+    """
+    import tempfile
+
+    print("\nLaunch-options record")
+    root = Path(tempfile.mkdtemp(prefix="optiscaler-launch-"))
+    try:
+        check("nothing recorded reads as nothing recorded",
+              installer.read_launch_record(root) == {"recorded": False, "value": ""})
+
+        installer.record_launch_options(root, "")
+        check("an empty record is still a record — the game had none",
+              installer.read_launch_record(root) == {"recorded": True, "value": ""})
+
+        installer.record_launch_options(root, "mangohud %command%")
+        check("write-once: the first answer is the one kept",
+              installer.read_launch_record(root)["value"] == "",
+              installer.read_launch_record(root)["value"])
+
+        installer.forget_launch_options(root)
+        installer.record_launch_options(root, 'PROTON_LOG=1 %command% -dx12')
+        check("a real value round trips verbatim",
+              installer.read_launch_record(root)["value"] == 'PROTON_LOG=1 %command% -dx12')
+        check("the file is plain text next to the install",
+              (root / "decky_optiscaler_previous_launch_options.txt").is_file())
+
+        check("forgetting reports whether there was anything to forget",
+              installer.forget_launch_options(root) is True
+              and installer.forget_launch_options(root) is False)
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -1483,6 +1546,7 @@ def main():
     check_live_control()
     check_live_diagnostics()
     check_remembered_choices()
+    check_launch_record()
     check_asi_reporting()
     check_asi_staleness()
     check_reported_folder()

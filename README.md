@@ -42,8 +42,10 @@ OptiScaler v0.9.4 is bundled, so installing works offline and every game gets th
   what the game actually ended up running and, with frame generation on, both frame rates: what
   the game renders and what reaches the screen. See
   [Live in-game control](#live-in-game-control).
-- **Doesn't lose your files.** Anything an install would overwrite is moved into
-  `decky_optiscaler_backup_files/` and put back when you uninstall.
+- **Doesn't lose your files, or your launch options.** Anything an install would overwrite is
+  moved into `decky_optiscaler_backup_files/` and put back when you uninstall. The launch options
+  the game had before the install are kept the same way, so removing OptiScaler can offer to put
+  them back rather than clearing a field it never owned.
 - **Odds and ends.** `OptiScaler.log` is parsed for the backend that actually got created, the
   GPU and the Proton version. [OptiPatcher](https://github.com/optiscaler/OptiPatcher) is bundled
   for the games that need it. An **OptiScaler Settings** entry is added to the game's context
@@ -107,6 +109,12 @@ WINEDLLOVERRIDES="dxgi=n,b" %command%
 
 Setup shows the exact string for the filename you picked and can write it into the game's launch
 options for you. `OptiScaler.asi` installs don't need it.
+
+Whatever Steam was passing before the install is recorded next to the install, so removing
+OptiScaler asks what to do with the field: put back exactly what was there, take only the
+OptiScaler override out and keep the rest, or leave it alone. "Put it back" is only offered when
+there *was* something. The answer can be remembered, and **Settings** on the main page is where
+remembered answers are listed and taken back.
 
 ## Requirements
 

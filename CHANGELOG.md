@@ -7,6 +7,42 @@ All notable changes to this project are documented here. The format follows
 Each release ships `Decky OptiScaler.zip`, installable through Decky Loader's
 *Install from URL* (Developer mode).
 
+## [0.0.4.1-testing] - 2026-08-23
+
+A testing build. Same OptiScaler release (0.9.4) as 0.0.4.
+
+### Added
+
+- **Removing OptiScaler now asks about the Steam launch options.** Installing it is two
+  changes, not one — a folder full of files and a `WINEDLLOVERRIDES` entry in Steam — and
+  removing it only ever undid the first. A game that had been "removed" kept an override
+  for a DLL that was no longer there, and on the one path that did clear the field it
+  cleared whatever else the game had in it too. The removal dialog now offers what to do:
+  put back exactly what was there before the install, take only the OptiScaler override
+  out and leave the rest, or change nothing.
+- **The launch options are backed up the way files are.** Installing records what Steam was
+  passing beforehand into a plain text file next to the manifest and the backup folder, and
+  removing takes it out again with everything else. It is written once per install, so a
+  reinstall — or the launch-options step being switched off and on — cannot overwrite the
+  original with the override this plugin itself wrote. Only Steam can report launch options
+  and only the frontend can ask it, which is why the value is handed to the backend rather
+  than read there.
+- **"Put back what was there" is only offered when there was something.** The record tells
+  three states apart, and each means something different: recorded and empty (the game had
+  no launch options, so the field can be cleared outright), recorded and not empty (there is
+  something to restore, verbatim), and not recorded at all — an older install, or a Steam
+  client build that will not report them — in which case only the override this plugin
+  recognises is removed and anything else is left alone. A choice that would write back what
+  Steam already has, or that duplicates another choice's outcome, is not shown.
+- **A Settings tab on the main page.** Both launch-options prompts offer "Remember my
+  choice", and an answer that can only be given and never taken back is a trap. Whatever is
+  remembered is now listed by name with what it will do, each with a way to put the question
+  back, alongside the switch that stops answers being kept at all — turning it off also drops
+  the ones already stored, so turning it on again does not silently restore decisions the user
+  just said they wanted to be asked about. It is deliberately not in the Quick Access panel:
+  that panel drives the game that is running, and this changes how the plugin behaves for
+  every game.
+
 ## [0.0.4] - 2026-08-21
 
 ### Added

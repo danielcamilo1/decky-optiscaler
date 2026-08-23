@@ -60,6 +60,15 @@ export const setGameTarget = callable<[gamePath: string, targetDir: string], Act
   "set_game_target"
 );
 
+/**
+ * Keep this game's Steam launch options as they were before the install, so
+ * removing OptiScaler can put them back. Written once per install.
+ */
+export const recordLaunchOptions = callable<
+  [targetDir: string, options: string],
+  ActionResult & { recorded: boolean; value: string }
+>("record_launch_options");
+
 /** Small UI answers the user asked to be remembered, e.g. launch options. */
 export const getPref = callable<[key: string, fallback?: unknown], { key: string; value: unknown }>(
   "get_pref"

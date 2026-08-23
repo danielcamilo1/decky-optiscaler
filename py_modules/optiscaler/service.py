@@ -381,6 +381,22 @@ class OptiScalerService:
             self.log.exception("FSR4 import failed for %s", target_dir)
             return {"ok": False, "error": str(exc)}
 
+    async def record_launch_options(self, target_dir, options):
+        """Keep this game's launch options as they were before the install.
+
+        Steam is only reachable from the frontend, so the value arrives from
+        there rather than being read here. It is written once and next to the
+        install it belongs to, beside the manifest and the backup folder, so
+        removing OptiScaler can offer to put back exactly what was there.
+        """
+        try:
+            return {"ok": True, **await self._run(
+                installer.record_launch_options, target_dir, options, self.log
+            )}
+        except Exception as exc:
+            self.log.exception("could not record launch options for %s", target_dir)
+            return {"ok": False, "error": str(exc)}
+
     async def get_pref(self, key, default=None):
         """One remembered UI choice, e.g. whether to set launch options."""
         return {"key": key, "value": self.settings.get_pref(key, default)}
