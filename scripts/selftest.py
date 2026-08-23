@@ -8,6 +8,7 @@ comment-preserving INI edits.
 
 import asyncio
 import hashlib
+import json
 import logging
 import os
 import re
@@ -24,6 +25,7 @@ sys.path.insert(0, str(ROOT / "py_modules"))
 from optiscaler.service import OptiScalerService  # noqa: E402
 from optiscaler import installer  # noqa: E402
 from optiscaler.inifile import IniFile  # noqa: E402
+from optiscaler.constants import COMPAT_CACHE_TTL  # noqa: E402
 
 PASSED = []
 FAILED = []
@@ -324,6 +326,68 @@ async def run():
             check("a miss offers near misses to pick from", len(missing["near_misses"]) > 0)
         else:
             print("  (offline — skipped)")
+
+        print("\nWiki refresh behind the answer")
+        from optiscaler import wiki as wiki_mod
+        real_get = wiki_mod._http_get
+        served = []
+        try:
+            # A list already on disk, and a network that is slow enough that
+            # waiting for it would be obvious in the answer's timing.
+            service.wiki.list_cache.write_text(json.dumps({
+                "fetched_at": time.time() - COMPAT_CACHE_TTL - 60,
+                "entries": [{"name": "Cached Game", "key": "cachedgame", "page": None,
+                             "compatibility": "OK", "inputs": "DLSS",
+                             "optipatcher": False, "notes": ""}],
+            }))
+
+            def slow(url, *a, **k):
+                served.append(url)
+                time.sleep(0.4)
+                return ("| Game | Compatibility | Inputs |\n|---|---|---|\n"
+                        "| [Cached Game](Cached-Game) | OK | DLSS |\n"
+                        "| [Brand New Game](Brand-New-Game) | OK | DLSS |\n")
+
+            wiki_mod._http_get = slow
+            started = time.monotonic()
+            answer = await service.get_recommendation("Cached Game")
+            elapsed = time.monotonic() - started
+            check("a stale list still answers immediately", elapsed < 0.3, f"{elapsed:.2f}s")
+            check("and answers from the cache it had", answer["matched"], answer.get("game"))
+            check("the answer says the list behind it is old",
+                  answer["list_meta"].get("stale") is True)
+            before = answer["list_meta"].get("revision")
+
+            # And the refresh really did run behind it.
+            for _ in range(40):
+                await asyncio.sleep(0.05)
+                if not service._wiki_jobs:
+                    break
+            check("a refresh was started behind the answer", bool(served), served)
+            after = await service.wiki_status()
+            check("and the newer list replaced the cached one",
+                  after["entry_count"] == 2 and after["revision"] != before,
+                  f"{before} -> {after['revision']}")
+            check("which is how the UI knows to redraw", bool(after["revision"]))
+
+            # Single flight: three questions in a row are not three downloads.
+            service.wiki.list_cache.write_text(json.dumps({
+                "fetched_at": time.time() - COMPAT_CACHE_TTL - 60,
+                "entries": after["entry_count"] * [
+                    {"name": "Cached Game", "key": "cachedgame", "page": None,
+                     "compatibility": "OK", "inputs": "DLSS",
+                     "optipatcher": False, "notes": ""}],
+            }))
+            served.clear()
+            await asyncio.gather(*(service.get_recommendation("Cached Game") for _ in range(3)))
+            for _ in range(40):
+                await asyncio.sleep(0.05)
+                if not service._wiki_jobs:
+                    break
+            check("three questions in a row are one download, not three",
+                  len(served) == 1, len(served))
+        finally:
+            wiki_mod._http_get = real_get
 
         print("\nMonitoring")
         (target / "OptiScaler.log").write_text(
@@ -996,6 +1060,122 @@ def check_wiki_failure_reporting():
               "zero rows" in (meta["error"] or ""), meta["error"])
         check("and the last good list is served instead of nothing",
               len(empty) == 1, len(empty))
+    finally:
+        wiki_mod._http_get = real_get
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def check_wiki_cache():
+    """Answers come from cache; the network is never in front of a question.
+
+    A handheld is regularly asleep, offline, or on a network that resolves and
+    does not route. Waiting for the wiki before answering meant every one of
+    those cost a full timeout, and a cache older than a day was thrown away
+    rather than used. Reading is stale-while-revalidate now: whatever is on
+    disk is returned at once, and the refresh happens behind it.
+    """
+    import tempfile
+    from optiscaler import wiki as wiki_mod
+
+    print("\nWiki cache")
+    root = Path(tempfile.mkdtemp(prefix="optiscaler-swr-"))
+    real_get = wiki_mod._http_get
+    calls = []
+
+    def serve(table):
+        def get(url, *a, **k):
+            calls.append(url)
+            return table
+        return get
+
+    one = ("| Game | Compatibility | Inputs |\n|---|---|---|\n"
+           "| [Cyberpunk 2077](Cyberpunk-2077) | OK | DLSS |\n")
+    two = one + "| [Black Myth: Wukong](Black-Myth-Wukong) | OK | DLSS |\n"
+
+    try:
+        seed = root / "seed.json"
+        seed.write_text(json.dumps({
+            "fetched_at": time.time(),
+            "entries": [{"name": "Seeded Game", "key": "seededgame", "page": None,
+                         "compatibility": "OK", "inputs": "DLSS", "optipatcher": False,
+                         "notes": ""}],
+        }))
+
+        # A Deck that has never had a connection still has a list.
+        wiki_mod._http_get = lambda *a, **k: (_ for _ in ()).throw(
+            urllib.error.URLError("Network is unreachable"))
+        offline = wiki_mod.WikiClient(root / "a", seed)
+        entries, meta = offline.load_entries()
+        check("an offline Deck falls back to the bundled list",
+              len(entries) == 1 and meta["source"] == "bundled", meta["source"])
+        check("and reports the list as available, not as a missing game",
+              offline.status()["available"])
+
+        # With no seed and no network there is genuinely nothing.
+        bare = wiki_mod.WikiClient(root / "b")
+        check("no cache and no network is still an empty list, reported as such",
+              bare.load_entries()[0] == [] and not bare.status()["available"])
+
+        # A cached list answers without touching the network at all.
+        wiki_mod._http_get = serve(one)
+        client = wiki_mod.WikiClient(root / "c", seed)
+        client.revalidate()
+        calls.clear()
+        entries, meta = client.load_entries()
+        check("a cached list is served with no request at all",
+              len(entries) == 1 and calls == [], calls)
+        check("and says which list it came from", meta["source"] == "cache")
+
+        # Even when it is older than the TTL: stale is a reason to refresh
+        # behind the answer, never a reason to wait for one.
+        payload = json.loads(client.list_cache.read_text())
+        payload["fetched_at"] = time.time() - (COMPAT_TTL := 60 * 60 * 24) - 60
+        client.list_cache.write_text(json.dumps(payload))
+        calls.clear()
+        entries, meta = client.load_entries()
+        check("a stale list is still served without waiting",
+              len(entries) == 1 and calls == [], calls)
+        check("and is flagged stale so a refresh gets started",
+              meta["stale"] and client.is_stale())
+
+        # The fingerprint is what the UI watches to know something arrived.
+        before = client.revision()
+        wiki_mod._http_get = serve(one)
+        same = client.revalidate()
+        check("a refresh that brings back the same list changes nothing",
+              same["ok"] and not same["changed"] and client.revision() == before)
+        wiki_mod._http_get = serve(two)
+        changed = client.revalidate()
+        check("a refresh that brings something new says so",
+              changed["ok"] and changed["changed"] and changed["count"] == 2)
+        check("and the fingerprint moves with it", client.revision() != before)
+
+        # The one rule that keeps this from ever making things worse.
+        good = client.revision()
+        wiki_mod._http_get = lambda *a, **k: (_ for _ in ()).throw(
+            urllib.error.URLError("Network is unreachable"))
+        failed = client.revalidate()
+        check("a failed refresh leaves the working cache alone",
+              not failed["ok"] and client.revision() == good and
+              len(client.load_entries()[0]) == 2)
+        check("but the failure is remembered for the UI to show",
+              "unreachable" in (client.last_error or ""), client.last_error)
+        wiki_mod._http_get = serve(two)
+        client.revalidate()
+        check("and a later success clears it", client.last_error is None)
+
+        # Detail pages follow the same rule: a stale one used to mean two HTTP
+        # attempts in front of the answer, the second only after the first
+        # timed out.
+        client.fetch_page("Cyberpunk-2077")
+        os.utime(client._page_file("Cyberpunk-2077"),
+                 (time.time() - COMPAT_TTL - 60,) * 2)
+        calls.clear()
+        page = client.load_page("Cyberpunk-2077")
+        check("a stale detail page is served from disk, not waited for",
+              page is not None and calls == [], calls)
+        check("and is reported stale so it can be refreshed behind the answer",
+              client.page_is_stale("Cyberpunk-2077"))
     finally:
         wiki_mod._http_get = real_get
         shutil.rmtree(root, ignore_errors=True)
@@ -1730,6 +1910,7 @@ def main():
     check_reported_folder()
     check_live_frame_rates()
     check_wiki_failure_reporting()
+    check_wiki_cache()
     check_wiki_transport()
     check_wiki_tls()
     check_version_pin()

@@ -6,6 +6,7 @@ AsciiDoc detail page that names the exact proxy filename to install as.
 """
 
 import difflib
+import hashlib
 import json
 import re
 import socket
@@ -324,21 +325,141 @@ def parse_detail_page(asciidoc):
     return fields
 
 
+def fingerprint(entries):
+    """A short, stable id for one version of the compatibility list.
+
+    Content rather than a counter: it survives the plugin being reloaded, and
+    "the list changed" is then exactly "the content differs" — which is the
+    question the UI asks when it decides whether a background refresh is worth
+    redrawing for.
+    """
+    if not entries:
+        return ""
+    blob = json.dumps(entries, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:12]
+
+
 class WikiClient:
-    def __init__(self, cache_dir):
+    """The compatibility list, served from cache and refreshed behind it.
+
+    The wiki is a network resource on a handheld that is regularly offline, in
+    sleep, or on a network that resolves but does not route — so waiting for it
+    is the wrong default. Reading is therefore **stale-while-revalidate**:
+    whatever is already on disk is returned at once and the network is never on
+    the path of a question the user asked. `revalidate()` is the fetch, run
+    behind that answer by the service, and it replaces the cache only when it
+    actually succeeds.
+
+    Three sources, in order: the runtime cache written by the last successful
+    fetch, the copy bundled with the plugin (so a Deck that has never had a
+    connection still has a list), and finally the network. A failed refresh
+    changes nothing but the error the UI is allowed to print.
+    """
+
+    def __init__(self, cache_dir, seed_path=None):
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.list_cache = self.cache_dir / "compat-list.json"
+        self.seed_path = Path(seed_path) if seed_path else None
         self.page_cache = self.cache_dir / "pages"
         self.page_cache.mkdir(parents=True, exist_ok=True)
+        # What the last refresh attempt did, so a cached answer can still say
+        # that the list behind it is old and why.
+        self.last_error = None
+        self.last_attempt = None
+
+    # -- the cache -------------------------------------------------------
+    @staticmethod
+    def _read_list_file(path):
+        if not path or not path.is_file():
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        entries = payload.get("entries") if isinstance(payload, dict) else None
+        if not isinstance(entries, list) or not entries:
+            return None
+        return {"entries": entries, "fetched_at": payload.get("fetched_at") or 0}
+
+    def cached(self):
+        """The best list already on disk, without touching the network."""
+        runtime = self._read_list_file(self.list_cache)
+        if runtime:
+            return {**runtime, "source": "cache"}
+        seed = self._read_list_file(self.seed_path)
+        if seed:
+            # Bundled with the plugin: what a Deck that has never reached the
+            # wiki gets to work from, rather than nothing at all.
+            return {**seed, "source": "bundled"}
+        return None
+
+    def age(self):
+        """Seconds since the cached list was fetched, or None when there is none."""
+        cached = self.cached()
+        if not cached or not cached["fetched_at"]:
+            return None
+        return max(0.0, time.time() - cached["fetched_at"])
+
+    def is_stale(self):
+        """Whether a refresh is worth starting. No cache at all counts."""
+        age = self.age()
+        return age is None or age >= COMPAT_CACHE_TTL
+
+    def revision(self):
+        cached = self.cached()
+        return fingerprint(cached["entries"]) if cached else ""
+
+    def _meta(self, cached):
+        return {
+            "source": cached["source"] if cached else "none",
+            "fetched_at": cached["fetched_at"] if cached else None,
+            "error": self.last_error,
+            "stale": self.is_stale(),
+            "revision": fingerprint(cached["entries"]) if cached else "",
+            "tls": ssl_context_kind(),
+        }
+
+    def revalidate(self):
+        """Fetch the list and replace the cache. Blocking; run off the loop.
+
+        Nothing is written unless the download both succeeded and parsed, so a
+        failed refresh can never turn a working cache into an empty one — which
+        is the only way this could make things worse than not refreshing.
+        """
+        self.last_attempt = time.time()
+        before = self.revision()
+        try:
+            markdown = _http_get(f"{WIKI_RAW_BASE}/{COMPAT_LIST_PAGE}")
+            entries = parse_compat_list(markdown)
+        except Exception as exc:  # network, TLS, disk, decoding — all non-fatal
+            self.last_error = f"{type(exc).__name__}: {exc}"
+            return {"ok": False, "changed": False, "count": 0, "error": self.last_error}
+        if not entries:
+            self.last_error = "compatibility list downloaded but parsed to zero rows"
+            return {"ok": False, "changed": False, "count": 0, "error": self.last_error}
+
+        after = fingerprint(entries)
+        try:
+            self.list_cache.write_text(
+                json.dumps({"fetched_at": time.time(), "entries": entries}), encoding="utf-8"
+            )
+        except OSError as exc:
+            self.last_error = f"{type(exc).__name__}: {exc}"
+            return {"ok": False, "changed": False, "count": len(entries),
+                    "error": self.last_error}
+        self.last_error = None
+        return {"ok": True, "changed": after != before, "count": len(entries),
+                "revision": after, "error": None}
 
     def status(self, force=False):
-        """Whether the compatibility list is actually reachable, and why not.
+        """Whether the compatibility list is usable, and how old it is.
 
         The one question the UI could never answer: a failed download and a
         game that is genuinely not on the list produced the same empty result,
         so "the wiki is broken" and "your game is not in it" read identically.
-        This says which, in the words of whatever actually failed.
+        This says which, in the words of whatever actually failed — and, now
+        that answers come from cache, whether the list behind one is old.
         """
         entries, meta = self.load_entries(force)
         return {
@@ -347,68 +468,90 @@ class WikiClient:
             "available": bool(entries),
             "source": meta.get("source"),
             "fetched_at": meta.get("fetched_at"),
+            "age": self.age(),
+            "stale": meta.get("stale"),
+            "revision": meta.get("revision"),
             "error": meta.get("error"),
-            "tls": meta.get("tls") or ssl_context_kind(),
+            "last_attempt": self.last_attempt,
+            "tls": meta.get("tls"),
             "cache_path": str(self.list_cache),
         }
 
     # -- compatibility list ---------------------------------------------
     def load_entries(self, force=False):
-        """Return (entries, meta). Falls back to a stale cache when offline."""
-        meta = {"source": "cache", "fetched_at": None, "error": None}
-        cached = None
-        if self.list_cache.exists():
-            try:
-                cached = json.loads(self.list_cache.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                cached = None
+        """The entries to answer with, now.
 
-        fresh_enough = (
-            cached
-            and not force
-            and (time.time() - cached.get("fetched_at", 0)) < COMPAT_CACHE_TTL
-        )
-        if fresh_enough:
-            meta["fetched_at"] = cached["fetched_at"]
-            return cached["entries"], meta
+        Never waits for the network when anything is cached: the caller is a
+        question the user asked, and a Deck that is asleep, offline or on a
+        network that resolves but does not route would otherwise make every one
+        of them hang for the timeout. Keeping the cache current is
+        `revalidate()`'s job, run behind this by the service.
 
-        try:
-            markdown = _http_get(f"{WIKI_RAW_BASE}/{COMPAT_LIST_PAGE}")
-            entries = parse_compat_list(markdown)
-            if entries:
-                payload = {"fetched_at": time.time(), "entries": entries}
-                self.list_cache.write_text(json.dumps(payload), encoding="utf-8")
-                meta.update(source="network", fetched_at=payload["fetched_at"],
-                            tls=ssl_context_kind())
-                return entries, meta
-            meta["error"] = "compatibility list downloaded but parsed to zero rows"
-        except Exception as exc:  # network, TLS, disk, decoding — all non-fatal
-            meta["error"] = f"{type(exc).__name__}: {exc}"
-
-        meta["tls"] = ssl_context_kind()
+        `force` is the explicit "download it again" button, and is the only
+        path that puts the network in front of an answer.
+        """
+        if force:
+            self.revalidate()
+        cached = self.cached()
         if cached:
-            meta["fetched_at"] = cached.get("fetched_at")
-            return cached["entries"], meta
-        return [], meta
+            return cached["entries"], self._meta(cached)
+        # Nothing on disk at all — not even the bundled copy. One synchronous
+        # attempt is better than reporting an empty list forever.
+        if not force:
+            self.revalidate()
+            cached = self.cached()
+            if cached:
+                return cached["entries"], self._meta(cached)
+        return [], self._meta(None)
 
-    def load_page(self, page, force=False):
-        """Fetch a wiki detail page, caching the raw AsciiDoc."""
-        safe = re.sub(r"[^A-Za-z0-9._-]", "_", page)
-        cached_file = self.page_cache / f"{safe}.adoc"
-        if cached_file.exists() and not force:
-            age = time.time() - cached_file.stat().st_mtime
-            if age < COMPAT_CACHE_TTL:
-                return cached_file.read_text(encoding="utf-8", errors="replace")
+    def _page_file(self, page):
+        return self.page_cache / f"{re.sub(r'[^A-Za-z0-9._-]', '_', page)}.adoc"
+
+    def cached_page(self, page):
+        """A detail page already on disk, at whatever age. None if never seen."""
+        path = self._page_file(page)
+        if not path.is_file():
+            return None
+        try:
+            return path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return None
+
+    def page_is_stale(self, page):
+        path = self._page_file(page)
+        if not path.is_file():
+            return True
+        try:
+            return (time.time() - path.stat().st_mtime) >= COMPAT_CACHE_TTL
+        except OSError:
+            return True
+
+    def fetch_page(self, page):
+        """Download one detail page and cache it. Blocking; run off the loop."""
         for suffix in (".asciidoc", ".md"):
             try:
                 text = _http_get(f"{WIKI_RAW_BASE}/{page}{suffix}")
             except Exception:
                 continue
-            cached_file.write_text(text, encoding="utf-8")
+            try:
+                self._page_file(page).write_text(text, encoding="utf-8")
+            except OSError:
+                pass
             return text
-        if cached_file.exists():
-            return cached_file.read_text(encoding="utf-8", errors="replace")
         return None
+
+    def load_page(self, page, force=False):
+        """A wiki detail page, from cache first for the same reason the list is.
+
+        A stale page used to mean two HTTP attempts in front of the answer, and
+        the second one only happens after the first has timed out — so on a
+        Deck with no route to the wiki, opening a game waited out both.
+        """
+        if not force:
+            cached = self.cached_page(page)
+            if cached is not None:
+                return cached
+        return self.fetch_page(page) or self.cached_page(page)
 
     # -- matching --------------------------------------------------------
     @staticmethod
@@ -536,6 +679,7 @@ class WikiClient:
             "list_available": True,
             "near_misses": [],
             "game": entry["name"],
+            "page": entry.get("page"),
             "filename": DEFAULT_PROXY,
             "filename_source": "default",
             "alternatives": [],
@@ -579,6 +723,7 @@ class WikiClient:
             "list_available": bool(entries),
             "near_misses": [],
             "game": None,
+            "page": None,
             "filename": DEFAULT_PROXY,
             "filename_source": "default",
             "alternatives": [],
@@ -603,6 +748,9 @@ class WikiClient:
         result.update(
             matched=True,
             game=entry["name"],
+            # The wiki page behind this answer, so whoever asked can have it
+            # refreshed behind them the same way the list is.
+            page=entry["page"],
             compatibility=entry["compatibility"],
             inputs=entry["inputs"],
             notes=entry["notes"] or None,

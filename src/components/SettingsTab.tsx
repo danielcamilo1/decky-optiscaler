@@ -17,6 +17,15 @@ import {
 import type { PayloadStatus, WikiStatus } from "../types";
 import { Centered, KeyValue, Mono, Notice, Pill } from "./Common";
 
+/** How old the list is, in the terms someone would actually ask it in. */
+function describeAge(age: number | null): string {
+  if (age === null) return "at an unknown time";
+  const hours = age / 3600;
+  if (hours < 1) return "in the last hour";
+  if (hours < 48) return `${Math.round(hours)} hours ago`;
+  return `${Math.round(hours / 24)} days ago`;
+}
+
 /**
  * The plugin's own settings, as opposed to one game's.
  *
@@ -54,6 +63,7 @@ export function SettingsTab({ status }: Readonly<{ status: PayloadStatus | null 
     } catch (exc) {
       setWiki({
         url: "", entry_count: 0, available: false, source: null, fetched_at: null,
+        age: null, stale: true, revision: "", revalidating: false, last_attempt: null,
         error: String(exc), tls: null, cache_path: "",
       });
     }
@@ -157,13 +167,27 @@ export function SettingsTab({ status }: Readonly<{ status: PayloadStatus | null 
           {wiki === null ? (
             <Notice tone="info">Checking the OptiScaler wiki…</Notice>
           ) : wiki.available ? (
-            <Notice tone="success" title={`${wiki.entry_count} games on the list`}>
-              Downloaded from the OptiScaler wiki
-              {wiki.source === "cache" ? ", from this Deck's cache" : ""}
-              {wiki.fetched_at
-                ? ` — last updated ${new Date(wiki.fetched_at * 1000).toLocaleString()}`
-                : ""}
-              .
+            // Available and *current* are different questions now that answers
+            // come from cache: a list can be perfectly usable and months old,
+            // and a refresh can be failing behind it without anything breaking.
+            <Notice
+              tone={wiki.error ? "warn" : "success"}
+              title={`${wiki.entry_count} games on the list`}
+            >
+              {wiki.source === "bundled"
+                ? "The copy bundled with the plugin — this Deck has not downloaded one yet."
+                : `Downloaded ${describeAge(wiki.age)}.`}
+              {wiki.error ? (
+                <>
+                  {" "}
+                  The last refresh did not go through, so this list is what is being used
+                  meanwhile. <Mono>{wiki.error}</Mono>
+                </>
+              ) : wiki.revalidating ? (
+                " Checking for a newer one now."
+              ) : (
+                ""
+              )}
             </Notice>
           ) : (
             // The sentence the rest of the plugin could never show: when the
@@ -184,12 +208,20 @@ export function SettingsTab({ status }: Readonly<{ status: PayloadStatus | null 
             {refreshing ? "Downloading…" : "Download it again"}
           </ButtonItem>
         </PanelSectionRow>
-        {wiki && !wiki.available ? (
+        {wiki && (!wiki.available || wiki.error) ? (
           <PanelSectionRow>
             <Field bottomSeparator="none" focusable>
               <div style={{ width: "100%" }}>
                 <KeyValue label="Address" value={<Mono>{wiki.url}</Mono>} />
                 <KeyValue label="Certificates" value={wiki.tls ?? "none worked"} />
+                <KeyValue
+                  label="Last tried"
+                  value={
+                    wiki.last_attempt
+                      ? new Date(wiki.last_attempt * 1000).toLocaleString()
+                      : "not yet"
+                  }
+                />
               </div>
             </Field>
           </PanelSectionRow>

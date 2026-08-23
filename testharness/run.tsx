@@ -101,7 +101,9 @@ Object.assign(fixtures, {
       compatibility: "✅", inputs: "DLSS, FSR3, FSR3.1/4, XeSS",
       notes: "Use [this mod](http://x) to fix it.", optipatcher: false,
       wiki_url: "https://x", detail: { "FG Inputs": "DLSSG via Streamline", "Known Issues": "Avoid FSR-FG inputs!" },
-      match_score: 1.0, list_meta: { source: "network", fetched_at: 1, error: null },
+      match_score: 1.0,
+      list_meta: { source: "cache", fetched_at: 1, error: null, stale: false,
+                   revision: "aaaaaaaaaaaa" },
     },
     plan: {
       available: true, enabled: false, game: "Cyberpunk 2077", source: "wiki entry",
@@ -180,8 +182,9 @@ Object.assign(fixtures, {
   set_wiki_entry: { ok: true },
   wiki_status: {
     url: "https://raw.githubusercontent.com/wiki/optiscaler/OptiScaler/Compatibility-List.md",
-    entry_count: 685, available: true, source: "network", fetched_at: 1787000000,
-    error: null, tls: "default",
+    entry_count: 685, available: true, source: "cache", fetched_at: 1787000000,
+    age: 3600, stale: false, revision: "aaaaaaaaaaaa", revalidating: false,
+    last_attempt: 1787000000, error: null, tls: "default",
     cache_path: "/runtime/wiki-cache/compat-list.json",
   },
   refresh_wiki: { count: 685, meta: { source: "network", fetched_at: 1, error: null } },
@@ -918,6 +921,69 @@ async function render(name: string, element: React.ReactElement) {
     fixtures.get_auto_plan = matched;
   }
 
+  // -- a refresh arriving behind the answer ---------------------------------
+  // Answers come from the cache, so they arrive even with no route to the
+  // wiki. When that cache is old the backend refreshes it behind the answer,
+  // and the plan is rebuilt only if the refresh actually brought something —
+  // the list carries a content fingerprint, so "something new" is exactly
+  // "the fingerprint changed" and an unchanged refresh redraws nothing.
+  console.log("\n=== a stale list refreshed behind the answer ===");
+  {
+    const matched = fixtures.get_auto_plan;
+    const stale = (revision: string) => ({
+      recommendation: {
+        ...matched.recommendation,
+        list_meta: { source: "cache", fetched_at: 1, error: null, stale: true, revision },
+      },
+      plan: { ...matched.plan, game: `Cyberpunk 2077 (${revision})` },
+    });
+
+    // The cached answer is served first, from a list flagged stale.
+    fixtures.get_auto_plan = stale("old-revision");
+    fixtures.wiki_status = {
+      ...fixtures.wiki_status, stale: true, revalidating: true, revision: "old-revision",
+    };
+    fixtures.get_game = { ...detail, install: { ...detail.install, installed: false } };
+    const swr = await render("GameDetail (stale list)",
+      <GameDetail gamePath="/games/Cyberpunk 2077" gameName="Cyberpunk 2077" appid="1091500"
+        status={fixtures.get_status} runningGame={null} onBack={() => {}} />);
+    console.log(`  a stale list still answers, from cache: ${
+      swr.host.textContent!.includes("old-revision")}`);
+
+    // Nothing new: the watch ends and the page is left alone.
+    fixtures.wiki_status = { ...fixtures.wiki_status, revalidating: false };
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 2600));
+    });
+    await settle();
+    console.log(`  a refresh that brought nothing redraws nothing: ${
+      swr.host.textContent!.includes("old-revision")}`);
+
+    // Something new: the fingerprint moves and the plan is rebuilt from it.
+    fixtures.get_auto_plan = stale("new-revision");
+    fixtures.wiki_status = {
+      ...fixtures.wiki_status, stale: true, revalidating: true, revision: "new-revision",
+    };
+    const fresh = await render("GameDetail (refresh lands)",
+      <GameDetail gamePath="/games/Cyberpunk 2077" gameName="Cyberpunk 2077" appid="1091500"
+        status={fixtures.get_status} runningGame={null} onBack={() => {}} />);
+    // First paint is the cached answer; the watch then sees a new fingerprint.
+    fixtures.get_auto_plan = stale("newer-still");
+    fixtures.wiki_status = { ...fixtures.wiki_status, revision: "newer-still" };
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 2600));
+    });
+    await settle();
+    console.log(`  a refresh that brought something rebuilds the plan: ${
+      fresh.host.textContent!.includes("newer-still")}`);
+
+    fixtures.get_auto_plan = matched;
+    fixtures.get_game = detail;
+    fixtures.wiki_status = {
+      ...fixtures.wiki_status, stale: false, revalidating: false, revision: "aaaaaaaaaaaa",
+    };
+  }
+
   // -- the plugin's own settings --------------------------------------------
   console.log("\n=== global settings tab ===");
   {
@@ -947,6 +1013,30 @@ async function render(name: string, element: React.ReactElement) {
       settingsText.includes("685 games on the list")}`);
     console.log(`  and offers to download it again: ${
       settingsText.includes("Download it again")}`);
+    // Available and current are different questions once answers come from
+    // cache: a list can be perfectly usable and months old, and a refresh can
+    // be failing behind it without anything breaking.
+    console.log(`  it says how old the list is: ${settingsText.includes("hours ago")}`);
+  }
+
+  {
+    const { takePendingTarget } = await import("../src/navigation");
+    takePendingTarget();
+    fixtures.wiki_status = {
+      ...fixtures.wiki_status, source: "bundled", age: 60 * 60 * 24 * 30,
+      error: "URLError: <urlopen error [Errno 101] Network is unreachable>",
+    };
+    const offlineSettings = await render("ManagerPage (offline wiki)", <ManagerPage />);
+    const offlineText = findAll(offlineSettings.host, '[data-tab="settings"]')[0].textContent!;
+    console.log(`  a Deck that never downloaded one uses the bundled copy: ${
+      offlineText.includes("bundled with the plugin")}`);
+    console.log(`  and says the refresh behind it failed, without calling it broken: ${
+      offlineText.includes("last refresh did not go through") &&
+      offlineText.includes("Network is unreachable") &&
+      offlineText.includes("685 games on the list")}`);
+    fixtures.wiki_status = {
+      ...fixtures.wiki_status, source: "cache", age: 3600, error: null,
+    };
     // It is plugin-wide, so it must not turn up in the sidebar.
     console.log(`  the quick panel does not carry it: ${
       !findAll(qp.host, "[data-tab]").some((n) => n.getAttribute("data-tab") === "settings")}`);

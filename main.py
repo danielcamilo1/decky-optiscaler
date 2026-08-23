@@ -23,6 +23,10 @@ class Plugin:
             logger=decky.logger,
         )
         decky.logger.info("payload status: %s", self.service.payload.status())
+        # Start the compatibility list refreshing now rather than when a game
+        # is first opened: it is served from cache either way, so the only
+        # thing waiting costs is how out of date the first answer is.
+        self.service.prime_wiki()
 
     async def _unload(self):
         decky.logger.info("Decky OptiScaler unloading")

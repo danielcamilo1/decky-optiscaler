@@ -26,9 +26,11 @@ OptiScaler v0.9.4 is bundled, so installing works offline and every game gets th
   OptiScaler has to sit next to the executable that creates the D3D device, so the plugin scores
   the candidates (Unreal's `Binaries/Win64`, launchers like Cyberpunk's `bin/x64`) and lets you
   override its pick.
-- **Sets the game up from the wiki.** Your game is matched against the OptiScaler
+- **Sets the game up from the wiki, online or not.** Your game is matched against the OptiScaler
   [Compatibility List](https://github.com/optiscaler/OptiScaler/wiki/Compatibility-List), with a
-  search box to pin the right entry when the name doesn't match. Setup is then a checklist:
+  search box to pin the right entry when the name doesn't match. A copy of the list ships with
+  the plugin and the last download is cached, so answers come from disk and arrive at once; the
+  list is refreshed in the background and the page updates only if something actually changed. Setup is then a checklist:
   install the DLL under the filename the entry names, write the launch options, apply the
   settings it lists. Every line says which wiki field it came from before anything is written,
   and anything the plugin couldn't place is shown to you instead of guessed at.
@@ -127,6 +129,7 @@ remembered answers are listed and taken back.
 ```sh
 pnpm install
 python3 scripts/generate_schema.py   # option metadata, from the reference INI
+python3 scripts/fetch_compat_seed.py # refresh the bundled compatibility list
 ./asi/build.sh                       # live-control ASI -> bin/ (needs zig)
 pnpm build
 python3 scripts/package.py           # -> out/Decky OptiScaler.zip

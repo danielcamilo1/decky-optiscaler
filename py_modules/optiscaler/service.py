@@ -34,8 +34,19 @@ class OptiScalerService:
         self.payload = Payload(
             self.plugin_dir / "bin" / PAYLOAD_ARCHIVE, self.runtime_dir / "payload"
         )
-        self.wiki = WikiClient(self.runtime_dir / "wiki-cache")
+        # The bundled copy is the floor: a Deck that has never reached the wiki
+        # still gets a compatibility list rather than "no entry matched" for
+        # every game it owns.
+        self.wiki = WikiClient(
+            self.runtime_dir / "wiki-cache",
+            self.plugin_dir / "defaults" / "compat-list.json",
+        )
         self._payload_lock = asyncio.Lock()
+        # Background wiki refreshes in flight, by key. Answers come from cache
+        # and the network never sits in front of one; this is what keeps the
+        # cache current behind them, single-flight so a page opened three times
+        # does not download three times.
+        self._wiki_jobs = set()
 
     # -- helpers ---------------------------------------------------------
     @staticmethod
@@ -48,6 +59,48 @@ class OptiScalerService:
                 return str(self.payload.root)
             root = await self._run(self.payload.ensure, force, self.log)
             return str(root)
+
+    # -- keeping the wiki cache current ----------------------------------
+    def _start_wiki_job(self, key, work):
+        """Run one refresh behind whatever answer was just given.
+
+        Failure is deliberately quiet here: the caller has already been served
+        from cache, and a refresh that could not happen is reported by
+        `wiki_status` rather than by interrupting something the user is doing.
+        """
+        if key in self._wiki_jobs:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._wiki_jobs.add(key)
+
+        async def run():
+            try:
+                result = await self._run(work)
+                if isinstance(result, dict) and result.get("changed"):
+                    self.log.info("compatibility list updated: %s entries",
+                                  result.get("count"))
+            except Exception:
+                self.log.exception("background wiki refresh failed (%s)", key)
+            finally:
+                self._wiki_jobs.discard(key)
+
+        loop.create_task(run())
+
+    def refresh_wiki_if_stale(self):
+        """Start a list refresh when the cached one is old enough to matter."""
+        if self.wiki.is_stale():
+            self._start_wiki_job("list", self.wiki.revalidate)
+
+    def refresh_page_if_stale(self, page):
+        if page and self.wiki.page_is_stale(page):
+            self._start_wiki_job(f"page:{page}", lambda: self.wiki.fetch_page(page))
+
+    def prime_wiki(self):
+        """Called at plugin start, so the list is current before it is asked for."""
+        self.refresh_wiki_if_stale()
 
     # -- status ----------------------------------------------------------
     async def get_status(self):
@@ -351,6 +404,7 @@ class OptiScalerService:
 
     # -- wiki search / manual selection ----------------------------------
     async def search_wiki(self, query, limit=30):
+        self.refresh_wiki_if_stale()
         return await self._run(self.wiki.search, query, limit)
 
     async def set_wiki_entry(self, game_path, entry_name):
@@ -435,21 +489,39 @@ class OptiScalerService:
 
     # -- wiki ------------------------------------------------------------
     async def get_recommendation(self, name, extra_names=None, force=False, game_path=None):
-        """Wiki recommendation, honouring a manually pinned entry if there is one."""
+        """Wiki recommendation, honouring a manually pinned entry if there is one.
+
+        Answered from the cache; anything out of date is refreshed behind the
+        answer, both the list and this game's own detail page.
+        """
+        if not force:
+            self.refresh_wiki_if_stale()
         pinned = self.settings.get_wiki_entry(game_path) if game_path else None
         if pinned:
             entry = await self._run(self.wiki.entry_by_name, pinned)
             if entry:
-                return await self._run(self.wiki.recommend_entry, entry, force)
-        return await self._run(self.wiki.recommend, name, extra_names, force)
+                result = await self._run(self.wiki.recommend_entry, entry, force)
+                if not force:
+                    self.refresh_page_if_stale(entry.get("page"))
+                return result
+        result = await self._run(self.wiki.recommend, name, extra_names, force)
+        if not force:
+            self.refresh_page_if_stale(result.get("page"))
+        return result
 
     async def refresh_wiki(self):
         entries, meta = await self._run(self.wiki.load_entries, True)
         return {"count": len(entries), "meta": meta}
 
     async def wiki_status(self, force=False):
-        """Is the compatibility list reachable, and if not, what failed?"""
-        return await self._run(self.wiki.status, force)
+        """Is the compatibility list usable, how old is it, and what last failed?"""
+        if not force:
+            self.refresh_wiki_if_stale()
+        status = await self._run(self.wiki.status, force)
+        # What the UI watches to know a background refresh is worth waiting a
+        # moment for: while this is true, the revision it holds may change.
+        status["revalidating"] = bool(self._wiki_jobs)
+        return status
 
     # -- automatic set-up ------------------------------------------------
     async def get_auto_plan(self, name, extra_names=None, force=False, game_path=None):

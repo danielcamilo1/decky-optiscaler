@@ -7,6 +7,43 @@ All notable changes to this project are documented here. The format follows
 Each release ships `Decky OptiScaler.zip`, installable through Decky Loader's
 *Install from URL* (Developer mode).
 
+## [0.0.4.4-testing] - 2026-08-23
+
+### Changed
+
+- **The compatibility list is read from cache and refreshed behind the answer.**
+  A handheld is regularly asleep, offline, or on a network that resolves and
+  does not route, and the wiki used to sit in front of every question asked of
+  it: a cache older than a day was thrown away rather than used, so each of
+  those cost a full timeout before anything appeared. Whatever is on disk is now
+  returned at once — stale or not — and the refresh runs behind it. Detail pages
+  follow the same rule; a stale one used to mean two HTTP attempts in front of
+  the answer, and the second only starts after the first has timed out.
+- **A refresh that brings something new updates what is on screen.** The list
+  carries a content fingerprint, so "something arrived" is exactly "the
+  fingerprint changed" — the game's plan is rebuilt when it does, and a refresh
+  that brought back the same list redraws nothing. The watch is bounded and
+  only runs while a refresh is actually in flight.
+- **A failed refresh cannot make things worse.** Nothing is written unless the
+  download both succeeded and parsed, so a working cache is never turned into an
+  empty one. The failure is remembered and shown next to the list it could not
+  replace, rather than replacing the list with an error.
+- Refreshes are single-flight: opening three games in a row starts one download,
+  not three. One is also started when the plugin loads, so the list is current
+  before anything asks for it.
+
+### Added
+
+- **The plugin ships a copy of the compatibility list.** A Deck that has never
+  reached the wiki now matches games against 685 entries instead of reporting
+  "no wiki entry matched this game" for every game it owns — which was
+  indistinguishable from the wiki being broken. It is only a floor: the first
+  successful fetch replaces it. `scripts/fetch_compat_seed.py` refreshes it
+  before a release.
+- **Settings says how old the list is and where it came from** — the bundled
+  copy, or a download and when — and, when a refresh is failing behind a list
+  that still works, says that without calling the list broken.
+
 ## [0.0.4.3-testing] - 2026-08-23
 
 ### Fixed

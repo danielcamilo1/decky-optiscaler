@@ -152,8 +152,17 @@ export interface WikiStatus {
   url: string;
   entry_count: number;
   available: boolean;
+  /** "cache" (last good fetch), "bundled" (shipped with the plugin), or "none". */
   source: string | null;
   fetched_at: number | null;
+  /** Seconds since it was fetched, or null when there is no list at all. */
+  age: number | null;
+  stale: boolean;
+  /** Content fingerprint; changes when a background refresh brought something new. */
+  revision: string;
+  /** True while a refresh is running behind the answer already given. */
+  revalidating: boolean;
+  last_attempt: number | null;
   /** The failure verbatim — the sentence that says which problem this is. */
   error: string | null;
   /** Which CA source the last successful fetch used. */
@@ -177,6 +186,8 @@ export interface Recommendation {
   near_misses: { name: string; page: string | null; score: number }[];
   manual?: boolean;
   game: string | null;
+  /** The wiki detail page behind this answer, when there is one. */
+  page?: string | null;
   filename: string;
   filename_source: string;
   alternatives: string[];
@@ -187,7 +198,15 @@ export interface Recommendation {
   wiki_url: string | null;
   detail: Record<string, string>;
   match_score: number | null;
-  list_meta: { source: string; fetched_at: number | null; error: string | null };
+  list_meta: {
+    source: string;
+    fetched_at: number | null;
+    error: string | null;
+    /** Whether a background refresh is worth waiting a moment for. */
+    stale?: boolean;
+    /** Content fingerprint: when this changes, the list behind the answer did. */
+    revision?: string;
+  };
 }
 
 /** One INI key the wiki asked for, with where in the entry it was stated. */
