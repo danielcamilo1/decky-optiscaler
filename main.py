@@ -74,8 +74,12 @@ class Plugin:
     async def import_fsr4_files(self, target_dir: str, source_dir: str) -> dict:
         return await self.service.import_fsr4_files(target_dir, source_dir)
 
-    async def record_launch_options(self, target_dir: str, options: str = "") -> dict:
-        return await self.service.record_launch_options(target_dir, options)
+    async def get_launch_options(self, appid: str) -> dict:
+        return await self.service.get_launch_options(appid)
+
+    async def record_launch_options(self, target_dir: str, options: str = None,
+                                    appid: str = None) -> dict:
+        return await self.service.record_launch_options(target_dir, options, appid)
 
     async def get_pref(self, key: str, default=None) -> dict:
         return await self.service.get_pref(key, default)

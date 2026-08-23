@@ -512,6 +512,13 @@ async function render(name: string, element: React.ReactElement) {
     manualText.includes("Live in-game control")}`);
   console.log(`  the launch options are spelled out there: ${
     manualText.includes("WINEDLLOVERRIDES")}`);
+  // "The plugin cannot read them" and "they are empty" look identical from the
+  // outside, and telling them apart took a source-code read the last time it
+  // mattered. Both, and what removing would put back, are on the page now.
+  console.log(`  and what Steam is actually passing is stated: ${
+    manualText.includes("Steam is passing") && manualText.includes("Steam would not say")}`);
+  console.log(`  next to what removing would put back: ${
+    manualText.includes("Before the install") && manualText.includes("gamemoderun %command%")}`);
   console.log(`  legacy ini warning shown: ${manualText.includes("FGType")}`);
   console.log(`  backup folder mentioned: ${
     manualText.includes("decky_optiscaler_backup_files")}`);
@@ -742,11 +749,15 @@ async function render(name: string, element: React.ReactElement) {
     console.log(`  leaving them alone is always on offer, and changes nothing: ${
       noRecord[noRecord.length - 1].action === "keep" &&
       noRecord[noRecord.length - 1].value === null}`);
-    // Steam will not report launch options on every client build. With nothing
-    // recorded either, nothing here is known to be ours, so nothing is offered.
-    console.log(`  an unreadable field with no record is left alone entirely: ${
-      lo.launchChoices({ current: null, recorded: null, filename: "dxgi.dll" })
-        .map((c) => c.action).join(",") === "keep"}`);
+    // Steam will not report launch options on every client build, and leaning
+    // on that one getter is what made the first version of this dialog inert:
+    // it offered nothing, so removing OptiScaler left its own override behind.
+    // Clearing is still offered — last, and never as the default.
+    const blind = lo.launchChoices({ current: null, recorded: null, filename: "dxgi.dll" });
+    console.log(`  an unreadable field can still be cleared, as a last resort: ${
+      blind.map((c) => c.action).join(",") === "keep,clear" && blind[1].value === ""}`);
+    console.log(`  and it says it is emptying the field, not pruning it: ${
+      blind[1].description.includes("would not report")}`);
     console.log(`  but a record still answers it: ${
       lo.launchChoices({ current: null, recorded: "mangohud %command%", filename: "dxgi.dll" })[0]
         .action === "restore"}`);

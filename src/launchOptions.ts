@@ -20,7 +20,7 @@
  *   the override this plugin recognises is removed; anything else is left, on
  *   the grounds that it is not ours to guess about.
  */
-import { recordLaunchOptions } from "./api";
+import { getLaunchOptions, recordLaunchOptions } from "./api";
 import { readLaunchOptions } from "./hooks/useRunningGame";
 import type { LaunchRecord } from "./types";
 
@@ -82,11 +82,16 @@ export function stripOverride(options: string, filename: string): string {
  * What the user can be offered when OptiScaler is removed, best answer first.
  *
  * "Put back what was there" is only offered when there was something — which is
- * exactly the condition the question is worth asking under. Clearing is only
- * offered when the result is actually known: either the record says the game
- * had no launch options at all, or Steam is readable and the override we
- * installed is visibly in it. Neither being true means nothing here is ours to
- * touch, so the only answer left is to leave them alone.
+ * exactly the condition the question is worth asking under. Clearing is offered
+ * whenever the result is known: the record says the game had no launch options
+ * at all, or the override we installed is visibly in what Steam reports.
+ *
+ * When neither is true, nothing here is known to be ours — and the honest
+ * answer used to be to offer nothing, which is how a client build with no way
+ * to read launch options turned this whole feature into a dialog that did
+ * nothing. Clearing is offered even then, last and never as the default, and
+ * says plainly that it empties the field rather than pruning it. Doing nothing
+ * has to be a choice the user makes, not one made for them by a missing API.
  *
  * Two choices that would produce the same launch options are collapsed into
  * one, because a dialog offering the same outcome twice is one nobody can
@@ -94,48 +99,63 @@ export function stripOverride(options: string, filename: string): string {
  */
 export function launchChoices(state: LaunchState): LaunchChoice[] {
   const { current, recorded, filename } = state;
-  const choices: LaunchChoice[] = [];
+  const restore: LaunchChoice[] =
+    recorded !== null && recorded.trim() !== "" && recorded !== current
+      ? [{
+          action: "restore",
+          label: "Put back what was there before",
+          description: recorded,
+          value: recorded,
+        }]
+      : [];
 
-  if (recorded !== null && recorded.trim() !== "" && recorded !== current) {
-    choices.push({
-      action: "restore",
-      label: "Put back what was there before",
-      description: recorded,
-      value: recorded,
-    });
-  }
-
-  const cleared =
-    recorded === ""
-      ? ""
-      : current !== null && hasOverride(current, filename)
-        ? stripOverride(current, filename)
-        : null;
-  // A choice that would write back what Steam already has is not a choice.
-  if (cleared !== null && cleared !== current &&
-      !choices.some((choice) => choice.value === cleared)) {
-    choices.push({
-      action: "clear",
-      label: cleared === "" ? "Clear the launch options" : "Remove only the OptiScaler override",
-      description:
-        cleared === ""
-          ? recorded === ""
-            ? "This game had none before OptiScaler was installed."
-            : "Leaves the launch options empty."
-          : `Leaves: ${cleared}`,
-      value: cleared,
-    });
-  }
-
-  choices.push({
+  const keep: LaunchChoice = {
     action: "keep",
     label: "Leave them as they are",
     description: current
       ? `Steam keeps passing: ${current}`
       : "Nothing in Steam is changed.",
     value: null,
-  });
-  return choices;
+  };
+
+  // What removing our half would leave behind, when that is knowable.
+  const known =
+    recorded === ""
+      ? ""
+      : current !== null && hasOverride(current, filename)
+        ? stripOverride(current, filename)
+        : null;
+  const blind = known === null && current === null;
+
+  if (known === null && !blind) return [...restore, keep];
+
+  const cleared = known ?? "";
+  const clear: LaunchChoice = {
+    action: "clear",
+    label:
+      blind
+        ? "Clear the launch options"
+        : cleared === ""
+          ? "Clear the launch options"
+          : "Remove only the OptiScaler override",
+    description: blind
+      ? `Steam would not report this game's launch options, so this empties the field
+         completely — including anything you added yourself.`
+      : cleared === ""
+        ? recorded === ""
+          ? "This game had none before OptiScaler was installed."
+          : "Leaves the launch options empty."
+        : `Leaves: ${cleared}`,
+    value: cleared,
+  };
+
+  // A choice that would write back what Steam already has, or that lands on
+  // the same string as one already on offer, is not a choice.
+  const duplicate =
+    cleared === current || restore.some((choice) => choice.value === cleared);
+  if (duplicate) return [...restore, keep];
+  // Blind clearing is a guess, so it never leads — the safe answer does.
+  return blind ? [...restore, keep, clear] : [...restore, clear, keep];
 }
 
 /**
@@ -164,12 +184,37 @@ export function recordedValue(record: LaunchRecord | undefined): string | null {
 }
 
 /**
+ * What Steam passes this game right now, from whichever source can say.
+ *
+ * The client is asked first because it is live; Steam only flushes its config
+ * file periodically, so a value written seconds ago may not be in it yet. But
+ * the client getter is missing from some builds entirely, and on those this
+ * was the single point of failure that made the whole feature inert — the
+ * plugin could see neither its own override nor anything it had replaced.
+ */
+export async function currentLaunchOptions(appid: string | null): Promise<string | null> {
+  if (!appid) return null;
+  const fromClient = await readLaunchOptions(Number(appid));
+  if (fromClient !== null) return fromClient;
+  try {
+    const found = await getLaunchOptions(appid);
+    return found.found ? found.value : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Keep this game's launch options as they were, before we write our own.
  *
  * Called after a successful install and before the override is set, which is
  * the only moment Steam still holds the answer. Write-once in the backend, so
  * calling it again — a reinstall, or the checklist's launch-options toggle
  * being switched back on — cannot overwrite the original with our own override.
+ *
+ * What the client reads is passed along rather than looked up again in the
+ * backend, because it is the fresher of the two; `null` tells the backend to
+ * fall back to Steam's config file instead of recording a value nobody read.
  */
 export async function recordPreviousLaunchOptions(
   appid: string | null,
@@ -177,11 +222,8 @@ export async function recordPreviousLaunchOptions(
 ): Promise<void> {
   if (!appid) return;
   const current = await readLaunchOptions(Number(appid));
-  // Null means the client build will not answer. Recording "" then would be a
-  // lie the removal dialog would later act on by clearing a field it never read.
-  if (current === null) return;
   try {
-    await recordLaunchOptions(targetDir, current);
+    await recordLaunchOptions(targetDir, current, appid);
   } catch {
     /* the record is a convenience; failing to write it must not fail an install */
   }

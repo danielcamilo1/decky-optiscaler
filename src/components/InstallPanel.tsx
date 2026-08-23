@@ -12,7 +12,11 @@ import { toaster } from "@decky/api";
 import { useEffect, useState } from "react";
 import { install, setGameTarget, setWikiEntry } from "../api";
 import { setLaunchOptions } from "../hooks/useRunningGame";
-import { launchOptionFor, recordPreviousLaunchOptions } from "../launchOptions";
+import {
+  currentLaunchOptions,
+  launchOptionFor,
+  recordPreviousLaunchOptions,
+} from "../launchOptions";
 import { PREF_INSTALL_LAUNCH, isRemembering, recall, remember } from "../prefs";
 import { useAutoPlan } from "../hooks/useAutoPlan";
 import type { GameDetail, LiveStatus, PayloadStatus } from "../types";
@@ -94,6 +98,16 @@ export function InstallPanel({ detail, status, appid, live, onChanged }: Props) 
   const [optipatcher, setOptipatcher] = useState(false);
   const [busy, setBusy] = useState(false);
   const [searching, setSearching] = useState(false);
+  /**
+   * What Steam is passing right now, or null when no source could say.
+   *
+   * Stated on the page rather than only used: when the launch options are the
+   * half of an install that is not working, "the plugin cannot read them" and
+   * "they are empty" look identical from the outside, and telling them apart
+   * took a source-code read the last time it mattered.
+   */
+  const [launchNow, setLaunchNow] = useState<string | null>(null);
+  const [launchRead, setLaunchRead] = useState(false);
   const proxies = status?.proxy_filenames ?? ["dxgi.dll"];
   const {
     recommendation,
@@ -109,6 +123,14 @@ export function InstallPanel({ detail, status, appid, live, onChanged }: Props) 
   useEffect(() => {
     if (recommendation && !detail.install.installed) setFilename(recommendation.filename);
   }, [recommendation, detail.install.installed]);
+
+  useEffect(() => {
+    void (async () => {
+      const value = await currentLaunchOptions(appid);
+      setLaunchNow(value);
+      setLaunchRead(true);
+    })();
+  }, [appid, detail.install.installed]);
 
   // An .asi build is loaded by an ASI loader, so Proton has nothing to shadow.
   const needsNoOverride = filename.toLowerCase().endsWith(".asi");
@@ -166,6 +188,8 @@ export function InstallPanel({ detail, status, appid, live, onChanged }: Props) 
   const applyLaunchOptions = () => {
     if (!appid) return;
     if (setLaunchOptions(Number(appid), launchOption)) {
+      setLaunchNow(launchOption);
+      setLaunchRead(true);
       toaster.toast({ title: "Launch options set", body: launchOption });
     } else {
       toaster.toast({ title: "Could not set launch options", body: "Set them manually in Steam." });
@@ -423,6 +447,44 @@ export function InstallPanel({ detail, status, appid, live, onChanged }: Props) 
             )}
           </Notice>
         </PanelSectionRow>
+        {appid ? (
+          <PanelSectionRow>
+            <Focusable
+              focusWithinClassName="gpfocuswithin"
+              style={{ padding: "2px 0", width: "100%" }}
+            >
+              <KeyValue
+                label="Steam is passing"
+                value={
+                  !launchRead ? (
+                    "reading…"
+                  ) : launchNow === null ? (
+                    "Steam would not say"
+                  ) : launchNow === "" ? (
+                    "nothing"
+                  ) : (
+                    <Mono>{launchNow}</Mono>
+                  )
+                }
+              />
+              {/* What removing OptiScaler would be able to put back. Absent on
+                  installs made before this was recorded, and on games where no
+                  source could read the field at the time. */}
+              <KeyValue
+                label="Before the install"
+                value={
+                  !detail.install.installed
+                    ? "—"
+                    : detail.install.launch_record?.recorded
+                      ? detail.install.launch_record.value
+                        ? <Mono>{detail.install.launch_record.value}</Mono>
+                        : "nothing"
+                      : "not recorded"
+                }
+              />
+            </Focusable>
+          </PanelSectionRow>
+        ) : null}
         {appid && !needsNoOverride ? (
           <PanelSectionRow>
             <ButtonItem layout="below" disabled={busy} onClick={applyLaunchOptions}>

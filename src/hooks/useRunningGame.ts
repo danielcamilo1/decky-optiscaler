@@ -97,23 +97,43 @@ export function restartGame(game: RunningGame) {
 /**
  * What Steam currently passes this game, or null when it will not say.
  *
- * `GetAppLaunchOptions` is undocumented and not present in every client build,
- * so "cannot tell" is a real answer the setup checklist has to render — it says
- * so rather than showing an unticked step for a game that is set up correctly.
+ * `GetAppLaunchOptions` is undocumented and **absent from some client builds
+ * entirely** — which is not a rare edge to shrug at. On a Deck where it is
+ * missing, every launch-options question the plugin asks answers itself with
+ * "cannot tell", and every action it would take on the answer turns into
+ * nothing at all: the install records nothing to put back, and removing
+ * OptiScaler leaves its own override behind because it cannot see it. So the
+ * client is asked two ways before giving up, and `launchOptions.ts` asks the
+ * backend — which reads Steam's own config file — when both come back empty.
  */
 export async function readLaunchOptions(appid: number): Promise<string | null> {
+  // Neither of these is part of the Apps interface @decky/ui declares; both are
+  // read through a cast, the same way the library-menu patch reaches Steam's
+  // own internals.
   try {
-    // Not part of the Apps interface @decky/ui declares — read through a cast
-    // the same way the library-menu patch reaches Steam's own internals.
     const apps = SteamClient?.Apps as unknown as
       | { GetAppLaunchOptions?: (id: number) => Promise<string> }
       | undefined;
-    if (!apps?.GetAppLaunchOptions) return null;
-    const value = await apps.GetAppLaunchOptions(appid);
-    return typeof value === "string" ? value : null;
+    if (apps?.GetAppLaunchOptions) {
+      const value = await apps.GetAppLaunchOptions(appid);
+      if (typeof value === "string") return value;
+    }
   } catch {
-    return null;
+    /* fall through to the app details store */
   }
+  try {
+    // The store the Steam library's own Properties dialog reads its launch
+    // options box out of, which is present on builds that have no getter.
+    const details = (
+      globalThis as unknown as {
+        appDetailsStore?: { GetAppDetails?: (id: number) => { strLaunchOptions?: string } | null };
+      }
+    ).appDetailsStore?.GetAppDetails?.(appid);
+    if (details && typeof details.strLaunchOptions === "string") return details.strLaunchOptions;
+  } catch {
+    /* the store is not there either; the backend is asked next */
+  }
+  return null;
 }
 
 /**

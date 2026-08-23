@@ -19,8 +19,9 @@ import {
   setGameTarget,
   uninstall,
 } from "../api";
-import { readLaunchOptions, setLaunchOptions } from "../hooks/useRunningGame";
+import { setLaunchOptions } from "../hooks/useRunningGame";
 import {
+  currentLaunchOptions,
   hasOverride,
   launchChoices,
   launchOptionFor,
@@ -186,7 +187,7 @@ export function SetupChecklist({
       setLaunchReadable(false);
       return;
     }
-    const value = await readLaunchOptions(Number(appid));
+    const value = await currentLaunchOptions(appid);
     setLaunchNow(value);
     setLaunchReadable(value !== null);
   }, [appid]);
@@ -215,6 +216,11 @@ export function SetupChecklist({
     // Write-once in the backend, so the install's record wins if there is one.
     if (value && installed) await recordPreviousLaunchOptions(appid, detail.install.path);
     if (setLaunchOptions(Number(appid), value)) {
+      // Shown from what was written rather than read back: Steam flushes its
+      // config file on its own schedule, so a read landing in that window
+      // reports the old value and the row appears not to have taken.
+      setLaunchNow(value);
+      setLaunchReadable(true);
       void refreshLaunch();
       toaster.toast({
         title: value ? "Launch options set" : "Launch options cleared",
@@ -306,7 +312,19 @@ export function SetupChecklist({
         toaster.toast({ title: "OptiScaler removed", body: detail.name });
         const chosen = launchChoices(launchState).find((choice) => choice.action === action);
         if (appid && chosen && chosen.value !== null) {
-          setLaunchOptions(Number(appid), chosen.value);
+          const wrote = setLaunchOptions(Number(appid), chosen.value);
+          toaster.toast({
+            title: wrote
+              ? chosen.value === ""
+                ? "Launch options cleared"
+                : "Launch options restored"
+              : "Could not reach Steam",
+            body: wrote ? chosen.value || detail.name : "Change the launch options manually.",
+          });
+          if (wrote) {
+            setLaunchNow(chosen.value);
+            setLaunchReadable(true);
+          }
         }
         await onChanged();
         await refreshLaunch();

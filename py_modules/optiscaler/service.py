@@ -381,15 +381,39 @@ class OptiScalerService:
             self.log.exception("FSR4 import failed for %s", target_dir)
             return {"ok": False, "error": str(exc)}
 
-    async def record_launch_options(self, target_dir, options):
+    async def get_launch_options(self, appid):
+        """What Steam passes a game, read out of its own config on disk.
+
+        The frontend asks the client first, because that is live and this file
+        is only flushed periodically. But `GetAppLaunchOptions` is missing from
+        some client builds entirely, and on those the plugin could previously
+        neither report the launch options nor undo them — so this is the answer
+        of last resort rather than a nicety.
+        """
+        return await self._run(steam.launch_options, self.home, appid)
+
+    async def record_launch_options(self, target_dir, options=None, appid=None):
         """Keep this game's launch options as they were before the install.
 
-        Steam is only reachable from the frontend, so the value arrives from
-        there rather than being read here. It is written once and next to the
-        install it belongs to, beside the manifest and the backup folder, so
-        removing OptiScaler can offer to put back exactly what was there.
+        ``options`` is what the frontend read from the Steam client, which is
+        the freshest source; ``None`` means it could not read them, and Steam's
+        own config file is then asked instead. Recording nothing is the last
+        resort, because a missing record is what makes removing OptiScaler
+        unable to put anything back.
+
+        Written once, next to the install it belongs to, beside the manifest
+        and the backup folder.
         """
         try:
+            if options is None and appid is not None:
+                found = await self._run(steam.launch_options, self.home, appid)
+                if not found["found"]:
+                    return {"ok": False, "error": "Steam would not report the launch options",
+                            "recorded": False, "value": "", "written": False}
+                options = found["value"]
+            if options is None:
+                return {"ok": False, "error": "no launch options to record",
+                        "recorded": False, "value": "", "written": False}
             return {"ok": True, **await self._run(
                 installer.record_launch_options, target_dir, options, self.log
             )}

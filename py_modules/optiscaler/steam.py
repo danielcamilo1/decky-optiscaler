@@ -57,6 +57,111 @@ def library_folders(home):
     return libraries
 
 
+# --- Steam's own record of launch options -----------------------------------
+#
+# `SteamClient.Apps.GetAppLaunchOptions` is undocumented and simply absent from
+# some client builds, which is not a rare edge: on a Deck where it is missing,
+# every launch-options question the plugin asks answers itself with "cannot
+# tell" and every action it would take turns into nothing at all. Steam writes
+# the same value to disk, so it is read from there when the client will not say.
+#
+# Tokens, in order: a quoted string, a brace, or a comment to skip. Whitespace
+# between them needs no rule, because `finditer` walks past whatever does not
+# match.
+_VDF_TOKEN = re.compile(r'"((?:[^"\\]|\\.)*)"|([{}])|//[^\n]*')
+
+
+def parse_vdf(text):
+    """Valve's KeyValues text as nested dicts, with keys folded to lower case.
+
+    Case folding is not cosmetic: the path to the launch options is spelled
+    `Software/Valve/Steam/apps` in some client versions and `software/valve/
+    steam/apps` in others, and a lookup that guesses wrong reads as "this user
+    has no games".
+    """
+    root = {}
+    stack = [root]
+    key = None
+    for match in _VDF_TOKEN.finditer(text):
+        string, brace = match.group(1), match.group(2)
+        if string is not None:
+            value = string.replace('\\"', '"').replace("\\\\", "\\")
+            if key is None:
+                key = value
+            else:
+                stack[-1][key.lower()] = value
+                key = None
+        elif brace == "{":
+            child = {}
+            stack[-1][(key or "").lower()] = child
+            stack.append(child)
+            key = None
+        elif brace == "}":
+            if len(stack) > 1:
+                stack.pop()
+            key = None
+    return root
+
+
+def _local_configs(home):
+    """Every Steam account's localconfig.vdf on this machine, newest first."""
+    found = []
+    for root in steam_roots(home):
+        userdata = root / "userdata"
+        if not userdata.is_dir():
+            continue
+        try:
+            entries = sorted(userdata.iterdir())
+        except OSError:
+            continue
+        for entry in entries:
+            config = entry / "config" / "localconfig.vdf"
+            if not config.is_file():
+                continue
+            try:
+                found.append((config.stat().st_mtime, config))
+            except OSError:
+                continue
+    found.sort(key=lambda pair: -pair[0])
+    return [config for _, config in found]
+
+
+def launch_options(home, appid):
+    """What Steam passes this game, read out of its own config.
+
+    ``found`` is the part that matters: an app with no entry in a file we could
+    read genuinely has no launch options, and that is a different answer from
+    not being able to read anything, which is the one case where this plugin
+    must not touch the field. The account that actually has an entry for the
+    app wins over the merely most recent one, because a machine with two Steam
+    logins has two of these files and only one of them owns the game.
+    """
+    appid = str(appid)
+    fallback = None
+    for config in _local_configs(home):
+        try:
+            data = parse_vdf(config.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            continue
+        apps = data
+        for step in ("userlocalconfigstore", "software", "valve", "steam", "apps"):
+            apps = apps.get(step) if isinstance(apps, dict) else None
+            if apps is None:
+                break
+        if not isinstance(apps, dict):
+            continue
+        entry = apps.get(appid)
+        if isinstance(entry, dict) and isinstance(entry.get("launchoptions"), str):
+            return {"found": True, "value": entry["launchoptions"], "source": str(config)}
+        if fallback is None:
+            fallback = str(config)
+    if fallback:
+        # The file was readable and this game is not in it: Steam is passing
+        # nothing, which is an answer rather than a gap.
+        return {"found": True, "value": "", "source": fallback}
+    return {"found": False, "value": "", "source": None}
+
+
 def _parse_appmanifest(path):
     data = dict(_read_kv(path))
     appid = data.get("appid")

@@ -7,6 +7,43 @@ All notable changes to this project are documented here. The format follows
 Each release ships `Decky OptiScaler.zip`, installable through Decky Loader's
 *Install from URL* (Developer mode).
 
+## [0.0.4.2-testing] - 2026-08-23
+
+Fixes 0.0.4.1-testing, which did not work on every Steam client.
+
+### Fixed
+
+- **The launch options are read from Steam's own config when the client will
+  not report them.** `SteamClient.Apps.GetAppLaunchOptions` is undocumented and
+  simply absent from some client builds, and 0.0.4.1-testing leaned on it alone.
+  Where it is missing, every launch-options question answered itself with
+  "cannot tell" and every action taken on that answer became nothing at all:
+  the install recorded nothing to put back, and removing OptiScaler left its own
+  override in place because it could not see it. That is also why the original
+  bug existed — the 0.0.4 check that decided whether to clear the field needed
+  the same read. Three sources are now tried in order: the client getter, the
+  app details store the library's own Properties dialog uses, and finally
+  `localconfig.vdf`, which is Steam's own record on disk and depends on no
+  undocumented method existing.
+- **Removing can always act, even when nothing can be read.** Offering no
+  choices was the honest answer to knowing nothing, and it is how the dialog
+  became inert. Clearing the field is now offered even then — last, never as
+  the default, and saying plainly that it empties the field rather than pruning
+  it. Doing nothing has to be a choice the user makes, not one made for them by
+  a missing API.
+- **What was written is shown, rather than read straight back.** Steam flushes
+  its config on its own schedule, so a read landing in that window reported the
+  old value and the row looked as though the change had not taken.
+- **Removing says what it did to the launch options**, instead of changing them
+  silently or failing silently.
+
+### Added
+
+- **The manual setup page states what Steam is passing and what was recorded.**
+  "The plugin cannot read them" and "they are empty" look identical from the
+  outside, and telling the two apart took a source-code read the last time it
+  mattered.
+
 ## [0.0.4.1-testing] - 2026-08-23
 
 A testing build. Same OptiScaler release (0.9.4) as 0.0.4.

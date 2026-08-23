@@ -198,6 +198,12 @@ async def run():
         # but they are the other half of an install and have to be recoverable.
         recorded = await service.record_launch_options(str(target), "gamemoderun %command%")
         check("previous launch options recorded", recorded["ok"] and recorded["written"])
+        # The client getter is absent from some builds; the frontend then hands
+        # over None and Steam's own config has to answer instead. Recording
+        # nothing is what made the removal dialog inert on those Decks.
+        blind = await service.record_launch_options(str(root / "nowhere"), None, "1091500")
+        check("a frontend that could not read is refused, not recorded as empty",
+              not blind["ok"] and not blind["recorded"], blind.get("error"))
         again = await service.record_launch_options(
             str(target), 'WINEDLLOVERRIDES="dxgi=n,b" %command%')
         check("recording again keeps the original, not our own override",
@@ -877,6 +883,69 @@ def check_launch_record():
         shutil.rmtree(root, ignore_errors=True)
 
 
+def check_launch_options_read():
+    """Steam's own config is the answer when the client will not give one.
+
+    `SteamClient.Apps.GetAppLaunchOptions` is missing from some client builds
+    outright, and the first version of the removal dialog leaned on it alone:
+    on those Decks it recorded nothing at install time and offered nothing at
+    removal, so OptiScaler's own override was left behind and the whole feature
+    looked like it had never shipped. This is the source that does not depend
+    on an undocumented method existing.
+    """
+    import tempfile
+    from optiscaler import steam as steam_mod
+
+    print("\nLaunch options from Steam's config")
+    root = Path(tempfile.mkdtemp(prefix="optiscaler-localconfig-"))
+    try:
+        home = root / "home"
+        config = home / ".local" / "share" / "Steam" / "userdata" / "12345" / "config"
+        config.mkdir(parents=True)
+        (home / ".local" / "share" / "Steam" / "steamapps").mkdir(parents=True)
+        (home / ".steam").mkdir(parents=True, exist_ok=True)
+        os.symlink(home / ".local" / "share" / "Steam", home / ".steam" / "steam")
+
+        check("nothing readable is not the same as nothing set",
+              steam_mod.launch_options(home, "1091500") == {"found": False, "value": "",
+                                                            "source": None})
+
+        (config / "localconfig.vdf").write_text(
+            '"UserLocalConfigStore"\n{\n\t"Software"\n\t{\n\t\t"Valve"\n\t\t{\n'
+            '\t\t\t"Steam"\n\t\t\t{\n\t\t\t\t"apps"\n\t\t\t\t{\n'
+            '\t\t\t\t\t"1091500"\n\t\t\t\t\t{\n'
+            '\t\t\t\t\t\t"LaunchOptions"\t\t"mangohud %command% -dx12"\n'
+            '\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t}\n\t\t}\n\t}\n}\n'
+        )
+        found = steam_mod.launch_options(home, "1091500")
+        check("the launch options are read out of localconfig.vdf",
+              found["found"] and found["value"] == "mangohud %command% -dx12", found["value"])
+        absent = steam_mod.launch_options(home, "2358720")
+        check("a game with no entry has none, which is an answer not a gap",
+              absent["found"] and absent["value"] == "", absent)
+
+        # Older and newer clients disagree on the capitalisation of the path,
+        # and a lookup that guesses wrong reads as "this user has no games".
+        (config / "localconfig.vdf").write_text(
+            '"userlocalconfigstore" { "software" { "valve" { "steam" { "apps" {'
+            ' "1091500" { "launchoptions" "PROTON_LOG=1 %command%" } } } } } }'
+        )
+        check("the path is matched whatever its capitalisation",
+              steam_mod.launch_options(home, "1091500")["value"] == "PROTON_LOG=1 %command%")
+
+        # An override with quotes in it is the exact case this has to survive.
+        (config / "localconfig.vdf").write_text(
+            '"UserLocalConfigStore" { "Software" { "Valve" { "Steam" { "apps" { "1091500" {'
+            ' "LaunchOptions" "WINEDLLOVERRIDES=\\"dxgi=n,b\\" %command%" } } } } } }'
+        )
+        check("an escaped quote in the value survives the round trip",
+              steam_mod.launch_options(home, "1091500")["value"]
+              == 'WINEDLLOVERRIDES="dxgi=n,b" %command%',
+              steam_mod.launch_options(home, "1091500")["value"])
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def check_wiki_tls():
     """TLS failures must fall through to the next CA source, not abort.
 
@@ -1547,6 +1616,7 @@ def main():
     check_live_diagnostics()
     check_remembered_choices()
     check_launch_record()
+    check_launch_options_read()
     check_asi_reporting()
     check_asi_staleness()
     check_reported_folder()
