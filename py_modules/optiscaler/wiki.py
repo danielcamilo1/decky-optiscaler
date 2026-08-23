@@ -367,6 +367,12 @@ class WikiClient:
         # that the list behind it is old and why.
         self.last_error = None
         self.last_attempt = None
+        # Bumped whenever a background refresh actually brought something new —
+        # a changed list, or a detail page that had not been seen. It rides in
+        # the revision the UI watches, so a page landing behind an answer wakes
+        # the same redraw a changed list does. A refresh that brought nothing
+        # must not move it, or every watch would redraw for nothing.
+        self.data_version = 0
 
     # -- the cache -------------------------------------------------------
     @staticmethod
@@ -408,7 +414,7 @@ class WikiClient:
 
     def revision(self):
         cached = self.cached()
-        return fingerprint(cached["entries"]) if cached else ""
+        return f"{fingerprint(cached['entries'])}.{self.data_version}" if cached else ""
 
     def _meta(self, cached):
         return {
@@ -416,7 +422,7 @@ class WikiClient:
             "fetched_at": cached["fetched_at"] if cached else None,
             "error": self.last_error,
             "stale": self.is_stale(),
-            "revision": fingerprint(cached["entries"]) if cached else "",
+            "revision": self.revision(),
             "tls": ssl_context_kind(),
         }
 
@@ -428,7 +434,6 @@ class WikiClient:
         is the only way this could make things worse than not refreshing.
         """
         self.last_attempt = time.time()
-        before = self.revision()
         try:
             markdown = _http_get(f"{WIKI_RAW_BASE}/{COMPAT_LIST_PAGE}")
             entries = parse_compat_list(markdown)
@@ -440,6 +445,7 @@ class WikiClient:
             return {"ok": False, "changed": False, "count": 0, "error": self.last_error}
 
         after = fingerprint(entries)
+        changed = after != fingerprint((self.cached() or {}).get("entries") or [])
         try:
             self.list_cache.write_text(
                 json.dumps({"fetched_at": time.time(), "entries": entries}), encoding="utf-8"
@@ -449,8 +455,10 @@ class WikiClient:
             return {"ok": False, "changed": False, "count": len(entries),
                     "error": self.last_error}
         self.last_error = None
-        return {"ok": True, "changed": after != before, "count": len(entries),
-                "revision": after, "error": None}
+        if changed:
+            self.data_version += 1
+        return {"ok": True, "changed": changed, "count": len(entries),
+                "revision": self.revision(), "error": None}
 
     def status(self, force=False):
         """Whether the compatibility list is usable, and how old it is.
@@ -528,6 +536,7 @@ class WikiClient:
 
     def fetch_page(self, page):
         """Download one detail page and cache it. Blocking; run off the loop."""
+        previous = self.cached_page(page)
         for suffix in (".asciidoc", ".md"):
             try:
                 text = _http_get(f"{WIKI_RAW_BASE}/{page}{suffix}")
@@ -537,21 +546,33 @@ class WikiClient:
                 self._page_file(page).write_text(text, encoding="utf-8")
             except OSError:
                 pass
+            if text != previous:
+                self.data_version += 1
             return text
+        # Nothing downloaded. Anything already cached stays exactly as it was;
+        # the page is simply still stale and will be tried again.
         return None
 
-    def load_page(self, page, force=False):
+    def load_page(self, page, force=False, allow_fetch=True):
         """A wiki detail page, from cache first for the same reason the list is.
 
-        A stale page used to mean two HTTP attempts in front of the answer, and
-        the second one only happens after the first has timed out — so on a
-        Deck with no route to the wiki, opening a game waited out both.
+        `allow_fetch=False` is what the recommendation paths use, and it is the
+        whole point: a page that has never been downloaded used to be fetched
+        **in front of the answer**, two URLs deep, the second attempt starting
+        only once the first had timed out. On a Deck whose route to the wiki is
+        bad that is a lookup that never returns — the setup tab sat on
+        "Checking the OptiScaler wiki…" for ever, for exactly the games whose
+        page had not happened to be cached already.
+
+        The list row alone is enough to answer with; the page makes the answer
+        better and arrives behind it.
         """
-        if not force:
-            cached = self.cached_page(page)
-            if cached is not None:
-                return cached
-        return self.fetch_page(page) or self.cached_page(page)
+        cached = self.cached_page(page)
+        if cached is not None and not force:
+            return cached
+        if not allow_fetch:
+            return cached
+        return self.fetch_page(page) or cached
 
     # -- matching --------------------------------------------------------
     @staticmethod
@@ -692,12 +713,15 @@ class WikiClient:
                 else f"{WIKI_HTML_BASE}/Compatibility-List"
             ),
             "detail": {},
+            # True when this game has a wiki page that is not cached yet: the
+            # answer below is the list row, and a better one is on its way.
+            "detail_pending": bool(entry.get("page")) and self.cached_page(entry["page"]) is None,
             "list_meta": {"source": "manual", "fetched_at": None, "error": None},
             "match_score": 1.0,
             "manual": True,
         }
         if entry.get("page"):
-            asciidoc = self.load_page(entry["page"], force=force)
+            asciidoc = self.load_page(entry["page"], force=force, allow_fetch=force)
             if asciidoc:
                 fields = parse_detail_page(asciidoc)
                 result["detail"] = fields
@@ -733,6 +757,7 @@ class WikiClient:
             "optipatcher": False,
             "wiki_url": None,
             "detail": {},
+            "detail_pending": False,
             "list_meta": meta,
             "match_score": None,
         }
@@ -762,9 +787,13 @@ class WikiClient:
             ),
         )
 
+        result["detail_pending"] = (
+            bool(entry["page"]) and self.cached_page(entry["page"]) is None
+        )
+
         # A dedicated entry states the filename explicitly; prefer it.
         if entry["page"]:
-            asciidoc = self.load_page(entry["page"], force=force)
+            asciidoc = self.load_page(entry["page"], force=force, allow_fetch=force)
             if asciidoc:
                 fields = parse_detail_page(asciidoc)
                 result["detail"] = fields

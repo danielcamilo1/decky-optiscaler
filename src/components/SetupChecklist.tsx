@@ -65,6 +65,8 @@ interface Props {
   plan: AutoPlan | null;
   recommendation: Recommendation | null;
   loadingWiki: boolean;
+  /** True while a background wiki refresh could still change the plan below. */
+  refreshing?: boolean;
   auto: boolean;
   live: LiveStatus | null;
   /** Whether this game is the one running right now. */
@@ -211,6 +213,7 @@ export function SetupChecklist({
   plan,
   recommendation,
   loadingWiki,
+  refreshing,
   auto,
   live,
   running,
@@ -514,13 +517,21 @@ export function SetupChecklist({
   if (!installed) {
     const steps = 1 + (planned && needsOverride && appid && withLaunch ? 1 : 0) +
       (planned && withSettings ? 1 : 0);
+    // The compatibility-list row answers first and this game's own wiki page
+    // arrives behind it — and the page is what names the filename to install
+    // as. Acting in that window would install under the default name when the
+    // entry says otherwise, so the button waits, visibly and briefly: only
+    // while the watch is still running, never once it has given up.
+    const settling = Boolean(recommendation?.detail_pending) && Boolean(refreshing);
     const runLabel = busy
       ? "Setting up…"
-      : steps === 3
-        ? "Do all three"
-        : steps === 2
-          ? "Do both"
-          : "Just install it";
+      : settling
+        ? "Reading this game's entry…"
+        : steps === 3
+          ? "Do all three"
+          : steps === 2
+            ? "Do both"
+            : "Just install it";
 
     return (
       <>
@@ -535,6 +546,12 @@ export function SetupChecklist({
                   ? ` — reported ${recommendation.compatibility}`
                   : ""}
                 .
+                {/* The list row answers on its own; this game's own wiki page
+                    is being fetched behind it and fills the rest in. Said out
+                    loud because the steps below can change when it lands. */}
+                {recommendation?.detail_pending
+                  ? " Still reading this game's own entry — the steps below may fill in shortly."
+                  : ""}
               </Notice>
             ) : (
               <WikiTrouble
@@ -628,7 +645,7 @@ export function SetupChecklist({
             <PanelSectionRow>
               <Focusable style={{ display: "flex" }}>
                 <DialogButton
-                  disabled={busy || !detail.writable}
+                  disabled={busy || settling || !detail.writable}
                   onClick={() => void run()}
                   onOKActionDescription="Set this game up"
                   style={{ flexGrow: 1 }}

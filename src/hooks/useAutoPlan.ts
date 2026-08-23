@@ -5,6 +5,17 @@ import type { AutoPlan, Recommendation } from "../types";
 /** How long to keep watching for a background refresh, and how often. */
 const WATCH_INTERVAL_MS = 2000;
 const WATCH_ATTEMPTS = 10;
+/**
+ * How long "Checking the OptiScaler wiki…" may stay on screen.
+ *
+ * Every answer is meant to come from cache and arrive in milliseconds, so
+ * anything near this is a fault. It has happened — a detail page that had
+ * never been downloaded was fetched in front of the answer, two URLs deep,
+ * each attempt only starting once the last had timed out — and the tab simply
+ * sat there for ever. The cause is fixed; this is so the symptom cannot come
+ * back whatever the cause.
+ */
+const ANSWER_TIMEOUT_MS = 8000;
 
 /**
  * The wiki's set-up plan for one game, plus whether the user has asked for it.
@@ -49,6 +60,9 @@ export function useAutoPlan(
         return;
       }
       setLoading(true);
+      // Stop *showing* the wait, without abandoning the answer: if the call
+      // does come back it is still applied below.
+      const giveUp = window.setTimeout(() => setLoading(false), ANSWER_TIMEOUT_MS);
       try {
         // The install folder's name is often the only thing that matches the
         // wiki, so it is searched alongside the Steam title — the same pair the
@@ -60,9 +74,13 @@ export function useAutoPlan(
         setAuto(Boolean(result.plan.enabled));
         const meta = result.recommendation?.list_meta;
         setRevision(meta?.revision ?? null);
-        // Only worth watching when the list behind this answer is old enough
-        // for the backend to be refreshing it.
-        setWatching(Boolean(meta?.stale));
+        // Worth watching in two cases: the list behind this answer is old
+        // enough that the backend is refreshing it, or this game's own wiki
+        // page has not been downloaded yet — the answer is then the
+        // compatibility-list row, and the page arriving makes it a better one.
+        setWatching(
+          Boolean(meta?.stale) || Boolean(result.recommendation?.detail_pending)
+        );
       } catch {
         // A wiki lookup that fails is not an error the user can act on here;
         // the Setup tab reports it in full, and everything else simply carries
@@ -71,6 +89,7 @@ export function useAutoPlan(
         setRecommendation(null);
         setWatching(false);
       } finally {
+        window.clearTimeout(giveUp);
         setLoading(false);
       }
     },

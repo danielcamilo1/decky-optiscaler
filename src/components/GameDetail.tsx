@@ -165,6 +165,7 @@ export function GameDetail({
     plan,
     recommendation,
     loading: loadingWiki,
+    refreshing: refreshingWiki,
     auto,
     setAuto,
     reload: reloadPlan,
@@ -306,6 +307,7 @@ export function GameDetail({
               plan={plan}
               recommendation={recommendation}
               loadingWiki={loadingWiki}
+              refreshing={refreshingWiki}
               auto={auto}
               live={liveStatus}
               running={isThisGameRunning}

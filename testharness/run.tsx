@@ -984,6 +984,96 @@ async function render(name: string, element: React.ReactElement) {
     };
   }
 
+  // -- a game whose wiki page has never been downloaded ---------------------
+  // The Forza Horizon 5 case: the compatibility list was cached but this
+  // game's own page was not, and the page was fetched in front of the answer —
+  // two URLs deep, the second attempt only starting once the first had timed
+  // out. On a Deck with a bad route to the wiki that never returned, so the
+  // tab sat on "Checking the OptiScaler wiki…" for ever, while a game whose
+  // page happened to be cached answered fine.
+  console.log("\n=== a wiki page that has not arrived yet ===");
+  {
+    const matched = fixtures.get_auto_plan;
+    fixtures.get_auto_plan = {
+      recommendation: {
+        ...matched.recommendation,
+        detail_pending: true,
+        list_meta: { source: "cache", fetched_at: 1, error: null, stale: false,
+                     revision: "list.1" },
+      },
+      plan: matched.plan,
+    };
+    fixtures.wiki_status = {
+      ...fixtures.wiki_status, revision: "list.1", revalidating: true,
+    };
+    fixtures.get_game = { ...detail, install: { ...detail.install, installed: false } };
+    const pending = await render("GameDetail (page pending)",
+      <GameDetail gamePath="/games/Cyberpunk 2077" gameName="Cyberpunk 2077" appid="1091500"
+        status={fixtures.get_status} runningGame={null} onBack={() => {}} />);
+    const pendingText = pending.host.textContent!;
+    console.log(`  it answers from the list row instead of waiting: ${
+      pendingText.includes("can be set up automatically") &&
+      !pendingText.includes("Checking the OptiScaler wiki")}`);
+    console.log(`  and says the fuller answer is still coming: ${
+      pendingText.includes("Still reading this game's own entry")}`);
+    // The page is what names the filename to install as, so acting in that
+    // window would install under the default name when the entry says
+    // otherwise. The wait is on the button alone, and only while the watch is
+    // still running — never once it has given up.
+    console.log(`  the install button waits for it, and says why: ${
+      pendingText.includes("Reading this game's entry…")}`);
+
+    // When the page lands the revision moves, and the answer is rebuilt.
+    fixtures.get_auto_plan = {
+      recommendation: {
+        ...matched.recommendation,
+        detail_pending: false,
+        list_meta: { source: "cache", fetched_at: 1, error: null, stale: false,
+                     revision: "list.2" },
+      },
+      plan: { ...matched.plan, filename: "winmm.dll" },
+    };
+    fixtures.wiki_status = { ...fixtures.wiki_status, revision: "list.2" };
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 2600));
+    });
+    await settle();
+    console.log(`  the page arriving replaces it with the fuller one: ${
+      pending.host.textContent!.includes("winmm.dll") &&
+      !pending.host.textContent!.includes("Still reading this game's own entry")}`);
+    console.log(`  and releases the button: ${
+      !pending.host.textContent!.includes("Reading this game's entry…") &&
+      pending.host.textContent!.includes("Do all three")}`);
+
+    fixtures.get_auto_plan = matched;
+    fixtures.get_game = detail;
+    fixtures.wiki_status = {
+      ...fixtures.wiki_status, revision: "aaaaaaaaaaaa", revalidating: false,
+    };
+  }
+
+  // A backend that never answers must not leave the tab waiting for ever.
+  console.log("\n=== an answer that never comes ===");
+  {
+    const matched = fixtures.get_auto_plan;
+    fixtures.get_auto_plan = () => new Promise(() => {});
+    fixtures.get_game = { ...detail, install: { ...detail.install, installed: false } };
+    const stuck = await render("GameDetail (backend hangs)",
+      <GameDetail gamePath="/games/Cyberpunk 2077" gameName="Cyberpunk 2077" appid="1091500"
+        status={fixtures.get_status} runningGame={null} onBack={() => {}} />);
+    console.log(`  it says it is checking, at first: ${
+      stuck.host.textContent!.includes("Checking the OptiScaler wiki")}`);
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 8600));
+    });
+    await settle();
+    console.log(`  but gives up showing the wait rather than hanging on it: ${
+      !stuck.host.textContent!.includes("Checking the OptiScaler wiki") &&
+      stuck.host.textContent!.includes("Manual setup")}`);
+    fixtures.get_auto_plan = matched;
+    fixtures.get_game = detail;
+  }
+
   // -- the plugin's own settings --------------------------------------------
   console.log("\n=== global settings tab ===");
   {

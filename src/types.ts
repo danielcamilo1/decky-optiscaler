@@ -188,6 +188,11 @@ export interface Recommendation {
   game: string | null;
   /** The wiki detail page behind this answer, when there is one. */
   page?: string | null;
+  /**
+   * True when this game has a wiki page that is not cached yet. The answer is
+   * the compatibility-list row; a fuller one is being fetched behind it.
+   */
+  detail_pending?: boolean;
   filename: string;
   filename_source: string;
   alternatives: string[];

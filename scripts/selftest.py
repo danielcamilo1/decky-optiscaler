@@ -152,9 +152,25 @@ async def run():
             print("  (offline — skipped)")
         else:
             check("matched the compatibility list", recommendation["matched"], recommendation["game"])
-            check("filename came from the wiki entry",
-                  recommendation["filename_source"] == "wiki entry",
-                  f"{recommendation['filename']} via {recommendation['filename_source']}")
+            # The answer is two-phase now. The compatibility-list row answers
+            # at once, and this game's own wiki page — which is what states the
+            # filename outright — arrives behind it. Fetching it in front of
+            # the answer is what made the setup tab hang for ever on a Deck
+            # whose route to the wiki stalls.
+            check("the first answer says its wiki page is still coming",
+                  recommendation["detail_pending"] is True
+                  or recommendation["filename_source"] == "wiki entry",
+                  f"pending={recommendation['detail_pending']} "
+                  f"via {recommendation['filename_source']}")
+            for _ in range(200):
+                await asyncio.sleep(0.05)
+                if not service._wiki_jobs:
+                    break
+            settled = await service.get_recommendation("Cyberpunk 2077")
+            check("and once it lands the filename comes from that entry",
+                  settled["filename_source"] == "wiki entry"
+                  and not settled["detail_pending"],
+                  f"{settled['filename']} via {settled['filename_source']}")
 
         print("\nSchema generation")
         from optiscaler.schema_generated import OPTIONS  # noqa: E402
@@ -386,6 +402,38 @@ async def run():
                     break
             check("three questions in a row are one download, not three",
                   len(served) == 1, len(served))
+
+            # The Forza Horizon 5 case: a game whose own wiki page has never
+            # been cached, on a Deck whose route to the wiki stalls rather than
+            # refusing. The page used to be fetched in front of the answer, so
+            # the setup tab sat on "Checking the OptiScaler wiki…" for ever —
+            # while a game whose page happened to be cached answered fine.
+            shutil.rmtree(service.wiki.page_cache, ignore_errors=True)
+            service.wiki.page_cache.mkdir(parents=True, exist_ok=True)
+            service.wiki.list_cache.write_text(json.dumps({
+                "fetched_at": time.time(),
+                "entries": [{"name": "Cached Game", "key": "cachedgame",
+                             "page": "Cached-Game", "compatibility": "OK",
+                             "inputs": "DLSS", "optipatcher": False, "notes": ""}],
+            }))
+
+            def stalls(url, *a, **k):
+                served.append(url)
+                time.sleep(5)
+                raise TimeoutError("stalled")
+
+            wiki_mod._http_get = stalls
+            started = time.monotonic()
+            answer = await service.get_recommendation("Cached Game")
+            elapsed = time.monotonic() - started
+            check("a game whose wiki page was never cached still answers at once",
+                  elapsed < 0.3, f"{elapsed:.2f}s")
+            check("and says the fuller answer is still coming",
+                  answer["matched"] and answer["detail_pending"] is True)
+            for _ in range(60):
+                await asyncio.sleep(0.05)
+                if not service._wiki_jobs:
+                    break
         finally:
             wiki_mod._http_get = real_get
 
@@ -1167,6 +1215,7 @@ def check_wiki_cache():
         # Detail pages follow the same rule: a stale one used to mean two HTTP
         # attempts in front of the answer, the second only after the first
         # timed out.
+        wiki_mod._http_get = serve("== Cyberpunk\n|**Filename**\n|`dxgi.dll`\n")
         client.fetch_page("Cyberpunk-2077")
         os.utime(client._page_file("Cyberpunk-2077"),
                  (time.time() - COMPAT_TTL - 60,) * 2)
@@ -1176,6 +1225,32 @@ def check_wiki_cache():
               page is not None and calls == [], calls)
         check("and is reported stale so it can be refreshed behind the answer",
               client.page_is_stale("Cyberpunk-2077"))
+
+        # The hole the stale rule left: a page never downloaded at all was
+        # still fetched in front of the answer, two URLs deep with the second
+        # attempt only starting once the first had timed out. On a Deck with a
+        # bad route to the wiki that is a lookup that never returns, and the
+        # setup tab sat on "Checking the OptiScaler wiki…" for ever — for
+        # exactly the games whose page had not happened to be cached already.
+        calls.clear()
+        missing = client.load_page("Never-Seen", allow_fetch=False)
+        check("a page never downloaded is not fetched in front of the answer",
+              missing is None and calls == [], calls)
+        check("but it counts as stale, so it is fetched behind one",
+              client.page_is_stale("Never-Seen"))
+
+        # And the arrival has to be visible to the same watch that notices a
+        # changed list, or the better answer never reaches the screen.
+        before_page = client.revision()
+        wiki_mod._http_get = serve("== Never seen\n|**Filename**\n|`winmm.dll`\n")
+        client.fetch_page("Never-Seen")
+        check("a page arriving moves the revision the UI watches",
+              client.revision() != before_page,
+              f"{before_page} -> {client.revision()}")
+        after_page = client.revision()
+        client.fetch_page("Never-Seen")
+        check("re-fetching the same page moves nothing",
+              client.revision() == after_page)
     finally:
         wiki_mod._http_get = real_get
         shutil.rmtree(root, ignore_errors=True)

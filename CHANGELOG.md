@@ -7,6 +7,32 @@ All notable changes to this project are documented here. The format follows
 Each release ships `Decky OptiScaler.zip`, installable through Decky Loader's
 *Install from URL* (Developer mode).
 
+## [0.0.4.5-testing] - 2026-08-23
+
+### Fixed
+
+- **A game whose wiki page had never been downloaded could hang the Setup tab
+  for ever.** 0.0.4.4-testing stopped waiting on *stale* detail pages but not on
+  missing ones, and a page that had never been cached was still fetched in front
+  of the answer — two URLs deep, the second attempt only starting once the first
+  had timed out. On a Deck whose route to the wiki stalls rather than refusing,
+  that is a lookup that never returns, so the tab sat on "Checking the OptiScaler
+  wiki…" indefinitely — for exactly the games whose page had not happened to be
+  cached already, while a game whose page was cached answered fine.
+  The compatibility-list row now answers on its own and the page arrives behind
+  it, the same way the list does.
+- **When the page lands, the answer is rebuilt.** A page arriving moves the same
+  revision a changed list does, so the watch that was already there notices it.
+  Re-fetching an unchanged page moves nothing.
+- **The install button waits for a page that is still arriving**, and says so,
+  because the page is what names the filename to install as — acting in that
+  window would install under the default name when the entry says otherwise. It
+  waits only while the watch is still running, never once it has given up.
+- **"Checking the OptiScaler wiki…" now gives up after 8 seconds.** Every answer
+  is meant to come from cache and arrive in milliseconds, so anything near that
+  is a fault; the cause above is fixed, and this is so the symptom cannot come
+  back whatever the cause. The answer is still applied if it does arrive.
+
 ## [0.0.4.4-testing] - 2026-08-23
 
 ### Changed
