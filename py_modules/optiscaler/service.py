@@ -95,7 +95,14 @@ class OptiScalerService:
             self._start_wiki_job("list", self.wiki.revalidate)
 
     def refresh_page_if_stale(self, page):
-        if page and self.wiki.page_is_stale(page):
+        """Fetch one game's wiki page behind the answer, if it is worth trying.
+
+        `page_needs_fetch` rather than `page_is_stale`: a page the wiki will not
+        serve must not be re-attempted on every question, or a refresh is
+        permanently in flight and the UI never stops waiting for one that is
+        never going to arrive.
+        """
+        if self.wiki.page_needs_fetch(page):
             self._start_wiki_job(f"page:{page}", lambda: self.wiki.fetch_page(page))
 
     def prime_wiki(self):

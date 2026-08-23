@@ -419,7 +419,9 @@ async def run():
 
             def stalls(url, *a, **k):
                 served.append(url)
-                time.sleep(5)
+                # Long enough that answering at all proves nothing waited for
+                # it, short enough that the attempt finishes inside this test.
+                time.sleep(1)
                 raise TimeoutError("stalled")
 
             wiki_mod._http_get = stalls
@@ -430,10 +432,31 @@ async def run():
                   elapsed < 0.3, f"{elapsed:.2f}s")
             check("and says the fuller answer is still coming",
                   answer["matched"] and answer["detail_pending"] is True)
-            for _ in range(60):
+            for _ in range(200):
                 await asyncio.sleep(0.05)
                 if not service._wiki_jobs:
                     break
+            # And having failed once, it stops claiming a refresh is running —
+            # a page the wiki will not serve kept one permanently in flight,
+            # which is how "Reading this game's entry…" became permanent.
+            await service.get_recommendation("Cached Game")
+            await asyncio.sleep(0.1)
+            check("a page that will not download stops being re-attempted",
+                  not service._wiki_jobs, service._wiki_jobs)
+
+            # A pinned entry's answer has to be comparable with the status the
+            # UI watches. It used to invent its own metadata with no revision
+            # in it, so every check read as "something changed" and the plan
+            # reloaded every two seconds for ever.
+            await service.set_wiki_entry(str(target), "Cached Game")
+            pinned = await service.get_recommendation("Cached Game", game_path=str(target))
+            state = await service.wiki_status()
+            check("a pinned entry carries the same revision the watch compares",
+                  pinned["list_meta"].get("revision") == state["revision"],
+                  f"{pinned['list_meta'].get('revision')} vs {state['revision']}")
+            check("and still says it was pinned by hand",
+                  pinned["list_meta"]["source"] == "manual")
+            await service.set_wiki_entry(str(target), None)
         finally:
             wiki_mod._http_get = real_get
 
@@ -1251,6 +1274,25 @@ def check_wiki_cache():
         client.fetch_page("Never-Seen")
         check("re-fetching the same page moves nothing",
               client.revision() == after_page)
+
+        # A page the wiki will not serve must not be asked for on every
+        # question. Each attempt is two URLs deep, so re-attempting kept a
+        # refresh permanently in flight — and the UI reads "a refresh is
+        # running" as "the answer may still change", so it never stopped
+        # waiting for one that was never going to arrive.
+        wiki_mod._http_get = lambda *a, **k: (_ for _ in ()).throw(
+            urllib.error.URLError("Network is unreachable"))
+        check("a page that has never been seen is worth one attempt",
+              client.page_needs_fetch("Refused-Page"))
+        check("which is made", client.fetch_page("Refused-Page") is None)
+        check("and not repeated on the next question",
+              not client.page_needs_fetch("Refused-Page"))
+        check("a page already cached is not asked for at all",
+              not client.page_needs_fetch("Never-Seen"))
+        check("nor is a game with no wiki page", not client.page_needs_fetch(None))
+        # Coming back onto a network has to be noticed eventually.
+        client._page_failed_at["Refused-Page"] = time.time() - wiki_mod.PAGE_RETRY_AFTER - 1
+        check("but the cooldown does expire", client.page_needs_fetch("Refused-Page"))
     finally:
         wiki_mod._http_get = real_get
         shutil.rmtree(root, ignore_errors=True)

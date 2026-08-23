@@ -51,15 +51,36 @@ export function useAutoPlan(
   const [watching, setWatching] = useState(false);
   // Reloading must not re-run the effect that reloads.
   const reload = useRef<(force?: boolean) => Promise<void>>(async () => {});
+  /**
+   * Revisions this hook has already reloaded for.
+   *
+   * The watch reloads when the backend's revision differs from the one this
+   * answer was built with — which assumes the two are comparable, and once
+   * they were not: a pinned wiki entry came back with no revision at all, so
+   * every check said "something changed" and the plan reloaded every two
+   * seconds for ever, flickering. Refusing to reload twice for the same
+   * revision makes that structurally impossible rather than merely fixed.
+   */
+  const reloadedFor = useRef(new Set<string>());
+  /** Which target the current answers belong to, so a refresh is not a load. */
+  const loadedTarget = useRef<string | null>(null);
 
   const load = useCallback(
     async (force = false) => {
       if (!gamePath || !enabled) {
         setPlan(null);
         setRecommendation(null);
+        loadedTarget.current = null;
         return;
       }
-      setLoading(true);
+      if (loadedTarget.current !== gamePath) reloadedFor.current.clear();
+      // Only the first answer for a game is a wait worth showing. A refresh
+      // behind an answer already on screen is not: raising `loading` for one
+      // swaps the whole panel back to "Checking the OptiScaler wiki…" and back
+      // again, which reads as a flicker rather than as an update.
+      const first = loadedTarget.current !== gamePath;
+      if (first) setLoading(true);
+      loadedTarget.current = gamePath;
       // Stop *showing* the wait, without abandoning the answer: if the call
       // does come back it is still applied below.
       const giveUp = window.setTimeout(() => setLoading(false), ANSWER_TIMEOUT_MS);
@@ -126,9 +147,14 @@ export function useAutoPlan(
           return;
         }
         if (!live) return;
-        if (status.revision && status.revision !== revision) {
+        if (
+          status.revision &&
+          status.revision !== revision &&
+          !reloadedFor.current.has(status.revision)
+        ) {
           // Something new: rebuild this game's plan from it. `load` sets the
           // new fingerprint, which ends this watch.
+          reloadedFor.current.add(status.revision);
           setWatching(false);
           void reload.current(false);
           return;

@@ -267,6 +267,18 @@ export function SetupChecklist({
 
   const overrideSet = launchNow !== null && hasOverride(launchNow, filename);
 
+  /**
+   * Whether this answer may still improve on its own.
+   *
+   * The compatibility-list row answers first and this game's own wiki page
+   * arrives behind it — and the page is what names the filename to install as,
+   * so acting in that window would install under the default name when the
+   * entry says otherwise. Both halves matter: a page that is *pending* but no
+   * longer being fetched is one the wiki would not serve, and waiting on that
+   * is waiting for ever.
+   */
+  const settling = Boolean(recommendation?.detail_pending) && Boolean(refreshing);
+
   const applyLaunchOptions = async (value: string) => {
     if (!appid) return;
     // Before writing our own override, keep whatever Steam is passing now: this
@@ -517,12 +529,6 @@ export function SetupChecklist({
   if (!installed) {
     const steps = 1 + (planned && needsOverride && appid && withLaunch ? 1 : 0) +
       (planned && withSettings ? 1 : 0);
-    // The compatibility-list row answers first and this game's own wiki page
-    // arrives behind it — and the page is what names the filename to install
-    // as. Acting in that window would install under the default name when the
-    // entry says otherwise, so the button waits, visibly and briefly: only
-    // while the watch is still running, never once it has given up.
-    const settling = Boolean(recommendation?.detail_pending) && Boolean(refreshing);
     const runLabel = busy
       ? "Setting up…"
       : settling
@@ -548,8 +554,12 @@ export function SetupChecklist({
                 .
                 {/* The list row answers on its own; this game's own wiki page
                     is being fetched behind it and fills the rest in. Said out
-                    loud because the steps below can change when it lands. */}
-                {recommendation?.detail_pending
+                    loud because the steps below can change when it lands —
+                    but only while it is actually still being fetched. A page
+                    the wiki will not serve stays pending for ever, and saying
+                    "still reading" about it for ever is a lie the user cannot
+                    act on. */}
+                {settling
                   ? " Still reading this game's own entry — the steps below may fill in shortly."
                   : ""}
               </Notice>

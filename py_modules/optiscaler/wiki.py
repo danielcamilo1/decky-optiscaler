@@ -28,6 +28,11 @@ from .constants import (
 
 USER_AGENT = "decky-optiscaler/0.1 (+https://github.com/SteamDeckHomebrew)"
 
+# How long to leave a detail page alone after it fails to download. Long enough
+# that a wiki which is simply unreachable is asked once rather than on every
+# question, short enough that coming back onto a network is noticed.
+PAGE_RETRY_AFTER = 300
+
 NOISE_WORDS = {
     "the", "a", "an", "of", "and",
     "goty", "definitive", "remastered", "edition", "complete", "deluxe",
@@ -373,6 +378,9 @@ class WikiClient:
         # the same redraw a changed list does. A refresh that brought nothing
         # must not move it, or every watch would redraw for nothing.
         self.data_version = 0
+        # When each detail page last failed to download, so one the wiki will
+        # not serve is not asked for again on every single question.
+        self._page_failed_at = {}
 
     # -- the cache -------------------------------------------------------
     @staticmethod
@@ -525,6 +533,20 @@ class WikiClient:
         except OSError:
             return None
 
+    def page_needs_fetch(self, page):
+        """Whether a background fetch of this page is worth starting.
+
+        A page the wiki will not give up used to be re-attempted on every
+        recommendation — and each attempt is two URLs deep, so on a Deck that
+        stalls rather than refusing, a refresh was permanently in flight. The
+        UI reads "a refresh is running" as "the answer may still change", so it
+        never stopped waiting for one that was never going to arrive.
+        """
+        if not page or not self.page_is_stale(page):
+            return False
+        failed_at = self._page_failed_at.get(page)
+        return not (failed_at and (time.time() - failed_at) < PAGE_RETRY_AFTER)
+
     def page_is_stale(self, page):
         path = self._page_file(page)
         if not path.is_file():
@@ -546,11 +568,13 @@ class WikiClient:
                 self._page_file(page).write_text(text, encoding="utf-8")
             except OSError:
                 pass
+            self._page_failed_at.pop(page, None)
             if text != previous:
                 self.data_version += 1
             return text
-        # Nothing downloaded. Anything already cached stays exactly as it was;
-        # the page is simply still stale and will be tried again.
+        # Nothing downloaded. Anything already cached stays exactly as it was,
+        # and this page is not asked for again until the cooldown is up.
+        self._page_failed_at[page] = time.time()
         return None
 
     def load_page(self, page, force=False, allow_fetch=True):
@@ -693,10 +717,11 @@ class WikiClient:
 
     def recommend_entry(self, entry, force=False):
         """Build a recommendation from an already-chosen compatibility entry."""
+        entries, meta = self.load_entries()
         result = {
             "matched": True,
             "searched": [],
-            "entry_count": 0,
+            "entry_count": len(entries),
             "list_available": True,
             "near_misses": [],
             "game": entry["name"],
@@ -716,7 +741,12 @@ class WikiClient:
             # True when this game has a wiki page that is not cached yet: the
             # answer below is the list row, and a better one is on its way.
             "detail_pending": bool(entry.get("page")) and self.cached_page(entry["page"]) is None,
-            "list_meta": {"source": "manual", "fetched_at": None, "error": None},
+            # The real list meta, with "manual" recorded alongside rather than
+            # instead of it. Inventing one here left it with no revision, and
+            # the UI's watch compares revisions: against a missing one every
+            # check said "something changed", so a pinned game reloaded its own
+            # plan every two seconds for ever.
+            "list_meta": {**meta, "source": "manual"},
             "match_score": 1.0,
             "manual": True,
         }

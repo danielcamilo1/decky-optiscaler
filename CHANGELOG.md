@@ -7,6 +7,34 @@ All notable changes to this project are documented here. The format follows
 Each release ships `Decky OptiScaler.zip`, installable through Decky Loader's
 *Install from URL* (Developer mode).
 
+## [0.0.4.6-testing] - 2026-08-23
+
+### Fixed
+
+- **"Reading this game's entry…" could stay on screen for ever, and the panel
+  flickered.** Three separate faults behind one symptom:
+  - A detail page the wiki would not serve was re-fetched on *every* question
+    asked about that game, and each attempt is two URLs deep — so a refresh was
+    permanently in flight. The UI reads "a refresh is running" as "the answer
+    may still change", so it never stopped waiting for one that was never going
+    to arrive. A page that fails is now left alone for five minutes.
+  - A **pinned** wiki entry answered with metadata it invented, carrying no
+    revision at all. The watch compares revisions, so against a missing one
+    every check read as "something changed" — the plan reloaded every two
+    seconds, for ever. A pinned entry now carries the real list metadata, with
+    "pinned by hand" recorded alongside it rather than instead of it.
+  - Each of those reloads raised the loading flag, which swapped the whole panel
+    back to "Checking the OptiScaler wiki…" and back again. Only the first
+    answer for a game is a wait worth showing now; a refresh behind an answer
+    already on screen replaces it in place.
+- **Reloading twice for the same revision is now refused outright**, so a
+  revision the watch can never match costs one reload rather than one every two
+  seconds — the flicker is structurally impossible rather than merely fixed.
+- **The "still reading" notice and the install button follow the same bounded
+  condition.** A page that is pending but no longer being fetched is one the
+  wiki would not serve: the notice stops saying otherwise and the install goes
+  ahead with the compatibility-list answer, which is the honest outcome.
+
 ## [0.0.4.5-testing] - 2026-08-23
 
 ### Fixed

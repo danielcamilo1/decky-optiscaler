@@ -1052,6 +1052,88 @@ async function render(name: string, element: React.ReactElement) {
     };
   }
 
+  // -- a page the wiki will not serve ---------------------------------------
+  // Pending and *still arriving* are different things. A page the wiki refuses
+  // stays pending for ever, and the checklist kept saying "still reading" and
+  // holding its button on the strength of it — permanently.
+  console.log("\n=== a wiki page that never arrives ===");
+  {
+    const matched = fixtures.get_auto_plan;
+    fixtures.get_auto_plan = {
+      recommendation: {
+        ...matched.recommendation, detail_pending: true,
+        list_meta: { source: "cache", fetched_at: 1, error: null, stale: false,
+                     revision: "list.1" },
+      },
+      plan: matched.plan,
+    };
+    // The backend has already given up: nothing is being refreshed.
+    fixtures.wiki_status = {
+      ...fixtures.wiki_status, revision: "list.1", revalidating: false,
+    };
+    fixtures.get_game = { ...detail, install: { ...detail.install, installed: false } };
+    const never = await render("GameDetail (page never arrives)",
+      <GameDetail gamePath="/games/Cyberpunk 2077" gameName="Cyberpunk 2077" appid="1091500"
+        status={fixtures.get_status} runningGame={null} onBack={() => {}} />);
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 2600));
+    });
+    await settle();
+    const neverText = never.host.textContent!;
+    console.log(`  it stops claiming to still be reading: ${
+      !neverText.includes("Still reading this game's own entry")}`);
+    console.log(`  and lets the install go ahead with what it has: ${
+      !neverText.includes("Reading this game's entry…") && neverText.includes("Do all three")}`);
+    fixtures.get_auto_plan = matched;
+    fixtures.get_game = detail;
+    fixtures.wiki_status = { ...fixtures.wiki_status, revision: "aaaaaaaaaaaa" };
+  }
+
+  // -- an answer whose revision can never match -----------------------------
+  // The watch reloads when the backend's revision differs from the one the
+  // answer was built with, which assumes the two are comparable. Once they
+  // were not — a pinned wiki entry came back with no revision at all — so
+  // every check read as "something changed" and the plan reloaded every two
+  // seconds for ever, flickering. Refusing to reload twice for one revision
+  // makes that impossible rather than merely fixed.
+  console.log("\n=== an answer that can never match the watch ===");
+  {
+    const matched = fixtures.get_auto_plan;
+    let asked = 0;
+    fixtures.get_auto_plan = () => {
+      asked += 1;
+      return {
+        recommendation: {
+          ...matched.recommendation, detail_pending: true,
+          // No revision at all, the way a pinned entry used to answer.
+          list_meta: { source: "manual", fetched_at: null, error: null, stale: true },
+        },
+        plan: matched.plan,
+      };
+    };
+    fixtures.wiki_status = {
+      ...fixtures.wiki_status, revision: "never-matches", revalidating: true, stale: true,
+    };
+    fixtures.get_game = { ...detail, install: { ...detail.install, installed: false } };
+    const loop = await render("GameDetail (unmatchable revision)",
+      <GameDetail gamePath="/games/Cyberpunk 2077" gameName="Cyberpunk 2077" appid="1091500"
+        status={fixtures.get_status} runningGame={null} onBack={() => {}} />);
+    const afterFirst = asked;
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 9000));
+    });
+    await settle();
+    console.log(`  it reloads once, not once every two seconds: ${
+      asked - afterFirst <= 1} (${asked - afterFirst} reloads in 9s)`);
+    console.log(`  and the panel is still showing the plan, not a spinner: ${
+      !loop.host.textContent!.includes("Checking the OptiScaler wiki")}`);
+    fixtures.get_auto_plan = matched;
+    fixtures.get_game = detail;
+    fixtures.wiki_status = {
+      ...fixtures.wiki_status, revision: "aaaaaaaaaaaa", revalidating: false, stale: false,
+    };
+  }
+
   // A backend that never answers must not leave the tab waiting for ever.
   console.log("\n=== an answer that never comes ===");
   {
