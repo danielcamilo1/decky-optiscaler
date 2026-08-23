@@ -16,6 +16,7 @@ import type {
   Recommendation,
   VerifyResult,
   WikiSearchResult,
+  WikiStatus,
   WriteConfigResult,
 } from "./types";
 
@@ -96,7 +97,13 @@ export const setWikiEntry = callable<[gamePath: string, entryName: string], Acti
   "set_wiki_entry"
 );
 export const verifyInstall = callable<[targetDir: string], VerifyResult>("verify_install");
-export const refreshWiki = callable<[], { count: number }>("refresh_wiki");
+export const refreshWiki = callable<
+  [],
+  { count: number; meta: { source: string; fetched_at: number | null; error: string | null } }
+>("refresh_wiki");
+
+/** Whether the compatibility list is reachable at all, and what failed if not. */
+export const getWikiStatus = callable<[force?: boolean], WikiStatus>("wiki_status");
 
 export const getAutoPlan = callable<
   [name: string, extraNames?: string[], force?: boolean, gamePath?: string],

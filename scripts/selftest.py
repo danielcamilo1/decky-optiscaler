@@ -15,6 +15,7 @@ import shutil
 import sys
 import tempfile
 import time
+import urllib.error
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -946,6 +947,113 @@ def check_launch_options_read():
         shutil.rmtree(root, ignore_errors=True)
 
 
+def check_wiki_failure_reporting():
+    """A list that will not download must not read as "your game is not on it".
+
+    Both produced an empty result and the UI showed the same sentence for each,
+    so a network fault presented as every game in the library being unknown to
+    the wiki — with nothing anywhere saying otherwise and no way to retry.
+    `status()` is the answer to which of the two it is.
+    """
+    import tempfile
+    from optiscaler import wiki as wiki_mod
+
+    print("\nWiki failure reporting")
+    root = Path(tempfile.mkdtemp(prefix="optiscaler-wiki-"))
+    real_get = wiki_mod._http_get
+    try:
+        client = wiki_mod.WikiClient(root / "cache")
+
+        wiki_mod._http_get = lambda *a, **k: (_ for _ in ()).throw(
+            urllib.error.URLError("Network is unreachable"))
+        entries, meta = client.load_entries(True)
+        check("an unreachable wiki yields no entries", entries == [])
+        check("and says so in the words of what failed",
+              "Network is unreachable" in (meta["error"] or ""), meta["error"])
+        state = client.status()
+        check("status reports the list as unavailable, not empty",
+              not state["available"] and state["entry_count"] == 0)
+        check("status carries the error the UI has to print",
+              "Network is unreachable" in (state["error"] or ""))
+        check("status names the address it could not reach",
+              state["url"].endswith("Compatibility-List.md"), state["url"])
+
+        # A list that does download is the other answer, and the difference is
+        # the whole point.
+        table = ("| Game | Compatibility | Inputs |\n|---|---|---|\n"
+                 "| [Cyberpunk 2077](Cyberpunk-2077) | OK | DLSS |\n")
+        wiki_mod._http_get = lambda *a, **k: table
+        state = client.status(True)
+        check("a list that downloads reports as available",
+              state["available"] and state["entry_count"] == 1, state)
+        check("and carries no error", state["error"] is None)
+
+        # A fetch that succeeds but parses to nothing is a third case, and must
+        # not be cached as if it were a real answer.
+        wiki_mod._http_get = lambda *a, **k: "not a table at all"
+        empty, meta = client.load_entries(True)
+        check("a page that parses to nothing is reported, not cached",
+              "zero rows" in (meta["error"] or ""), meta["error"])
+        check("and the last good list is served instead of nothing",
+              len(empty) == 1, len(empty))
+    finally:
+        wiki_mod._http_get = real_get
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def check_wiki_transport():
+    """The fetch has to survive the ways one Deck's network differs.
+
+    A router that advertises IPv6 it cannot route is the classic case: the
+    address resolves, nothing connects, and urllib has no Happy Eyeballs to
+    fall back the way a browser would — so it sits on the first address until
+    the timeout, every time, and the wiki never loads on that network while
+    everything else works.
+    """
+    import socket as socket_mod
+    from optiscaler import wiki as wiki_mod
+
+    print("\nWiki transport")
+    real_open = wiki_mod._open
+    attempts = []
+
+    def stalls_once(request, timeout, context):
+        attempts.append(socket_mod.getaddrinfo)
+        if len(attempts) == 1:
+            raise urllib.error.URLError(TimeoutError("timed out"))
+        return "| Game | Compatibility |\n|---|---|\n| [X](X) | OK |\n"
+
+    try:
+        wiki_mod._open = stalls_once
+        body = wiki_mod._http_get("https://example.invalid/x")
+        check("a stalled connection is retried rather than given up on",
+              body.startswith("| Game"), len(attempts))
+        check("and the retry is the one that forces IPv4",
+              attempts[1] is not attempts[0])
+        check("the resolver is put back afterwards",
+              socket_mod.getaddrinfo is attempts[0])
+
+        # A server that answered is not retried: asking again says the same.
+        attempts.clear()
+
+        def refuses(request, timeout, context):
+            attempts.append(1)
+            raise urllib.error.HTTPError("u", 404, "Not Found", {}, None)
+
+        wiki_mod._open = refuses
+        try:
+            wiki_mod._http_get("https://example.invalid/x")
+            check("an HTTP error is not retried", False, "no error raised")
+        except urllib.error.HTTPError:
+            check("an HTTP error is not retried", len(attempts) == 1, len(attempts))
+    finally:
+        wiki_mod._open = real_open
+
+    kinds = [kind for kind, _ in wiki_mod._candidate_contexts()]
+    check("an unverified context is always the last resort",
+          kinds and kinds[-1] == "unverified", kinds)
+
+
 def check_wiki_tls():
     """TLS failures must fall through to the next CA source, not abort.
 
@@ -1621,6 +1729,8 @@ def main():
     check_asi_staleness()
     check_reported_folder()
     check_live_frame_rates()
+    check_wiki_failure_reporting()
+    check_wiki_transport()
     check_wiki_tls()
     check_version_pin()
     check_optipatcher()

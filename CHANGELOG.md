@@ -7,6 +7,39 @@ All notable changes to this project are documented here. The format follows
 Each release ships `Decky OptiScaler.zip`, installable through Decky Loader's
 *Install from URL* (Developer mode).
 
+## [0.0.4.3-testing] - 2026-08-23
+
+### Fixed
+
+- **A wiki that will not download is no longer reported as "your game is not on
+  the list".** The two produced the same empty result and the setup checklist
+  printed the same sentence for each, so a network fault presented as every game
+  in the library being unknown to the compatibility list — with nothing anywhere
+  saying otherwise. The checklist now separates them, prints the failure in the
+  words of whatever actually failed, and offers a **Try again** button. There
+  was previously no way to retry from the interface at all: the backend has had
+  a refresh call since the first release and nothing ever called it.
+- **A stalled connection is retried over IPv4.** The classic "works on one
+  network, not another" fault is a router that advertises IPv6 it cannot route:
+  the address resolves, nothing connects, and Python's urllib has no Happy
+  Eyeballs to fall back the way a browser does — so it waits out the timeout
+  every time while everything else on the Deck works. A server that *answered*
+  is not retried, because asking again says the same thing.
+- **The last-resort unverified TLS context no longer builds its own trust
+  store.** It was created with `create_default_context`, which reads the system
+  certificates — so on the one machine where that is what is broken, the
+  fallback meant to survive it was the single construction that could throw the
+  whole chain away.
+- Requests now time out in 12 seconds rather than 20, which two attempts still
+  fit inside.
+
+### Added
+
+- **A Compatibility list section in Settings.** How many games are on the list,
+  when it was last downloaded, and — when it will not download — the error, the
+  address, and which certificates were tried, with a button to fetch it again.
+  Enough to tell a broken network from a broken plugin without opening a log.
+
 ## [0.0.4.2-testing] - 2026-08-23
 
 Fixes 0.0.4.1-testing, which did not work on every Steam client.

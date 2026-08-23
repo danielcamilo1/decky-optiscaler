@@ -147,6 +147,20 @@ export interface VerifyResult {
   ffx_upscaler: { present: boolean; version: string | null; fsr4_capable: boolean };
 }
 
+/** Why the compatibility list is or is not answering. */
+export interface WikiStatus {
+  url: string;
+  entry_count: number;
+  available: boolean;
+  source: string | null;
+  fetched_at: number | null;
+  /** The failure verbatim — the sentence that says which problem this is. */
+  error: string | null;
+  /** Which CA source the last successful fetch used. */
+  tls: string | null;
+  cache_path: string;
+}
+
 export interface WikiSearchResult {
   name: string;
   page: string | null;

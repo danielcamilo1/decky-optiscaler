@@ -178,6 +178,13 @@ Object.assign(fixtures, {
     { name: "Forza Horizon 5", page: "Forza-Horizon-5", compatibility: "OK", inputs: "DLSS", score: 1 },
   ], entry_count: 685, meta: { error: null } },
   set_wiki_entry: { ok: true },
+  wiki_status: {
+    url: "https://raw.githubusercontent.com/wiki/optiscaler/OptiScaler/Compatibility-List.md",
+    entry_count: 685, available: true, source: "network", fetched_at: 1787000000,
+    error: null, tls: "default",
+    cache_path: "/runtime/wiki-cache/compat-list.json",
+  },
+  refresh_wiki: { count: 685, meta: { source: "network", fetched_at: 1, error: null } },
   import_fsr4_files: { ok: true, imported: ["amdxcffx64.dll"] },
   set_logging: { ok: true },
   browse: { path: "/home/deck", parent: "/home", entries: [{ path: "/home/deck/Games", name: "Games" }] },
@@ -850,6 +857,67 @@ async function render(name: string, element: React.ReactElement) {
       nothing.host.textContent!.includes("no launch options")}`);
   }
 
+  // -- a wiki that will not download ----------------------------------------
+  // The list failing to download and the game not being on it produced the
+  // same empty result, and the checklist printed the same sentence for both —
+  // so a network fault presented as every game in the library being unknown to
+  // the wiki, with no way to tell and nothing to press.
+  console.log("\n=== the compatibility list cannot be reached ===");
+  {
+    const matched = fixtures.get_auto_plan;
+    const offline = {
+      ...matched.recommendation,
+      matched: false, game: null, detail: {}, near_misses: [],
+      list_available: false, entry_count: 0,
+      list_meta: { source: "cache", fetched_at: null,
+                   error: "URLError: <urlopen error [Errno 101] Network is unreachable>" },
+    };
+    fixtures.get_auto_plan = {
+      recommendation: offline,
+      plan: { ...matched.plan, available: false, game: null, settings: [],
+              framegen: null, unresolved: [], launch_flags: [] },
+    };
+    fixtures.get_game = { ...detail, install: { ...detail.install, installed: false } };
+    const down = await render("GameDetail (wiki unreachable)",
+      <GameDetail gamePath="/games/Cyberpunk 2077" gameName="Cyberpunk 2077" appid="1091500"
+        status={fixtures.get_status} runningGame={null} onBack={() => {}} />);
+    const downText = down.host.textContent!;
+    console.log(`  a download failure is not called a missing entry: ${
+      downText.includes("could not be downloaded") &&
+      !downText.includes("No wiki entry matched this game")}`);
+    console.log(`  the actual error is printed, not a generic one: ${
+      downText.includes("Network is unreachable")}`);
+    console.log(`  and it says the two are not the same thing: ${
+      downText.includes("not the same as your game being missing")}`);
+    console.log(`  there is something to press about it: ${
+      downText.includes("Try again")}`);
+    // The same distinction after the install, where the row used to be a
+    // permanent "no wiki entry matched this game".
+    fixtures.get_game = detail;
+    const downInstalled = await render("GameDetail (installed, wiki unreachable)",
+      <GameDetail gamePath="/games/Cyberpunk 2077" gameName="Cyberpunk 2077" appid="1091500"
+        status={fixtures.get_status} runningGame={null} onBack={() => {}} />);
+    console.log(`  an installed game says it too: ${
+      downInstalled.host.textContent!.includes("could not be downloaded") &&
+      !downInstalled.host.textContent!.includes("No wiki entry matched this game")}`);
+
+    // A list that downloaded and simply does not have this game is unchanged:
+    // that is the ordinary case and nothing is wrong.
+    fixtures.get_auto_plan = {
+      recommendation: { ...offline, list_available: true, entry_count: 685,
+                        list_meta: { source: "network", fetched_at: 1, error: null } },
+      plan: { ...matched.plan, available: false, game: null, settings: [],
+              framegen: null, unresolved: [], launch_flags: [] },
+    };
+    const miss = await render("GameDetail (genuine miss)",
+      <GameDetail gamePath="/games/Cyberpunk 2077" gameName="Cyberpunk 2077" appid="1091500"
+        status={fixtures.get_status} runningGame={null} onBack={() => {}} />);
+    console.log(`  a game genuinely not on the list still says so: ${
+      miss.host.textContent!.includes("No wiki entry matched this game") &&
+      !miss.host.textContent!.includes("could not be downloaded")}`);
+    fixtures.get_auto_plan = matched;
+  }
+
   // -- the plugin's own settings --------------------------------------------
   console.log("\n=== global settings tab ===");
   {
@@ -874,6 +942,11 @@ async function render(name: string, element: React.ReactElement) {
       findAll(settingsBody, '[data-forget="launch_options"]').length === 0}`);
     console.log(`  and the bundled OptiScaler version is stated: ${
       settingsText.includes("0.9.4")}`);
+    // Where the wiki's actual state is readable without opening a log.
+    console.log(`  it reports the compatibility list: ${
+      settingsText.includes("685 games on the list")}`);
+    console.log(`  and offers to download it again: ${
+      settingsText.includes("Download it again")}`);
     // It is plugin-wide, so it must not turn up in the sidebar.
     console.log(`  the quick panel does not carry it: ${
       !findAll(qp.host, "[data-tab]").some((n) => n.getAttribute("data-tab") === "settings")}`);

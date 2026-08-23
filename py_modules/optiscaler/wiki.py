@@ -8,6 +8,7 @@ AsciiDoc detail page that names the exact proxy filename to install as.
 import difflib
 import json
 import re
+import socket
 import ssl
 import time
 import urllib.error
@@ -89,9 +90,15 @@ def _candidate_contexts():
     # Last resort. The compatibility list is public, read-only data and we send
     # no credentials, so an unverified fetch leaks nothing; the alternative is
     # the whole wiki lookup silently reporting "game not in list".
-    unverified = ssl.create_default_context()
-    unverified.check_hostname = False
-    unverified.verify_mode = ssl.CERT_NONE
+    #
+    # Built without loading a trust store, and guarded like every other
+    # candidate: `create_default_context` reads the system store, so on the one
+    # machine where that is what is broken, the fallback meant to survive it
+    # was the one construction that could throw the whole chain away.
+    try:
+        unverified = ssl._create_unverified_context()
+    except Exception:
+        return
     yield "unverified", unverified
 
 
@@ -116,7 +123,47 @@ def _is_tls_error(exc):
     return False
 
 
-def _http_get(url, timeout=20):
+class _ipv4_only:
+    """Resolve names to IPv4 for the duration of one request.
+
+    The classic "works on my machine" network fault: a router advertises IPv6,
+    the address resolves, and nothing routes. Python's urllib has no Happy
+    Eyeballs, so it does not fall back the way a browser does — it sits on the
+    first address until the timeout, every time, and the wiki simply never
+    loads on that network while everything else on the Deck is fine.
+    """
+
+    def __enter__(self):
+        self._real = socket.getaddrinfo
+
+        def ipv4(host, port, family=0, *args, **kwargs):
+            return self._real(host, port, socket.AF_INET, *args, **kwargs)
+
+        socket.getaddrinfo = ipv4
+        return self
+
+    def __exit__(self, *exc):
+        socket.getaddrinfo = self._real
+        return False
+
+
+def _open(request, timeout, context):
+    with urllib.request.urlopen(request, timeout=timeout, context=context) as response:
+        return response.read().decode("utf-8", errors="replace")
+
+
+def _is_retryable(exc):
+    """True for a failure a second attempt could plausibly answer."""
+    if isinstance(exc, (socket.timeout, TimeoutError)):
+        return True
+    if isinstance(exc, urllib.error.HTTPError):
+        return False  # the server answered; asking again says the same thing
+    if isinstance(exc, urllib.error.URLError):
+        return isinstance(exc.reason, (socket.timeout, TimeoutError, ConnectionError, OSError))
+    return isinstance(exc, (ConnectionError, OSError))
+
+
+def _http_get(url, timeout=12):
     global _ssl_context, _ssl_context_kind
 
     # Wiki page names contain characters such as U+2010 HYPHEN, which urllib
@@ -124,10 +171,25 @@ def _http_get(url, timeout=20):
     url = urllib.parse.quote(url, safe=":/?#[]@!$&'()*+,;=%~")
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
 
+    def attempt(context):
+        """One fetch, retried once over IPv4 when the network stalls.
+
+        A TLS failure is re-raised for the caller to answer with a different
+        trust store; anything else gets the IPv4 retry, because a stalled
+        connection and a genuinely unreachable host look identical from here
+        and only one of them is worth a second try.
+        """
+        try:
+            return _open(request, timeout, context)
+        except Exception as exc:
+            if _is_tls_error(exc) or not _is_retryable(exc):
+                raise
+            with _ipv4_only():
+                return _open(request, timeout, context)
+
     if _ssl_context is not None:
         try:
-            with urllib.request.urlopen(request, timeout=timeout, context=_ssl_context) as response:
-                return response.read().decode("utf-8", errors="replace")
+            return attempt(_ssl_context)
         except Exception as exc:
             if not _is_tls_error(exc):
                 raise
@@ -138,8 +200,7 @@ def _http_get(url, timeout=20):
     last_error = None
     for kind, context in _candidate_contexts():
         try:
-            with urllib.request.urlopen(request, timeout=timeout, context=context) as response:
-                body = response.read().decode("utf-8", errors="replace")
+            body = attempt(context)
         except Exception as exc:
             # urlopen wraps the SSLError in URLError, so catching ssl.SSLError
             # here would never fire and the fallbacks would never be reached.
@@ -270,6 +331,26 @@ class WikiClient:
         self.list_cache = self.cache_dir / "compat-list.json"
         self.page_cache = self.cache_dir / "pages"
         self.page_cache.mkdir(parents=True, exist_ok=True)
+
+    def status(self, force=False):
+        """Whether the compatibility list is actually reachable, and why not.
+
+        The one question the UI could never answer: a failed download and a
+        game that is genuinely not on the list produced the same empty result,
+        so "the wiki is broken" and "your game is not in it" read identically.
+        This says which, in the words of whatever actually failed.
+        """
+        entries, meta = self.load_entries(force)
+        return {
+            "url": f"{WIKI_RAW_BASE}/{COMPAT_LIST_PAGE}",
+            "entry_count": len(entries),
+            "available": bool(entries),
+            "source": meta.get("source"),
+            "fetched_at": meta.get("fetched_at"),
+            "error": meta.get("error"),
+            "tls": meta.get("tls") or ssl_context_kind(),
+            "cache_path": str(self.list_cache),
+        }
 
     # -- compatibility list ---------------------------------------------
     def load_entries(self, force=False):

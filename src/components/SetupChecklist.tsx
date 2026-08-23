@@ -14,6 +14,7 @@ import {
   autoInstall,
   getMonitor,
   install,
+  refreshWiki,
   resetConfig,
   setAutoMode,
   setGameTarget,
@@ -138,6 +139,60 @@ function liveReason(live: LiveStatus | null) {
   return `OptiScaler loaded the in-game plugin, but it could not attach${
     live.error ? `: ${live.error}` : "."
   }`;
+}
+
+/**
+ * Why there is no plan: the list could not be downloaded, or this game is not
+ * on it.
+ *
+ * These are not the same thing and used to render identically. A game that is
+ * genuinely not in the compatibility list is the ordinary case and nothing is
+ * wrong; a list that would not download is a fault, usually a network one, and
+ * telling the user "no wiki entry matched this game" for every game they open
+ * is how "the wiki feature is not working" becomes impossible to act on. The
+ * failure is printed in the words of whatever actually failed, with the one
+ * button that can do anything about it.
+ */
+function WikiTrouble({
+  recommendation,
+  busy,
+  onRetry,
+}: Readonly<{
+  recommendation: Recommendation | null;
+  busy: boolean;
+  onRetry: () => void;
+}>) {
+  const unreachable = recommendation !== null && !recommendation.list_available;
+  if (!unreachable) {
+    return (
+      <Notice tone="warn" title="No wiki entry matched this game">
+        OptiScaler still works with most DLSS, FSR 2+ and XeSS games. Set it up by hand —
+        <Mono>dxgi.dll</Mono> is the usual choice — or find this game in the wiki list
+        yourself.
+      </Notice>
+    );
+  }
+  return (
+    <>
+      <Notice tone="error" title="The compatibility list could not be downloaded">
+        This is not the same as your game being missing from it — nothing could be checked at
+        all. {recommendation?.list_meta?.error ? <Mono>{recommendation.list_meta.error}</Mono>
+          : "The wiki could not be reached."}{" "}
+        Check the Deck's network connection, then try again. Setting the game up by hand works
+        either way.
+      </Notice>
+      <Focusable style={{ display: "flex", marginTop: "6px" }}>
+        <DialogButton
+          disabled={busy}
+          onClick={onRetry}
+          onOKActionDescription="Download the compatibility list again"
+          style={{ flexGrow: 1 }}
+        >
+          {busy ? "Trying…" : "Try again"}
+        </DialogButton>
+      </Focusable>
+    </>
+  );
 }
 
 /** What the wiki asks to be written, as one readable line. */
@@ -267,6 +322,25 @@ export function SetupChecklist({
       await onChanged();
       await onReloadPlan();
       await refreshLaunch();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /** Download the list again and rebuild this game's plan from it. */
+  const retryWiki = async () => {
+    setBusy(true);
+    try {
+      const result = await refreshWiki();
+      await onReloadPlan();
+      toaster.toast({
+        title: result.count > 0 ? "Compatibility list downloaded" : "Still could not download it",
+        body: result.count > 0
+          ? `${result.count} entries.`
+          : String(result.meta?.error ?? "The wiki could not be reached."),
+      });
+    } catch (exc) {
+      toaster.toast({ title: "Still could not download it", body: String(exc) });
     } finally {
       setBusy(false);
     }
@@ -463,11 +537,11 @@ export function SetupChecklist({
                 .
               </Notice>
             ) : (
-              <Notice tone="warn" title="No wiki entry matched this game">
-                OptiScaler still works with most DLSS, FSR 2+ and XeSS games. Set it up by hand —
-                <Mono>dxgi.dll</Mono> is the usual choice — or find this game in the wiki list
-                yourself.
-              </Notice>
+              <WikiTrouble
+                recommendation={recommendation}
+                busy={busy}
+                onRetry={() => void retryWiki()}
+              />
             )}
           </PanelSectionRow>
           {!planned && !loadingWiki ? (
@@ -649,20 +723,32 @@ export function SetupChecklist({
         ) : null}
 
         {!planned && !loadingWiki ? (
-          <PanelSectionRow>
-            <Field
-              label={<StepLabel>No wiki entry matched this game</StepLabel>}
-              description="Nothing is being kept up to date for it. Pick an entry yourself under “Manual setup”, or leave the settings to you."
-              onClick={onManual}
-              onActivate={onManual}
-              focusable
-              bottomSeparator="standard"
-              childrenLayout="inline"
-              childrenContainerWidth="min"
-            >
-              <span style={{ opacity: 0.5 }}>›</span>
-            </Field>
-          </PanelSectionRow>
+          recommendation && !recommendation.list_available ? (
+            // Same distinction as before the install: a list that would not
+            // download is a fault, not a verdict on this game.
+            <PanelSectionRow>
+              <WikiTrouble
+                recommendation={recommendation}
+                busy={busy}
+                onRetry={() => void retryWiki()}
+              />
+            </PanelSectionRow>
+          ) : (
+            <PanelSectionRow>
+              <Field
+                label={<StepLabel>No wiki entry matched this game</StepLabel>}
+                description="Nothing is being kept up to date for it. Pick an entry yourself under “Manual setup”, or leave the settings to you."
+                onClick={onManual}
+                onActivate={onManual}
+                focusable
+                bottomSeparator="standard"
+                childrenLayout="inline"
+                childrenContainerWidth="min"
+              >
+                <span style={{ opacity: 0.5 }}>›</span>
+              </Field>
+            </PanelSectionRow>
+          )
         ) : null}
 
         {planned ? (

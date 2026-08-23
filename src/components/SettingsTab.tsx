@@ -1,14 +1,21 @@
-import { Field, PanelSection, PanelSectionRow, ToggleField } from "@decky/ui";
+import {
+  ButtonItem,
+  Field,
+  PanelSection,
+  PanelSectionRow,
+  ToggleField,
+} from "@decky/ui";
+import { toaster } from "@decky/api";
 import { useCallback, useEffect, useState } from "react";
-import { getPref } from "../api";
+import { getPref, getWikiStatus, refreshWiki } from "../api";
 import {
   REMEMBERED_QUESTIONS,
   forget,
   isRemembering,
   setRemembering,
 } from "../prefs";
-import type { PayloadStatus } from "../types";
-import { Centered, KeyValue, Notice, Pill } from "./Common";
+import type { PayloadStatus, WikiStatus } from "../types";
+import { Centered, KeyValue, Mono, Notice, Pill } from "./Common";
 
 /**
  * The plugin's own settings, as opposed to one game's.
@@ -25,7 +32,9 @@ import { Centered, KeyValue, Notice, Pill } from "./Common";
 export function SettingsTab({ status }: Readonly<{ status: PayloadStatus | null }>) {
   const [remembering, setRememberingState] = useState<boolean | null>(null);
   const [answers, setAnswers] = useState<Record<string, unknown>>({});
+  const [wiki, setWiki] = useState<WikiStatus | null>(null);
   const [busy, setBusy] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(async () => {
     const enabled = await isRemembering();
@@ -40,6 +49,14 @@ export function SettingsTab({ status }: Readonly<{ status: PayloadStatus | null 
     }
     setRememberingState(enabled);
     setAnswers(stored);
+    try {
+      setWiki(await getWikiStatus(false));
+    } catch (exc) {
+      setWiki({
+        url: "", entry_count: 0, available: false, source: null, fetched_at: null,
+        error: String(exc), tls: null, cache_path: "",
+      });
+    }
   }, []);
 
   useEffect(() => {
@@ -53,6 +70,24 @@ export function SettingsTab({ status }: Readonly<{ status: PayloadStatus | null 
       await load();
     } finally {
       setBusy(false);
+    }
+  };
+
+  const refresh = async () => {
+    setRefreshing(true);
+    try {
+      const result = await refreshWiki();
+      setWiki(await getWikiStatus(false));
+      toaster.toast({
+        title: result.count > 0 ? "Compatibility list downloaded" : "Still could not download it",
+        body: result.count > 0
+          ? `${result.count} entries.`
+          : String(result.meta?.error ?? "The wiki could not be reached."),
+      });
+    } catch (exc) {
+      toaster.toast({ title: "Still could not download it", body: String(exc) });
+    } finally {
+      setRefreshing(false);
     }
   };
 
@@ -115,6 +150,50 @@ export function SettingsTab({ status }: Readonly<{ status: PayloadStatus | null 
             </PanelSectionRow>
           ))
         )}
+      </PanelSection>
+
+      <PanelSection title="Compatibility list">
+        <PanelSectionRow>
+          {wiki === null ? (
+            <Notice tone="info">Checking the OptiScaler wiki…</Notice>
+          ) : wiki.available ? (
+            <Notice tone="success" title={`${wiki.entry_count} games on the list`}>
+              Downloaded from the OptiScaler wiki
+              {wiki.source === "cache" ? ", from this Deck's cache" : ""}
+              {wiki.fetched_at
+                ? ` — last updated ${new Date(wiki.fetched_at * 1000).toLocaleString()}`
+                : ""}
+              .
+            </Notice>
+          ) : (
+            // The sentence the rest of the plugin could never show: when the
+            // list will not download, every game reads as "not in the list",
+            // and without the actual error there is nothing to act on.
+            <Notice tone="error" title="The compatibility list could not be downloaded">
+              Automatic setup needs this list, so without it every game looks as though it has
+              no wiki entry. {wiki.error ? <Mono>{wiki.error}</Mono> : null}
+            </Notice>
+          )}
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <ButtonItem
+            layout="below"
+            disabled={refreshing}
+            onClick={() => void refresh()}
+          >
+            {refreshing ? "Downloading…" : "Download it again"}
+          </ButtonItem>
+        </PanelSectionRow>
+        {wiki && !wiki.available ? (
+          <PanelSectionRow>
+            <Field bottomSeparator="none" focusable>
+              <div style={{ width: "100%" }}>
+                <KeyValue label="Address" value={<Mono>{wiki.url}</Mono>} />
+                <KeyValue label="Certificates" value={wiki.tls ?? "none worked"} />
+              </div>
+            </Field>
+          </PanelSectionRow>
+        ) : null}
       </PanelSection>
 
       <PanelSection title="About">

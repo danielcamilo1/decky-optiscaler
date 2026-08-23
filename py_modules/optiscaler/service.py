@@ -447,6 +447,10 @@ class OptiScalerService:
         entries, meta = await self._run(self.wiki.load_entries, True)
         return {"count": len(entries), "meta": meta}
 
+    async def wiki_status(self, force=False):
+        """Is the compatibility list reachable, and if not, what failed?"""
+        return await self._run(self.wiki.status, force)
+
     # -- automatic set-up ------------------------------------------------
     async def get_auto_plan(self, name, extra_names=None, force=False, game_path=None):
         """The wiki recommendation plus the plan built from it.

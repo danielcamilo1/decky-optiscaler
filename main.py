@@ -107,6 +107,9 @@ class Plugin:
     async def refresh_wiki(self) -> dict:
         return await self.service.refresh_wiki()
 
+    async def wiki_status(self, force: bool = False) -> dict:
+        return await self.service.wiki_status(force)
+
     # -- automatic set-up ------------------------------------------------
     async def get_auto_plan(self, name: str, extra_names: list = None,
                             force: bool = False, game_path: str = None) -> dict:
