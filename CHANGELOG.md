@@ -7,6 +7,75 @@ All notable changes to this project are documented here. The format follows
 Each release ships `Decky OptiScaler.zip`, installable through Decky Loader's
 *Install from URL* (Developer mode).
 
+## [0.0.5.1-testing] - 2026-08-24
+
+A prerelease on the `testing` branch. Bundled OptiScaler release is unchanged at
+0.9.4.
+
+### Added
+
+- **Games that need REFramework are set up with it, automatically.** Nine
+  entries on the compatibility list — the Resident Evil titles, Devil May Cry 5,
+  Monster Hunter Wilds, PRAGMATA — say in prose that OptiScaler does nothing in
+  that game unless [REFramework](https://github.com/praydog/REFramework) is
+  already next to the executable, because REF is what exposes the upscaler the
+  game will not expose itself. The plugin read straight past that: those games
+  got an install that reported success, set the launch options, and changed
+  nothing on screen, with no error anywhere to go looking for. The requirement
+  is now read out of the entry, stated on the checklist before anything is
+  written, and the right build is downloaded and installed with OptiScaler as
+  one step.
+- **The two REFramework builds are told apart, because they are not
+  interchangeable.** praydog's nightly is one unified build for every game it
+  supports; the pd-upscaler branch is built per game and is what the entries
+  pairing REF with PureDark's UpscalerBasePlugin need, since that plugin does
+  not support the unified build. Which one an entry wants is read from the entry
+  itself — the pd entries name the branch and the plugin, the nightly ones do
+  not — and only the per-game asset name is curated, because "RE2.zip" is not
+  reachable from "Resident Evil 2 (2019)" by any matching rule and the wrong
+  game's build is a crash on launch. A game with no known asset says so and
+  links the release page rather than falling back to a near-enough one.
+- **REFramework gets a `WINEDLLOVERRIDES` entry of its own.** For the same
+  reason OptiScaler's proxy needs one: Proton ships its own `dinput8` and loads
+  that in preference to the game folder. The wiki never mentions it — those
+  pages are written for Windows, where the folder wins — which makes it the one
+  instruction in the whole set-up that cannot come from the entry, and without
+  it a set-up that followed the wiki to the letter would put REF in place and
+  never load it.
+- **`PDPerfPlugin.dll` is named rather than pretended about.** PureDark's
+  UpscalerBasePlugin is on Nexus Mods behind a login, so nothing here can fetch
+  it, and the pd-upscaler games do not work without it. It gets a row of its own
+  on the checklist with the link, marked as the user's job, and ticks when the
+  file turns up next to the executable — an install that reports success and
+  leaves the game rendering exactly as before is the failure this whole feature
+  exists to stop, and it would be absurd to reintroduce it one file further
+  down.
+- **REFramework can be added on its own,** to a game already set up or after a
+  download that failed. A 13 MB download over a handheld's connection is the
+  part that fails, and making somebody reinstall OptiScaler to retry it is a
+  poor answer to a flaky network.
+
+### Fixed
+
+- **Wiki pages whose name contains brackets are downloaded again.** The
+  compatibility list writes `[Resident Evil 2 (2019)](Resident-Evil-2-(2019))`,
+  and the link parser stopped at the inner bracket: the page came out as
+  `Resident-Evil-2-(2019`, which the wiki does not serve, so the detail page for
+  every parenthesised title silently never downloaded. Those are exactly the
+  Resident Evil entries whose settings — `Dxgi=false`, `OverlayMenu=false` — and
+  REFramework instructions live on the page rather than in the notes column, so
+  automatic set-up had been working from half an entry for them. Dead Space
+  (2023) and Elden Ring were affected too.
+- **The bundled compatibility list has been regenerated,** so an offline Deck
+  gets the corrected page names rather than the truncated ones.
+
+### Changed
+
+- Anything REFramework installs goes through the same contract as every other
+  file this plugin places: a `dinput8.dll` the game already had is set aside and
+  put back on removal, and both REF files are in the manifest, so removing
+  OptiScaler removes them too.
+
 ## [0.0.5] - 2026-08-23
 
 Released after testing across the `0.0.4.x-testing` prereleases on the `testing`

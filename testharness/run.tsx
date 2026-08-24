@@ -42,7 +42,12 @@ const detail = {
             // The version OptiScaler's overlay prints in its FFX Settings box.
             ffx: { present: true, name: "amd_fidelityfx_upscaler_dx12.dll",
                    version: "4.1.1.2740", fsr4_capable: true } },
+    reframework: { installed: false, revision: null, managed: false },
   },
+  reframework: { required: false, installed: false, dll: "dinput8.dll",
+                 path: "/games/Cyberpunk 2077/bin/x64/dinput8.dll", revision: null,
+                 plugin: null, plugin_installed: false, plugin_url: null,
+                 plugin_name: null },
   fsr4_sources: [{ path: "/home/deck/fgmod/fsr4-rdna2-3", files: ["amdxcffx64.dll", "amdxc64.dll"] }],
   ini_info: { present: true, legacy: true, keys: 288 },
   wiki_entry: null,
@@ -122,11 +127,13 @@ Object.assign(fixtures, {
         output_label: "FSR FG", source: "wiki entry, “FG Inputs”",
         detail: "DLSSG via Streamline",
       },
+      reframework: null,
       unresolved: [{ text: "DontCreateD3D12DeviceForLuma=true (not an OptiScaler setting)",
                      source: "wiki entry, “Notes”" }],
       warnings: [],
     },
   },
+  install_reframework: { ok: true, installed: true, files: ["dinput8.dll"] },
   set_auto_mode: { ok: true, enabled: true },
   auto_install: { ok: true, applied: [], rejected: [] },
   apply_auto_settings: { ok: true, applied: [] },
@@ -593,6 +600,132 @@ async function render(name: string, element: React.ReactElement) {
   console.log(`  turning one off narrows the button: ${
     gdFresh.host.textContent!.includes("Do both")}`);
   fixtures.get_game = detail;
+
+  // -- a game that needs REFramework ----------------------------------------
+  // Nine entries on the compatibility list say OptiScaler does nothing in this
+  // game without REFramework already in the folder. The failure this guards
+  // against is not an error message: it is an install that reports success and
+  // changes nothing on screen, so the only thing that catches it is checking
+  // that the step is on the list at all.
+  const plainPlan = fixtures.get_auto_plan;
+  const refPlan = (extra: Record<string, unknown>) => ({
+    ...plainPlan,
+    plan: {
+      ...plainPlan.plan,
+      launch_options: 'WINEDLLOVERRIDES="dxgi=n,b;dinput8=n,b" %command% -dx12',
+      reframework: {
+        required: true, variant: "pd-upscaler", dll: "dinput8.dll", override: "dinput8",
+        source: "compatibility list notes",
+        detail: "Requires REFramework (pd-upscaler branch) + PDUpscaler plugin",
+        asset: "RE2.zip", url: null,
+        page: "https://github.com/TheRazerMD/REFramework/releases",
+        plugin: "PDPerfPlugin.dll", plugin_name: "UpscalerBasePlugin 1.1.2",
+        plugin_url: "https://www.nexusmods.com/site/mods/502",
+        automatic: true, reason: null,
+        ...extra,
+      },
+    },
+  });
+
+  fixtures.get_auto_plan = refPlan({});
+  fixtures.get_game = { ...detail, install: { ...detail.install, installed: false } };
+  const gdRef = await render("GameDetail (needs REFramework, not set up)",
+    <GameDetail gamePath="/games/RE2" gameName="Resident Evil 2" appid="883710"
+      status={fixtures.get_status}
+      runningGame={{ appid: 1091500, name: "Cyberpunk 2077", gameid: "1091500" }}
+      onBack={() => {}} />);
+  const refText = gdRef.host.textContent!;
+  console.log("\n=== a game that needs REFramework ===");
+  console.log(`  the step is on the list before anything is written: ${
+    refText.includes("Install REFramework")}`);
+  console.log(`  it says why, citing the entry that said so: ${
+    refText.includes("cannot hook this game without it") &&
+    refText.includes("compatibility list notes")}`);
+  console.log(`  and which of the two builds it is: ${
+    refText.includes("pd-upscaler build for this game")}`);
+  console.log(`  it is required, not a toggle like the other two steps: ${
+    findAll(gdRef.host, '[data-mock="ToggleField"][data-label^="Install REFramework"]').length === 0}`);
+  console.log(`  so the button counts four steps, not three: ${
+    refText.includes("Do all four")}`);
+  // Proton ships its own dinput8 and loads that in preference to the game
+  // folder, so REF needs an override exactly as OptiScaler's proxy does. The
+  // wiki never says so — it is written for Windows.
+  console.log(`  REFramework gets a WINEDLLOVERRIDES entry of its own: ${
+    refText.includes('WINEDLLOVERRIDES="dxgi=n,b;dinput8=n,b" %command% -dx12')}`);
+  console.log(`  and the row says why both are needed: ${
+    refText.includes("its own dinput8.dll, and neither mod runs")}`);
+  // The one file that can never be automatic.
+  console.log(`  the Nexus-hosted plugin is named as the user's job: ${
+    refText.includes("Add PDPerfPlugin.dll yourself") &&
+    refText.includes("nexusmods.com")}`);
+
+  // A build this plugin has no asset for must say so rather than pretend.
+  fixtures.get_auto_plan = refPlan({
+    automatic: false, asset: null,
+    reason: "no REFramework build is known for this game, so it has to be "
+            + "downloaded by hand",
+  });
+  const gdRefManual = await render("GameDetail (REFramework, no known build)",
+    <GameDetail gamePath="/games/RE2" gameName="Resident Evil 2" appid="883710"
+      status={fixtures.get_status}
+      runningGame={{ appid: 1091500, name: "Cyberpunk 2077", gameid: "1091500" }}
+      onBack={() => {}} />);
+  const refManualText = gdRefManual.host.textContent!;
+  console.log(`  a game with no known build says so instead of guessing: ${
+    refManualText.includes("no REFramework build is known") &&
+    refManualText.includes("TheRazerMD/REFramework")}`);
+  console.log(`  and does not count itself as a step the button performs: ${
+    refManualText.includes("Do all three")}`);
+
+  // -- the same game, already set up ---------------------------------------
+  fixtures.get_auto_plan = refPlan({});
+  fixtures.get_game = {
+    ...detail,
+    install: { ...detail.install, reframework: { installed: false, revision: null, managed: false } },
+    reframework: { ...detail.reframework, required: true, plugin: "PDPerfPlugin.dll",
+                   plugin_installed: false },
+  };
+  const gdRefMissing = await render("GameDetail (set up, REFramework missing)",
+    <GameDetail gamePath="/games/RE2" gameName="Resident Evil 2" appid="883710"
+      status={fixtures.get_status}
+      runningGame={{ appid: 1091500, name: "Cyberpunk 2077", gameid: "1091500" }}
+      onBack={() => {}} />);
+  const missingText = gdRefMissing.host.textContent!;
+  console.log(`  an install missing it says so rather than looking finished: ${
+    missingText.includes("REFramework is missing") &&
+    missingText.includes("loads and changes nothing on screen")}`);
+  console.log(`  with a way to add it that does not reinstall OptiScaler: ${
+    missingText.includes("install it")}`);
+
+  fixtures.get_game = {
+    ...detail,
+    install: { ...detail.install,
+               reframework: { installed: true, revision: "684ca77369ec1050", managed: true } },
+    reframework: { ...detail.reframework, required: true, installed: true,
+                   revision: "684ca77369ec1050", plugin: "PDPerfPlugin.dll",
+                   plugin_installed: true },
+  };
+  const gdRefOk = await render("GameDetail (set up, REFramework present)",
+    <GameDetail gamePath="/games/RE2" gameName="Resident Evil 2" appid="883710"
+      status={fixtures.get_status}
+      runningGame={{ appid: 1091500, name: "Cyberpunk 2077", gameid: "1091500" }}
+      onBack={() => {}} />);
+  const okText = gdRefOk.host.textContent!;
+  console.log(`  and once it is there, it is ticked with the build it is: ${
+    okText.includes("REFramework installed") && okText.includes("684ca77369ec")}`);
+  console.log(`  the plugin the user added is ticked too: ${
+    okText.includes("PDPerfPlugin.dll is there")}`);
+
+  // The other 676 games must not grow a permanently unticked REFramework step.
+  fixtures.get_auto_plan = plainPlan;
+  fixtures.get_game = detail;
+  const gdPlain = await render("GameDetail (no REFramework requirement)",
+    <GameDetail gamePath="/games/Cyberpunk 2077" gameName="Cyberpunk 2077" appid="1091500"
+      status={fixtures.get_status}
+      runningGame={{ appid: 1091500, name: "Cyberpunk 2077", gameid: "1091500" }}
+      onBack={() => {}} />);
+  console.log(`  a game that does not need it never mentions it: ${
+    !gdPlain.host.textContent!.includes("REFramework")}`);
 
   // -- automatic settings mode ----------------------------------------------
   const settingsTab = findAll(gd.host, '[data-tab="basic"]')[0] as HTMLElement;

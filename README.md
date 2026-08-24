@@ -34,6 +34,16 @@ OptiScaler v0.9.4 is bundled, so installing works offline and every game gets th
   install the DLL under the filename the entry names, write the launch options, apply the
   settings it lists. Every line says which wiki field it came from before anything is written,
   and anything the plugin couldn't place is shown to you instead of guessed at.
+- **Installs REFramework for the games that need it.** A handful of RE Engine titles — the
+  Resident Evil games, Devil May Cry 5, Monster Hunter Wilds, PRAGMATA — are on the compatibility
+  list as working, and are, but only with
+  [REFramework](https://github.com/praydog/REFramework) already next to the executable: it is
+  what exposes the upscaler OptiScaler hooks. The entry says so in prose, and the checklist now
+  reads it, states which of the two builds this game wants, downloads it and installs it as part
+  of the same step — including the `WINEDLLOVERRIDES` entry it needs from Proton, which the wiki
+  never mentions because those pages are written for Windows. The one file that can't be
+  automatic — PureDark's `PDPerfPlugin.dll`, which lives behind a Nexus Mods login — is named and
+  linked as a step for you, and ticks when you drop it in.
 - **Basic or Advanced settings.** Basic is a handful of controls (frame generation on/off, which
   generator runs it, 2X/3X/4X, which upscaler to force), each driving several INI keys at once.
   Advanced gives you all 288 settings across 34 sections. Controls and help text are generated

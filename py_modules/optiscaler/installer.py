@@ -29,6 +29,8 @@ from .constants import (
     PAYLOAD_DIRS,
     PAYLOAD_FILES,
     PROXY_FILENAMES,
+    REFRAMEWORK_DLL,
+    REFRAMEWORK_REVISION,
     RUNTIME_ARTIFACTS,
 )
 
@@ -136,6 +138,12 @@ def detect(target_dir):
         "backed_up": [],
         "launch_record": {"recorded": False, "value": ""},
         "fsr4": {},
+        # REFramework, for the RE Engine games that need it. Reported from the
+        # folder rather than from the manifest so a copy the user put there
+        # themselves counts — the step is "is REF present", not "did we install
+        # REF", and re-installing over somebody's own working REF would be a
+        # worse answer than leaving it alone.
+        "reframework": {"installed": False, "revision": None, "managed": False},
     }
     if not target.is_dir():
         return result
@@ -149,6 +157,17 @@ def detect(target_dir):
     result["log_present"] = log.is_file()
     result["log_path"] = str(log)
     result["fsr4"] = fsr4_status(target)
+
+    ref_dll = target / REFRAMEWORK_DLL
+    ref_revision = target / REFRAMEWORK_REVISION
+    result["reframework"] = {
+        "installed": ref_dll.is_file(),
+        "revision": (
+            ref_revision.read_text(encoding="utf-8", errors="replace").strip()[:80]
+            if ref_revision.is_file() else None
+        ),
+        "managed": False,
+    }
 
     stash = backup_dir(target)
     if stash.is_dir():
@@ -168,6 +187,7 @@ def detect(target_dir):
                 version=manifest.get("optiscaler_version"),
                 installed_at=manifest.get("installed_at"),
             )
+            result["reframework"]["managed"] = bool(manifest.get("reframework"))
             result["extra_proxies"] = [p for p in present if p != name
                                        and _looks_like_optiscaler(target / p)]
             return result
@@ -263,6 +283,52 @@ def import_fsr4_files(target_dir, source_dir, logger=None):
     return {"path": str(target), "imported": names, "source": str(source)}
 
 
+def add_files(target_dir, sources, logger=None):
+    """Copy extra files into an existing install and register them for removal.
+
+    The same contract as everything else this plugin puts in a game folder:
+    anything displaced is stashed, everything added is written into the
+    manifest, and uninstall reverses both. Used to add REFramework to a game
+    that is already set up, or to retry a download that failed the first time.
+
+    A game with no manifest — OptiScaler installed by hand, or by another tool —
+    still gets the files. It is the tracking that is unavailable there, not the
+    install, and refusing would be refusing the only thing the user asked for.
+    """
+    target = Path(target_dir)
+    if not target.is_dir():
+        raise NotADirectoryError(f"install target does not exist: {target}")
+
+    manifest = read_manifest(target) or {}
+    backups = dict(manifest.get("backups") or {})
+    files = list(manifest.get("files") or [])
+    added = []
+
+    for source in sources:
+        source = Path(source)
+        if not source.is_file():
+            raise FileNotFoundError(f"missing {source}")
+        name = source.name
+        destination = target / name
+        if destination.exists() and name not in backups and name not in files:
+            backups[name] = _stash(target, destination, logger)
+        shutil.copy2(source, destination)
+        if name not in files:
+            files.append(name)
+        added.append(name)
+        if logger:
+            logger.info("installed %s", name)
+
+    if manifest:
+        manifest["files"] = files
+        manifest["backups"] = backups
+        if REFRAMEWORK_DLL in added:
+            manifest["reframework"] = True
+        (target / MANIFEST_NAME).write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+    return {"ok": True, "path": str(target), "files": added, "tracked": bool(manifest)}
+
+
 def _stash(target, path, logger=None):
     """Move a file or directory into the backup folder; returns its name."""
     stash = backup_dir(target)
@@ -282,7 +348,7 @@ def _stash(target, path, logger=None):
 
 
 def install(target_dir, payload_root, filename=DEFAULT_PROXY, preserve_ini=True,
-            logger=None, live_asi=None, optipatcher=None):
+            logger=None, live_asi=None, optipatcher=None, reframework_files=None):
     """Copy OptiScaler into target_dir under the given proxy filename.
 
     ``live_asi`` is the path to the compiled live-control plugin; when given it
@@ -291,6 +357,13 @@ def install(target_dir, payload_root, filename=DEFAULT_PROXY, preserve_ini=True,
     ``optipatcher`` is the path to OptiPatcher.asi. It goes in the same plugin
     folder and lets OptiScaler expose DLSS/DLSS-FG inputs in the games it has
     patterns for, without DXGI spoofing.
+
+    ``reframework_files`` are the already-downloaded REFramework files for the
+    RE Engine games that cannot host OptiScaler without it. They go in through
+    the same ``place`` as everything else, on purpose: that is what puts them in
+    the manifest, stashes anything they displace, and takes them back out on
+    uninstall. A mod installed off to one side of that machinery is a mod this
+    plugin cannot promise to remove.
     """
     if filename not in PROXY_FILENAMES:
         raise ValueError(f"unsupported filename: {filename}")
@@ -367,6 +440,19 @@ def install(target_dir, payload_root, filename=DEFAULT_PROXY, preserve_ini=True,
         if name not in created_dirs:
             created_dirs.append(name)
 
+    # REFramework, for the games whose wiki entry says OptiScaler does nothing
+    # without it. One file (plus the revision stamp REF itself writes), placed
+    # next to the executable exactly as REF's own instructions describe.
+    ref_result = {"installed": False, "files": [], "error": None}
+    for source in reframework_files or []:
+        source = Path(source)
+        if not source.is_file():
+            ref_result["error"] = f"missing {source.name}"
+            continue
+        place(source, source.name)
+        ref_result["files"].append(source.name)
+    ref_result["installed"] = REFRAMEWORK_DLL in ref_result["files"]
+
     # The live-control plugin: an .asi OptiScaler loads into the game process so
     # frame generation and the upscaler can be changed without a restart.
     live_result = {"installed": False, "error": None}
@@ -397,6 +483,7 @@ def install(target_dir, payload_root, filename=DEFAULT_PROXY, preserve_ini=True,
         "plugin": "decky-optiscaler",
         "live_asi": live_result["installed"],
         "optipatcher": patcher_result["installed"],
+        "reframework": ref_result["installed"],
         "optiscaler_version": OPTISCALER_VERSION,
         "filename": filename,
         "installed_at": time.time(),
@@ -413,6 +500,7 @@ def install(target_dir, payload_root, filename=DEFAULT_PROXY, preserve_ini=True,
         "version": OPTISCALER_VERSION,
         "ini_preserved": preserve_ini and ini_path.is_file(),
         "optipatcher": patcher_result,
+        "reframework": ref_result,
         "launch_option": launch_option(filename),
         "files": created,
         "dirs": created_dirs,

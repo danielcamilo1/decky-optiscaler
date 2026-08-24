@@ -135,6 +135,16 @@ class Plugin:
                       preserve_ini: bool = True, optipatcher: bool = False) -> dict:
         return await self.service.install(target_dir, filename, preserve_ini, optipatcher)
 
+    async def get_reframework_status(self, target_dir: str, game_path: str = None,
+                                     name: str = None, extra_names: list = None) -> dict:
+        return await self.service.get_reframework_status(
+            target_dir, game_path, name, extra_names)
+
+    async def install_reframework(self, target_dir: str, game_path: str = None,
+                                  name: str = None, extra_names: list = None) -> dict:
+        return await self.service.install_reframework(
+            target_dir, game_path, name, extra_names)
+
     async def get_optipatcher_status(self, target_dir: str) -> dict:
         return await self.service.get_optipatcher_status(target_dir)
 

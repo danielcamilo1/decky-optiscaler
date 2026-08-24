@@ -40,7 +40,15 @@ NOISE_WORDS = {
 }
 
 ROW_RE = re.compile(r"^\|(.+)\|\s*$")
-LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
+# `[Game name](Wiki-Page)`. The target has to allow one level of nested
+# parentheses, because wiki page names carry them: "[Resident Evil 2
+# (2019)](Resident-Evil-2-(2019))". A target of `[^)]+` stops at the *inner*
+# closing bracket and yields the page "Resident-Evil-2-(2019", which the wiki
+# does not serve — so the detail page for every parenthesised title silently
+# never downloaded, and those are exactly the Resident Evil entries whose
+# settings and REFramework instructions live on the page rather than in the
+# notes column.
+LINK_RE = re.compile(r"\[([^\]]+)\]\(((?:[^()]|\([^()]*\))+)\)")
 # `dxgi.dll` / `OptiScaler.asi` in backticks, optionally quoted
 FILENAME_RE = re.compile(
     r"`?\b(" + "|".join(re.escape(f).replace(r"\.", r"\.") for f in PROXY_FILENAMES) + r")\b`?",
@@ -153,9 +161,10 @@ class _ipv4_only:
         return False
 
 
-def _open(request, timeout, context):
+def _open(request, timeout, context, binary=False):
     with urllib.request.urlopen(request, timeout=timeout, context=context) as response:
-        return response.read().decode("utf-8", errors="replace")
+        body = response.read()
+    return body if binary else body.decode("utf-8", errors="replace")
 
 
 def _is_retryable(exc):
@@ -169,7 +178,7 @@ def _is_retryable(exc):
     return isinstance(exc, (ConnectionError, OSError))
 
 
-def _http_get(url, timeout=12):
+def _http_get(url, timeout=12, binary=False):
     global _ssl_context, _ssl_context_kind
 
     # Wiki page names contain characters such as U+2010 HYPHEN, which urllib
@@ -186,12 +195,12 @@ def _http_get(url, timeout=12):
         and only one of them is worth a second try.
         """
         try:
-            return _open(request, timeout, context)
+            return _open(request, timeout, context, binary)
         except Exception as exc:
             if _is_tls_error(exc) or not _is_retryable(exc):
                 raise
             with _ipv4_only():
-                return _open(request, timeout, context)
+                return _open(request, timeout, context, binary)
 
     if _ssl_context is not None:
         try:
@@ -219,6 +228,34 @@ def _http_get(url, timeout=12):
         return body
 
     raise last_error if last_error else urllib.error.URLError("no usable TLS context")
+
+
+def download(url, dest, timeout=90):
+    """Fetch a binary file to `dest`, via the same transport the wiki uses.
+
+    It lives here, in the module about the compatibility list, because the
+    transport does: the IPv4 retry, the CA-bundle fallback chain and the rule
+    that a server which *answered* is never retried are all lessons this plugin
+    learned the hard way on real Decks, and a second downloader that had not
+    learned them would fail on exactly the networks these were written for.
+
+    Written to a temporary file and moved into place, so a download that dies
+    half way through leaves no half a DLL behind for the next run to trust.
+    """
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    body = _http_get(url, timeout=timeout, binary=True)
+    if not body:
+        raise ValueError(f"empty response from {url}")
+    partial = dest.with_name(dest.name + ".part")
+    partial.write_bytes(body)
+    partial.replace(dest)
+    return dest
+
+
+def download_json(url, timeout=20):
+    """Fetch and parse JSON over the same transport."""
+    return json.loads(_http_get(url, timeout=timeout))
 
 
 def tokens(name):

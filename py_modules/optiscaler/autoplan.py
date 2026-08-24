@@ -23,8 +23,9 @@ Two rules run through all of it:
 
 import re
 
-from . import schema
+from . import reframework, schema
 from .constants import DEFAULT_PROXY
+from .wiki import normalize
 
 # Extra arguments a wiki entry may tell the user to launch the game with. These
 # go after %command% — they are the game's own arguments, not Proton's.
@@ -270,18 +271,27 @@ def _mine_launch_flags(sources):
     return found
 
 
-def launch_options(filename, flags):
+def launch_options(filename, flags, overrides=()):
     """The full Steam launch options string for a filename and extra arguments.
 
     Proton's DLL override has to come before %command% because it is an
     environment variable for the process; the game's own arguments go after it,
     where Steam appends them to the command line.
+
+    ``overrides`` is for DLLs this plugin installs that are not OptiScaler's own
+    proxy — REFramework's `dinput8`, so far. They need the identical treatment
+    for the identical reason, and Proton shipping its own dinput8 is why an
+    REFramework install that looks perfect in the folder does nothing at all in
+    the game. They are written as separate `stem=n,b` clauses rather than the
+    shorter `a,b=n,b` form, because that is the form the removal path
+    recognises when it takes them back out again.
     """
-    if str(filename).lower().endswith(".asi"):
-        head = "%command%"
-    else:
-        stem = filename[:-4] if filename.lower().endswith(".dll") else filename
-        head = f'WINEDLLOVERRIDES="{stem}=n,b" %command%'
+    stems = [] if str(filename).lower().endswith(".asi") else [
+        filename[:-4] if filename.lower().endswith(".dll") else filename
+    ]
+    stems += [stem for stem in overrides if stem and stem not in stems]
+    head = f'WINEDLLOVERRIDES="{";".join(f"{s}=n,b" for s in stems)}" %command%' if stems \
+        else "%command%"
     return " ".join([head, *flags]) if flags else head
 
 
@@ -301,6 +311,7 @@ def build(recommendation):
         "launch_options": launch_options(DEFAULT_PROXY, []),
         "settings": [],
         "framegen": None,
+        "reframework": None,
         "unresolved": [],
         "warnings": [],
     }
@@ -311,6 +322,12 @@ def build(recommendation):
     settings, unresolved = _mine_settings(sources)
     flags = _mine_launch_flags(sources)
     filename = recommendation.get("filename") or DEFAULT_PROXY
+    # A few RE Engine games are on the list as working and are — but only with
+    # REFramework already in the folder. Without it OptiScaler loads, reports
+    # nothing wrong and changes nothing on screen, so this belongs in the plan
+    # next to the install rather than in the prose nobody reads.
+    ref = reframework.requirement(sources, normalize(recommendation.get("game") or ""))
+    overrides = [ref["override"]] if ref else []
 
     plan.update(
         available=True,
@@ -323,15 +340,24 @@ def build(recommendation):
         filename_source=recommendation.get("filename_source") or "default",
         optipatcher=bool(recommendation.get("optipatcher")),
         launch_flags=flags,
-        launch_options=launch_options(filename, flags),
+        launch_options=launch_options(filename, flags, overrides),
         settings=settings,
         framegen=_mine_framegen(recommendation, sources),
+        reframework=ref,
         unresolved=unresolved,
     )
 
     if recommendation.get("compatibility") and "❌" in recommendation["compatibility"]:
         plan["warnings"].append(
             "The wiki lists this game as not working with OptiScaler.")
+    if ref and not ref["automatic"]:
+        plan["warnings"].append(
+            f"This game needs REFramework, and {ref['reason']}.")
+    if ref and ref.get("plugin"):
+        plan["warnings"].append(
+            f"This game also needs {ref['plugin']} from {ref['plugin_name']}, which is on "
+            "Nexus Mods and cannot be downloaded from here — add it next to the executable "
+            "yourself.")
     if recommendation.get("detail", {}).get("Known Issues", "").strip() not in ("", "-"):
         plan["warnings"].append(
             "This game has known issues on the wiki that may need steps outside "

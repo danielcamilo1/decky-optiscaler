@@ -5,7 +5,7 @@ import os
 import time
 from pathlib import Path
 
-from . import autoplan, installer, live, monitor, steam
+from . import autoplan, installer, live, monitor, reframework, steam
 from .constants import (
     DEFAULT_PROXY,
     INI_NAME,
@@ -14,6 +14,7 @@ from .constants import (
     OPTISCALER_VERSION,
     PAYLOAD_ARCHIVE,
     PROXY_FILENAMES,
+    REFRAMEWORK_DLL,
 )
 from .inifile import IniFile
 from .payload import Payload
@@ -380,6 +381,7 @@ class OptiScalerService:
                 "candidates": candidates,
                 "install": info,
                 "launch_option": installer.launch_option(info["filename"] or DEFAULT_PROXY),
+                "reframework": reframework.status(target),
                 "writable": os.access(target, os.W_OK) if Path(target).is_dir() else False,
             }
 
@@ -565,7 +567,8 @@ class OptiScalerService:
             return {"ok": False, "error": "no compatibility entry matched this game",
                     **planned}
 
-        result = await self.install(target_dir, plan["filename"], False, plan["optipatcher"])
+        result = await self.install(target_dir, plan["filename"], False, plan["optipatcher"],
+                                    plan.get("reframework"))
         if not result.get("ok"):
             return {"ok": False, "error": result.get("error"), **planned}
 
@@ -604,14 +607,38 @@ class OptiScalerService:
 
     # -- install ---------------------------------------------------------
     async def install(self, target_dir, filename=DEFAULT_PROXY, preserve_ini=True,
-                      optipatcher=False):
+                      optipatcher=False, reframework_plan=None):
+        """Install OptiScaler, and REFramework first when the plan calls for it.
+
+        A failed REFramework download does not fail the install. The two are
+        separate mods and the OptiScaler half is still worth having on disk;
+        what matters is that the failure is *reported*, because for these games
+        an install without REF is one that will do nothing and say nothing.
+        """
+        ref_result = {"required": False, "installed": False, "error": None}
+        ref_files = None
+        if reframework_plan and reframework_plan.get("required"):
+            ref_result["required"] = True
+            try:
+                ref_files = await self._run(
+                    reframework.fetch, reframework_plan, self.reframework_cache(), self.log
+                )
+            except Exception as exc:
+                self.log.warning("REFramework download failed for %s: %s", target_dir, exc)
+                ref_result["error"] = str(exc)
         try:
             payload_root = await self.ensure_payload()
             result = await self._run(
                 installer.install, target_dir, payload_root, filename, preserve_ini,
                 self.log, self.live_asi_path(),
                 self.optipatcher_path() if optipatcher else None,
+                ref_files,
             )
+            if ref_result["required"]:
+                installed = result.get("reframework", {})
+                ref_result["installed"] = bool(installed.get("installed"))
+                ref_result["error"] = ref_result["error"] or installed.get("error")
+                result["reframework"] = {**installed, **ref_result}
             # OptiScaler will not look for .asi plugins unless it is told to,
             # and both our live-control module and OptiPatcher are .asi plugins.
             if result.get("live", {}).get("installed") or result.get("optipatcher", {}).get(
@@ -727,6 +754,61 @@ class OptiScalerService:
         """The compiled live-control plugin shipped inside this plugin."""
         candidate = self.plugin_dir / "bin" / live.ASI_NAME
         return str(candidate) if candidate.is_file() else None
+
+    def reframework_cache(self):
+        """Where downloaded REFramework builds are kept between installs.
+
+        Under the runtime directory, so setting up a second Resident Evil game
+        is a copy rather than a second 13 MB download on a handheld connection —
+        and so it goes when the plugin does.
+        """
+        return self.runtime_dir / "reframework"
+
+    async def get_reframework_status(self, target_dir, game_path=None, name=None,
+                                     extra_names=None):
+        """Whether this game needs REFramework, and whether it has it.
+
+        Both halves in one answer, because either alone is unreadable: "present"
+        means nothing for a game that does not want it, and "required" means
+        nothing without knowing whether it is already there.
+        """
+        wanted = None
+        if name or game_path:
+            planned = await self.get_auto_plan(name or Path(target_dir).name, extra_names,
+                                               False, game_path)
+            wanted = planned["plan"].get("reframework")
+        return await self._run(reframework.status, target_dir, wanted or {})
+
+    async def install_reframework(self, target_dir, game_path=None, name=None,
+                                  extra_names=None):
+        """Add REFramework to a game that is already set up, or retry a failure.
+
+        Separate from the install for the same reason OptiPatcher is: a download
+        over a handheld's connection is the part that fails, and having to
+        reinstall OptiScaler to retry it would be a poor answer to a flaky
+        network.
+        """
+        try:
+            planned = await self.get_auto_plan(name or Path(target_dir).name, extra_names,
+                                               False, game_path)
+            wanted = planned["plan"].get("reframework")
+            if not wanted or not wanted.get("required"):
+                return {"ok": False, "error": "this game's wiki entry does not ask for "
+                                              "REFramework"}
+            if not wanted.get("automatic"):
+                return {"ok": False, "error": wanted.get("reason") or
+                        "REFramework cannot be downloaded for this game",
+                        "page": wanted.get("page")}
+            files = await self._run(reframework.fetch, wanted, self.reframework_cache(),
+                                    self.log)
+            result = await self._run(installer.add_files, target_dir, files, self.log)
+            if not result.get("ok"):
+                return {"ok": False, "error": result.get("error")}
+            return {"ok": True, "installed": True, "files": result["files"],
+                    "status": await self._run(reframework.status, target_dir, wanted)}
+        except Exception as exc:
+            self.log.exception("REFramework install failed for %s", target_dir)
+            return {"ok": False, "error": str(exc)}
 
     def optipatcher_path(self):
         """The bundled OptiPatcher build, if this package shipped with one."""

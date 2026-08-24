@@ -27,6 +27,70 @@ OPTIPATCHER_ARCHIVE = "OptiPatcher.asi"
 OPTIPATCHER_SHA256 = "1324e6d131410fd43b721d684e7fd950c4f33c4c31a1db475f3d134a0ef3faeb"
 OPTIPATCHER_VERSION = "rolling (2026-08-18)"
 
+# REFramework (https://github.com/praydog/REFramework) is a separate mod, not
+# part of OptiScaler. A handful of RE Engine games — the Resident Evil titles,
+# Devil May Cry 5, Monster Hunter Wilds, PRAGMATA — cannot host OptiScaler at
+# all without it, because REF is what exposes the upscaler hooks OptiScaler
+# attaches to. The compatibility list says so in prose ("Requires REFramework"),
+# and until this the plugin read straight past it: the install succeeded, the
+# launch options were set, and the game rendered exactly as it had before.
+#
+# Both builds ship the same single file, which is the whole reason installing it
+# from here is safe to do automatically.
+REFRAMEWORK_DLL = "dinput8.dll"
+REFRAMEWORK_REVISION = "reframework_revision.txt"
+# The files an REFramework archive is allowed to contain. Anything else in it is
+# ignored rather than unpacked: this writes into a folder full of somebody's
+# game, and "extract the zip" is not a thing to do on trust.
+REFRAMEWORK_FILES = [REFRAMEWORK_DLL, REFRAMEWORK_REVISION]
+
+# praydog's own nightly, which is now one unified build covering every game it
+# supports — hence a single asset rather than the per-game ones the wiki text
+# still describes.
+REFRAMEWORK_NIGHTLY_URL = (
+    "https://github.com/praydog/REFramework-nightly/releases/latest/download/REFramework.zip"
+)
+REFRAMEWORK_NIGHTLY_PAGE = "https://github.com/praydog/REFramework-nightly/releases/latest"
+
+# The pd-upscaler branch, which the Resident Evil entries and DMC5 ask for by
+# name. It is built per game, and PDPerfPlugin does not support the unified
+# nightly above, so the two are genuinely different downloads rather than one
+# being a newer version of the other. The official repo's artifact links expire,
+# which is why the wiki points at this mirror.
+REFRAMEWORK_PD_RELEASES = "https://api.github.com/repos/TheRazerMD/REFramework/releases"
+REFRAMEWORK_PD_PAGE = "https://github.com/TheRazerMD/REFramework/releases"
+
+# Which per-game asset each compatibility-list entry needs, by the entry's
+# normalised key. Curated rather than guessed: the asset names are game codes
+# ("RE2", "DMC5") that no amount of matching gets to from "Resident Evil 2
+# (2019)", and installing the wrong game's REFramework build is a crash on
+# launch. A game not in here reports that it could not be fetched and links the
+# release page — it never falls back to a near-enough asset.
+REFRAMEWORK_PD_ASSETS = {
+    "devilmaycry5": "DMC5.zip",
+    "dragonsdogmaii": "DD2.zip",
+    "monsterhunterrise": "MHRISE.zip",
+    "monsterhunterstories3twistedreflection": "MHSTORIES3.zip",
+    "monsterhunterwilds": "MHWILDS.zip",
+    "pragmata": "PRAGMATA.zip",
+    "residentevil22019": "RE2.zip",
+    "residentevil32020": "RE3.zip",
+    "residentevil42023": "RE4.zip",
+    "residentevil7biohazard": "RE7.zip",
+    "residentevil8village": "RE8.zip",
+    "residentevil9requiem": "RE9.zip",
+}
+
+# PureDark's UpscalerBasePlugin, which the pd-upscaler entries need alongside
+# REFramework. It is on Nexus Mods behind a login, so it cannot be downloaded
+# from here at all — the checklist names it, links it, and ticks when the file
+# turns up next to the executable.
+REFRAMEWORK_PD_PLUGIN = "PDPerfPlugin.dll"
+REFRAMEWORK_PD_PLUGIN_NAME = "UpscalerBasePlugin 1.1.2"
+REFRAMEWORK_PD_PLUGIN_URL = (
+    "https://www.nexusmods.com/site/mods/502?tab=files&file_id=2293"
+)
+
 # The filenames OptiScaler may be installed under. Order matters: it is the
 # order setup_linux.sh presents and the order we probe for existing installs.
 PROXY_FILENAMES = [

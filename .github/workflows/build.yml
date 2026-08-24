@@ -2,7 +2,10 @@ name: Build
 
 on:
   push:
-    branches: [main]
+    # `testing` as well as `main`: the prereleases are cut from that branch, and
+    # it had no CI at all - every 0.0.4.x-testing tag was the first time any of
+    # this ran against the commit it was built from.
+    branches: [main, testing]
   pull_request:
   workflow_dispatch:
 
@@ -12,18 +15,18 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: pnpm/action-setup@v4
         with:
           version: 10
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -77,7 +80,7 @@ jobs:
       - name: Package
         run: python3 scripts/package.py
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: decky-optiscaler-${{ github.sha }}
           path: out/*.zip

@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ inputs.tag || github.ref }}
 
@@ -34,17 +34,25 @@ jobs:
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          # A tag with a pre-release part - v0.0.5.1-testing, v0.1.0-rc1 - is a
+          # prerelease. Without this, every build off the testing branch was
+          # published as a full release and became the one Decky Loader's
+          # "latest" link pointed at.
+          case "$version" in
+            *-*) echo "prerelease=true" >> "$GITHUB_OUTPUT" ;;
+            *)   echo "prerelease=false" >> "$GITHUB_OUTPUT" ;;
+          esac
 
       - uses: pnpm/action-setup@v4
         with:
           version: 10
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -92,11 +100,41 @@ jobs:
             echo "Or download the zip below and unpack it into \`~/homebrew/plugins/\`."
           } >> notes.md
 
+      # Create it, or update the one that is already there.
+      #
+      # Every 0.0.4.x-testing release failed here, at the last step, after a
+      # clean build: "a release with the same tag name already exists". Pushing
+      # a tag runs this workflow, and a release created by hand for that same
+      # tag - which is how those prereleases were published - means `gh release
+      # create` is guaranteed to lose the race. The workflow then reported a red
+      # cross over a release that had in fact shipped, which is the worst of
+      # both: the failure means nothing and a real one would not be noticed.
+      #
+      # So: create when there is nothing there, and otherwise update the notes
+      # and replace the asset. Either way the tag ends up with the artifact this
+      # run built, and re-running the workflow on a tag is a repeatable
+      # operation rather than a guaranteed failure.
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          ASSET: ${{ steps.asset.outputs.path }}
+          PRERELEASE: ${{ steps.version.outputs.prerelease }}
         run: |
-          gh release create "${{ steps.version.outputs.tag }}" \
-            --title "${{ steps.version.outputs.tag }}" \
-            --notes-file notes.md \
-            "${{ steps.asset.outputs.path }}"
+          set -euo pipefail
+          flags=(--title "$TAG" --notes-file notes.md)
+          # Both set explicitly: `gh release edit --latest` alone does not
+          # clear an existing prerelease flag, so a tag re-run would leave a
+          # full release still marked as one.
+          if [ "$PRERELEASE" = "true" ]; then
+            flags+=(--prerelease)
+          else
+            flags+=(--prerelease=false --latest)
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::notice::release $TAG already exists - updating it"
+            gh release edit "$TAG" "${flags[@]}"
+            gh release upload "$TAG" "$ASSET" --clobber
+          else
+            gh release create "$TAG" "${flags[@]}" "$ASSET"
+          fi

@@ -10,6 +10,7 @@ import type {
   Library,
   LiveStatus,
   OptipatcherStatus,
+  ReframeworkStatus,
   MonitorReport,
   OptionChange,
   PayloadStatus,
@@ -136,6 +137,15 @@ export const writeConfig = callable<[targetDir: string, changes: OptionChange[]]
   "write_config"
 );
 export const resetConfig = callable<[targetDir: string], ActionResult>("reset_config");
+
+export const getReframeworkStatus = callable<
+  [targetDir: string, gamePath?: string, name?: string, extraNames?: string[]],
+  ReframeworkStatus
+>("get_reframework_status");
+export const installReframework = callable<
+  [targetDir: string, gamePath?: string, name?: string, extraNames?: string[]],
+  ActionResult & { installed?: boolean; files?: string[]; page?: string }
+>("install_reframework");
 
 export const getOptipatcherStatus = callable<[targetDir: string], OptipatcherStatus>(
   "get_optipatcher_status"

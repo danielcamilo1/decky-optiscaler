@@ -14,6 +14,7 @@ import {
   autoInstall,
   getMonitor,
   install,
+  installReframework,
   refreshWiki,
   resetConfig,
   setAutoMode,
@@ -37,6 +38,7 @@ import type {
   GameDetail,
   LiveStatus,
   MonitorReport,
+  PlannedReframework,
   Recommendation,
 } from "../types";
 import { Mono, Notice, Pill } from "./Common";
@@ -207,6 +209,75 @@ function settingsSummary(plan: AutoPlan) {
   return [pairs.join(", "), fg].filter(Boolean).join(", plus ");
 }
 
+/**
+ * The REFramework step, said in one line.
+ *
+ * Which build matters and is not interchangeable: praydog's unified nightly and
+ * the per-game pd-upscaler branch are different mods that happen to share a
+ * filename, and the entries that want one explicitly do not work with the
+ * other. Naming it is also what makes the step checkable by hand afterwards.
+ */
+function reframeworkSummary(ref: PlannedReframework) {
+  const build =
+    ref.variant === "pd-upscaler"
+      ? "the pd-upscaler build for this game"
+      : "praydog's nightly build";
+  return ref.automatic
+    ? `Downloads ${build} and puts ${ref.dll} next to the executable.`
+    : `${ref.reason ?? "It cannot be downloaded from here"} — get ${build} from ${ref.page}.`;
+}
+
+/**
+ * The one file in this whole flow that cannot be automatic.
+ *
+ * PureDark's UpscalerBasePlugin is on Nexus Mods behind a login, so nothing
+ * here can fetch it, and the pd-upscaler games do not work without it. It gets
+ * a row of its own rather than a line in a warning: an install that reports
+ * success and leaves the game rendering exactly as before is the failure this
+ * whole feature exists to stop, and it would be absurd to reintroduce it one
+ * file further down.
+ */
+/* The prop is `wanted`, not `ref`: React reserves `ref`, strips it from the
+   props object, and the component receives nothing at all. */
+function PluginStep({
+  wanted,
+  present,
+}: Readonly<{ wanted: PlannedReframework; present: boolean }>) {
+  if (!wanted.plugin) return null;
+  return (
+    <PanelSectionRow>
+      <Field
+        label={
+          <StepLabel done={present}>
+            {present ? (
+              <>
+                <Mono>{wanted.plugin}</Mono> is there
+              </>
+            ) : (
+              <>
+                Add <Mono>{wanted.plugin}</Mono> yourself
+              </>
+            )}
+          </StepLabel>
+        }
+        description={
+          present
+            ? `From ${wanted.plugin_name}. Nothing else to do for this step.`
+            : `This game also needs ${wanted.plugin_name}, which is on Nexus Mods behind a
+               login — nothing here can download it. Put ${wanted.plugin} next to the
+               executable: ${wanted.plugin_url}`
+        }
+        bottomSeparator="standard"
+        childrenLayout="inline"
+        childrenContainerWidth="min"
+        focusable
+      >
+        {present ? <Pill color="#2f6b3f">done</Pill> : <Pill color="#5a4a20">you</Pill>}
+      </Field>
+    </PanelSectionRow>
+  );
+}
+
 export function SetupChecklist({
   detail,
   appid,
@@ -265,7 +336,33 @@ export function SetupChecklist({
     })();
   }, [installed, detail.install.path]);
 
-  const overrideSet = launchNow !== null && hasOverride(launchNow, filename);
+  /**
+   * REFramework, when this game's entry says OptiScaler does nothing without it.
+   *
+   * Taken from the plan before the install and from the folder after it, which
+   * are answers to two different questions: what this game needs, and what it
+   * has. The second is read from the folder rather than from our own manifest
+   * on purpose — somebody's existing working copy of REF counts, and
+   * re-installing over it would be a worse answer than leaving it alone.
+   */
+  const ref = planned?.reframework ?? null;
+  const refPresent = detail.reframework?.installed ?? detail.install.reframework?.installed
+    ?? false;
+  const pluginPresent = detail.reframework?.plugin_installed ?? false;
+
+  /**
+   * Both overrides, not just OptiScaler's.
+   *
+   * REFramework needs its own `WINEDLLOVERRIDES` entry for exactly the reason
+   * OptiScaler's proxy does: Proton ships a dinput8 of its own and loads that
+   * in preference to the game folder. The wiki never mentions it — it is
+   * written for Windows, where the folder wins — so a set-up that followed the
+   * entry to the letter would put REF in place and never load it.
+   */
+  const overrideSet =
+    launchNow !== null &&
+    hasOverride(launchNow, filename) &&
+    (!ref || hasOverride(launchNow, ref.override));
 
   /**
    * Whether this answer may still improve on its own.
@@ -322,6 +419,21 @@ export function SetupChecklist({
           toaster.toast({ title: "Install failed", body: String(result.error) });
           return;
         }
+        // REFramework is not one of the wiki's *settings*, so switching those
+        // off must not switch it off with them: it is the reason OptiScaler
+        // can hook this game at all, and an install without it is one that
+        // loads, reports nothing wrong and changes nothing on screen. The
+        // automatic path above places it as part of the plan; this one has to
+        // ask for it separately.
+        if (ref?.automatic) {
+          const added = await installReframework(detail.target, detail.path, detail.name, [folder]);
+          if (!added.ok) {
+            toaster.toast({
+              title: "OptiScaler installed, REFramework did not",
+              body: String(added.error),
+            });
+          }
+        }
         await setGameTarget(detail.path, detail.target);
         // Nothing is following the wiki, so every option stays the user's.
         await setAutoMode(detail.path, false);
@@ -337,6 +449,31 @@ export function SetupChecklist({
       await onChanged();
       await onReloadPlan();
       await refreshLaunch();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /**
+   * Add REFramework on its own, for a game already set up or a download that
+   * failed the first time.
+   *
+   * Its own action rather than "install everything again" because a 13 MB
+   * download over a handheld's connection is the part that fails, and making
+   * somebody reinstall OptiScaler to retry it is a poor answer to a flaky
+   * network.
+   */
+  const addReframework = async () => {
+    setBusy(true);
+    try {
+      const folder = detail.path.split("/").filter(Boolean).pop() ?? detail.name;
+      const result = await installReframework(detail.target, detail.path, detail.name, [folder]);
+      if (result.ok) {
+        toaster.toast({ title: "REFramework installed", body: detail.name });
+        await onChanged();
+      } else {
+        toaster.toast({ title: "Could not install REFramework", body: String(result.error) });
+      }
     } finally {
       setBusy(false);
     }
@@ -527,17 +664,29 @@ export function SetupChecklist({
 
   // -- not set up yet -------------------------------------------------------
   if (!installed) {
-    const steps = 1 + (planned && needsOverride && appid && withLaunch ? 1 : 0) +
+    // REFramework, when this game needs it, goes first: it is what OptiScaler
+    // hooks into, so it is the step everything below depends on. It is not
+    // offered as a toggle the way the launch options and the wiki's settings
+    // are — those are choices, and "install OptiScaler in a configuration that
+    // cannot work" is not one.
+    const refStep = ref && ref.automatic ? 1 : 0;
+    const steps = refStep + 1 +
+      (planned && needsOverride && appid && withLaunch ? 1 : 0) +
       (planned && withSettings ? 1 : 0);
+    /** Step numbers, so inserting one above does not renumber by hand. */
+    let step = 0;
+    const next = () => (step += 1);
     const runLabel = busy
       ? "Setting up…"
       : settling
         ? "Reading this game's entry…"
-        : steps === 3
-          ? "Do all three"
-          : steps === 2
-            ? "Do both"
-            : "Just install it";
+        : steps >= 4
+          ? `Do all ${steps === 4 ? "four" : steps}`
+          : steps === 3
+            ? "Do all three"
+            : steps === 2
+              ? "Do both"
+              : "Just install it";
 
     return (
       <>
@@ -588,9 +737,40 @@ export function SetupChecklist({
 
         {planned ? (
           <PanelSection>
+            {ref ? (
+              <PanelSectionRow>
+                <Field
+                  label={
+                    <StepLabel n={ref.automatic ? next() : undefined} done={refPresent}>
+                      {refPresent ? "REFramework is already here" : "Install REFramework"}
+                    </StepLabel>
+                  }
+                  description={
+                    refPresent
+                      ? `${detail.reframework?.dll ?? ref.dll} is next to the executable already.
+                         The build this entry asks for goes in over it, and yours is set aside.`
+                      : `OptiScaler cannot hook this game without it — the wiki says so under
+                         “${ref.source}”. ${reframeworkSummary(ref)}`
+                  }
+                  bottomSeparator="standard"
+                  childrenLayout="inline"
+                  childrenContainerWidth="min"
+                  focusable
+                >
+                  {ref.automatic ? (
+                    <span style={{ fontSize: "11px", opacity: 0.5 }}>required</span>
+                  ) : (
+                    <Pill color="#5a4a20">you</Pill>
+                  )}
+                </Field>
+              </PanelSectionRow>
+            ) : null}
+
+            {ref ? <PluginStep wanted={ref} present={pluginPresent} /> : null}
+
             <PanelSectionRow>
               <Field
-                label={<StepLabel n={1}>Install OptiScaler as <Mono>{planned.filename}</Mono></StepLabel>}
+                label={<StepLabel n={next()}>Install OptiScaler as <Mono>{planned.filename}</Mono></StepLabel>}
                 description={`Into ${shorten(detail.target)}, next to the executable that renders the game.`}
                 bottomSeparator="standard"
                 childrenLayout="inline"
@@ -603,8 +783,13 @@ export function SetupChecklist({
             {needsOverride && appid ? (
               <PanelSectionRow>
                 <ToggleField
-                  label={<StepLabel n={2}>Set the Steam launch options</StepLabel>}
-                  description={`${planned.launch_options} — without it Proton loads its own ${planned.filename}.`}
+                  label={<StepLabel n={next()}>Set the Steam launch options</StepLabel>}
+                  description={
+                    ref
+                      ? `${planned.launch_options} — without it Proton loads its own
+                         ${planned.filename} and its own ${ref.dll}, and neither mod runs.`
+                      : `${planned.launch_options} — without it Proton loads its own ${planned.filename}.`
+                  }
                   checked={withLaunch}
                   disabled={busy}
                   bottomSeparator="standard"
@@ -625,7 +810,7 @@ export function SetupChecklist({
             <PanelSectionRow>
               <ToggleField
                 label={
-                  <StepLabel n={needsOverride && appid ? 3 : 2}>
+                  <StepLabel n={next()}>
                     {planned.settings.length > 0
                       ? `Apply the ${planned.settings.length} setting${
                           planned.settings.length === 1 ? "" : "s"
@@ -747,6 +932,54 @@ export function SetupChecklist({
               </Field>
             </PanelSectionRow>
           )
+        ) : null}
+
+        {/* Only for the games whose entry asks for it. For everything else
+            there is no such thing as REFramework being missing, and a row
+            saying so would be a permanent unticked step on every game in the
+            library. */}
+        {ref ? (
+          <>
+            <PanelSectionRow>
+              <Field
+                label={
+                  <StepLabel done={refPresent}>
+                    {refPresent ? "REFramework installed" : "REFramework is missing"}
+                  </StepLabel>
+                }
+                description={
+                  refPresent
+                    ? [
+                        detail.reframework?.revision
+                          ? `Build ${detail.reframework.revision.slice(0, 12)}`
+                          : ref.variant === "pd-upscaler"
+                            ? "pd-upscaler build"
+                            : "nightly build",
+                        detail.install.reframework?.managed
+                          ? "installed by this plugin"
+                          : "already in the folder",
+                      ].join(" · ")
+                    : `Without it OptiScaler loads and changes nothing on screen — this game's
+                       entry says so under “${ref.source}”. ${reframeworkSummary(ref)}`
+                }
+                onClick={refPresent || !ref.automatic ? undefined : () => void addReframework()}
+                onActivate={refPresent || !ref.automatic ? undefined : () => void addReframework()}
+                focusable
+                bottomSeparator="standard"
+                childrenLayout="inline"
+                childrenContainerWidth="min"
+              >
+                {refPresent ? (
+                  <Pill color="#2f6b3f">ok</Pill>
+                ) : ref.automatic ? (
+                  <Pill color="#5a4a20">{busy ? "…" : "install it"}</Pill>
+                ) : (
+                  <Pill color="#5a4a20">you</Pill>
+                )}
+              </Field>
+            </PanelSectionRow>
+            <PluginStep wanted={ref} present={pluginPresent} />
+          </>
         ) : null}
 
         {!planned && !loadingWiki ? (

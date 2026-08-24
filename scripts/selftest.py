@@ -17,6 +17,7 @@ import sys
 import tempfile
 import time
 import urllib.error
+import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -25,7 +26,7 @@ sys.path.insert(0, str(ROOT / "py_modules"))
 from optiscaler.service import OptiScalerService  # noqa: E402
 from optiscaler import installer  # noqa: E402
 from optiscaler.inifile import IniFile  # noqa: E402
-from optiscaler.constants import COMPAT_CACHE_TTL  # noqa: E402
+from optiscaler.constants import COMPAT_CACHE_TTL, INI_NAME  # noqa: E402
 
 PASSED = []
 FAILED = []
@@ -1314,7 +1315,7 @@ def check_wiki_transport():
     real_open = wiki_mod._open
     attempts = []
 
-    def stalls_once(request, timeout, context):
+    def stalls_once(request, timeout, context, binary=False):
         attempts.append(socket_mod.getaddrinfo)
         if len(attempts) == 1:
             raise urllib.error.URLError(TimeoutError("timed out"))
@@ -1333,7 +1334,7 @@ def check_wiki_transport():
         # A server that answered is not retried: asking again says the same.
         attempts.clear()
 
-        def refuses(request, timeout, context):
+        def refuses(request, timeout, context, binary=False):
             attempts.append(1)
             raise urllib.error.HTTPError("u", 404, "Not Found", {}, None)
 
@@ -1889,6 +1890,261 @@ def check_auto_plan():
           any("known issues" in w.lower() for w in plan["warnings"]), plan["warnings"])
 
 
+def check_reframework():
+    """The games that cannot host OptiScaler without REFramework.
+
+    Nine entries on the compatibility list say, in prose, that OptiScaler does
+    nothing in this game unless REFramework is already in the folder — and for
+    three releases the plugin read straight past it. Those games got an install
+    that reported success, set the launch options, and changed nothing on
+    screen, which is the worst failure available because there is no error
+    anywhere to go looking for.
+
+    Everything below is driven by the text real entries actually carry.
+    """
+    from optiscaler import autoplan, reframework
+    from optiscaler.constants import REFRAMEWORK_DLL, REFRAMEWORK_PD_ASSETS
+
+    print("\nREFramework")
+
+    def plan_for(**recommendation):
+        base = {"matched": True, "game": "Test Game", "filename": "dxgi.dll",
+                "filename_source": "wiki entry", "optipatcher": False,
+                "compatibility": "✅", "notes": None, "detail": {}}
+        base.update(recommendation)
+        return autoplan.build(base)
+
+    # -- reading the requirement out of the entry ------------------------
+    plan = plan_for(game="Monster Hunter Wilds",
+                    notes="Requires REFramework, set Dxgi=false in the OptiScaler.ini "
+                          "to avoid crashes.")
+    ref = plan["reframework"]
+    check("a list row stating the requirement is read as one", bool(ref), plan["reframework"])
+    check("praydog's unified nightly is the default build",
+          ref["variant"] == "nightly" and ref["asset"] == "REFramework.zip", ref)
+    check("and it can be fetched without help", ref["automatic"], ref)
+    check("the entry that said so is cited", "notes" in ref["source"].lower(), ref["source"])
+
+    # The pd entries name a different mod that happens to share a filename.
+    plan = plan_for(game="Resident Evil 2 (2019)",
+                    notes="Requires REFramework (pd-upscaler branch) + PDUpscaler plugin "
+                          "+ OptiScaler, check Wiki")
+    ref = plan["reframework"]
+    check("an entry naming the pd-upscaler branch gets the pd build",
+          ref["variant"] == "pd-upscaler" and ref["asset"] == "RE2.zip", ref)
+    check("and is told it needs UpscalerBasePlugin as well",
+          ref["plugin"] == "PDPerfPlugin.dll" and ref["plugin_url"], ref)
+    check("which is reported as the user's job, since Nexus needs a login",
+          any("Nexus" in w for w in plan["warnings"]), plan["warnings"])
+
+    plan = plan_for(game="Devil May Cry 5",
+                    notes="Requires REFramework PDUpscaler branch + PDPerfPlugin mod and "
+                          "carefully reading the compatibility entry")
+    check("the branch spelled without a hyphen is the same branch",
+          plan["reframework"]["asset"] == "DMC5.zip", plan["reframework"])
+
+    # The detail page states it a different way than the list row does.
+    plan = plan_for(game="Resident Evil 8 Village", detail={
+        "Notes": "To get OptiScaler to work with REFramework + UpscalerBasePlugin: "
+                 "Download REFramework's pd-upscaler branch."})
+    check("the wiki page's phrasing is read too",
+          plan["reframework"]["variant"] == "pd-upscaler", plan["reframework"])
+
+    # -- what must not be read as a requirement --------------------------
+    # These sentences are on the same pages, about the same mod, and none of
+    # them is an instruction to install anything.
+    for text in ("XeFG seems to disable the REF overlay",
+                 "REF + XeFG currently cause heavy intermittent stuttering",
+                 "Might also have to disable Vignette through REF (under Camera options)",
+                 "OptiScaler depends on REF bypassing the anti-modding DRM"):
+        check("a passing mention of REF is not a requirement",
+              plan_for(detail={"Known Issues": text})["reframework"] is None, text)
+    check("and an entry that no longer needs it is not given it anyway",
+          plan_for(notes="This no longer requires REFramework as of 0.9.")["reframework"]
+          is None)
+    check("a game the entry says nothing about gets nothing",
+          plan_for(notes="Use -dx12 launch option.")["reframework"] is None)
+
+    # -- Proton's half, which the wiki never mentions ---------------------
+    # The wiki is written for Windows, where the game folder wins. On Proton it
+    # does not: REFramework's dll needs an override of its own or the mod sits
+    # in the folder doing nothing, and following the entry to the letter is
+    # exactly how that happens.
+    plan = plan_for(game="PRAGMATA", notes="Requires REFramework to work.")
+    check("REFramework gets a WINEDLLOVERRIDES entry of its own",
+          plan["launch_options"] == 'WINEDLLOVERRIDES="dxgi=n,b;dinput8=n,b" %command%',
+          plan["launch_options"])
+    plan = plan_for(game="PRAGMATA", notes="Requires REFramework to work. Use -dx12.")
+    check("and the game's own arguments still land after %command%",
+          plan["launch_options"].endswith("%command% -dx12"), plan["launch_options"])
+    check("a game with no REFramework requirement is unchanged",
+          plan_for()["launch_options"] == 'WINEDLLOVERRIDES="dxgi=n,b" %command%')
+    # -- a game with no known build --------------------------------------
+    plan = plan_for(game="Some Unlisted RE Engine Game",
+                    notes="Requires REFramework (pd-upscaler branch) to work.")
+    ref = plan["reframework"]
+    check("a pd game with no known asset refuses rather than guessing one",
+          ref["required"] and not ref["automatic"] and ref["asset"] is None, ref)
+    check("and says where to get it by hand", ref["page"] and ref["reason"], ref)
+    check("which is raised as a warning, not buried",
+          any("REFramework" in w for w in plan["warnings"]), plan["warnings"])
+
+    # -- the archive is unpacked by name, never on trust -------------------
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        archive = root / "REFramework.zip"
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr("dinput8.dll", b"REF" * 100)
+            zf.writestr("reframework_revision.txt", "abc123")
+            zf.writestr("readme.txt", "not ours")
+            zf.writestr("../../evil.dll", b"nope")
+            zf.writestr("nested/dinput8.dll", b"a second one")
+        taken = reframework._extract(archive, root / "out")
+        check("the files REFramework ships are taken",
+              sorted(taken) == ["dinput8.dll", "reframework_revision.txt"], taken)
+        check("and nothing else in the archive is",
+              not (root / "out" / "readme.txt").exists()
+              and sorted(p.name for p in (root / "out").iterdir())
+              == ["dinput8.dll", "reframework_revision.txt"],
+              sorted(p.name for p in (root / "out").iterdir()))
+        check("a path that climbs out of the folder lands nowhere",
+              not (root.parent / "evil.dll").exists() and not (root / "evil.dll").exists())
+        check("the first copy of a name wins, so a nested one cannot overwrite it",
+              (root / "out" / "dinput8.dll").read_bytes() == b"REF" * 100)
+
+        empty = root / "empty.zip"
+        with zipfile.ZipFile(empty, "w") as zf:
+            zf.writestr("something_else.dll", b"x")
+        try:
+            reframework._extract(empty, root / "out2")
+            check("an archive without the dll is refused", False, "no error raised")
+        except ValueError as exc:
+            check("an archive without the dll is refused", REFRAMEWORK_DLL in str(exc), exc)
+
+    # -- installing it, and taking it back out ---------------------------
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        game = root / "game"
+        game.mkdir()
+        payload = root / "payload"
+        payload.mkdir()
+        (payload / "OptiScaler.dll").write_bytes(b"OptiScaler" + b"\0" * (5 << 20))
+        (payload / INI_NAME).write_text("[Upscalers]\nDx12Upscaler=auto\n")
+        source = root / "ref"
+        source.mkdir()
+        (source / REFRAMEWORK_DLL).write_bytes(b"the REFramework build")
+        # The game already ships a dinput8 of its own, which is the case the
+        # whole backup contract exists for.
+        (game / REFRAMEWORK_DLL).write_bytes(b"the game's own dinput8")
+
+        result = installer.install(str(game), str(payload), "dxgi.dll", False, None,
+                                   None, None, [source / REFRAMEWORK_DLL])
+        check("REFramework lands next to the executable",
+              result["reframework"]["installed"]
+              and (game / REFRAMEWORK_DLL).read_bytes() == b"the REFramework build", result)
+        check("and the game's own file is set aside rather than lost",
+              REFRAMEWORK_DLL in result["backups"], result["backups"])
+        found = installer.detect(str(game))
+        check("detect reports it, and that we are the ones who installed it",
+              found["reframework"]["installed"] and found["reframework"]["managed"], found)
+
+        installer.uninstall(str(game))
+        check("removing OptiScaler removes REFramework with it",
+              (game / REFRAMEWORK_DLL).read_bytes() == b"the game's own dinput8",
+              (game / REFRAMEWORK_DLL).read_bytes())
+
+    # -- adding it to a game already set up -------------------------------
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        game = root / "game"
+        game.mkdir()
+        payload = root / "payload"
+        payload.mkdir()
+        (payload / "OptiScaler.dll").write_bytes(b"OptiScaler" + b"\0" * (5 << 20))
+        (payload / INI_NAME).write_text("[Upscalers]\nDx12Upscaler=auto\n")
+        installer.install(str(game), str(payload), "dxgi.dll", False)
+        source = root / "ref"
+        source.mkdir()
+        (source / REFRAMEWORK_DLL).write_bytes(b"added later")
+
+        added = installer.add_files(str(game), [source / REFRAMEWORK_DLL])
+        check("REFramework can be added without reinstalling OptiScaler",
+              added["ok"] and (game / REFRAMEWORK_DLL).is_file(), added)
+        manifest = installer.read_manifest(game)
+        check("and joins the manifest, so it is removed with everything else",
+              REFRAMEWORK_DLL in manifest["files"] and manifest["reframework"], manifest)
+        installer.uninstall(str(game))
+        check("which it is", not (game / REFRAMEWORK_DLL).exists())
+
+    # -- the curated asset table ------------------------------------------
+    seed = json.loads((ROOT / "defaults" / "compat-list.json").read_text())
+    keys = {entry["key"] for entry in seed["entries"]}
+    unknown = sorted(k for k in REFRAMEWORK_PD_ASSETS if k not in keys)
+    check("every curated asset key is a real compatibility-list entry",
+          not unknown, unknown)
+
+    # The point of the whole feature: the games on the real list that need it
+    # are found, and no others are.
+    found = {}
+    for entry in seed["entries"]:
+        recommendation = dict(entry, matched=True, game=entry["name"], detail={},
+                              filename="dxgi.dll", filename_source="x")
+        ref = autoplan.build(recommendation)["reframework"]
+        if ref:
+            found[entry["name"]] = ref["variant"]
+    check("the whole bundled list yields exactly the entries that ask for it",
+          sorted(found) == [
+              "Devil May Cry 5", "Monster Hunter Wilds", "PRAGMATA",
+              "Resident Evil 2 (2019)", "Resident Evil 3 (2020)",
+              "Resident Evil 4 (2023)", "Resident Evil 7 Biohazard",
+              "Resident Evil 8 Village", "Resident Evil 9 Requiem",
+          ], sorted(found))
+    check("with the right build for each",
+          [found[name] for name in sorted(found)] ==
+          ["pd-upscaler", "nightly", "nightly", "pd-upscaler", "pd-upscaler",
+           "pd-upscaler", "pd-upscaler", "pd-upscaler", "nightly"], found)
+    check("and every automatic one resolves to an asset",
+          all(autoplan.build(dict(e, matched=True, game=e["name"], detail={},
+                                  filename="dxgi.dll", filename_source="x"))
+              ["reframework"]["asset"]
+              for e in seed["entries"] if e["name"] in found))
+
+
+def check_parenthesised_pages():
+    """A wiki page name with brackets in it has to survive being parsed.
+
+    `[Resident Evil 2 (2019)](Resident-Evil-2-(2019))` is an ordinary row on the
+    compatibility list, and a link target of `[^)]+` stops at the inner bracket:
+    the page came out as "Resident-Evil-2-(2019", the wiki does not serve that,
+    and the detail page for every parenthesised title silently never downloaded.
+    Those are exactly the Resident Evil entries whose settings and REFramework
+    instructions live on the page rather than in the notes column.
+    """
+    from optiscaler import wiki as wiki_mod
+
+    print("\nParenthesised wiki pages")
+    markdown = (
+        "| Game | Compatibility | FG Inputs | OptiPatcher | Notes |\n"
+        "|---|---|---|---|---|\n"
+        "| [Resident Evil 2 (2019)](Resident-Evil-2-(2019)) | ✅ | DLSS |  | Requires REF |\n"
+        "| [AI Limit](AI-Limit) | ✅ | DLSS |  |  |\n"
+    )
+    entries = {e["name"]: e for e in wiki_mod.parse_compat_list(markdown)}
+    check("a page name carrying brackets is kept whole",
+          entries["Resident Evil 2 (2019)"]["page"] == "Resident-Evil-2-(2019)",
+          entries["Resident Evil 2 (2019)"]["page"])
+    check("and an ordinary one is unaffected",
+          entries["AI Limit"]["page"] == "AI-Limit", entries["AI Limit"]["page"])
+    check("the game's own name keeps its brackets too",
+          "Resident Evil 2 (2019)" in entries)
+
+    seed = json.loads((ROOT / "defaults" / "compat-list.json").read_text())
+    truncated = [e["name"] for e in seed["entries"]
+                 if e["page"] and e["page"].count("(") != e["page"].count(")")]
+    check("the bundled seed has no half-a-bracket page names left",
+          not truncated, truncated)
+
+
 def check_library_labels():
     """Only the SD card is called an SD card.
 
@@ -2036,6 +2292,8 @@ def main():
     check_asi_backend_layout()
     check_asi_state_layout()
     check_auto_plan()
+    check_reframework()
+    check_parenthesised_pages()
     check_option_validation()
     check_library_labels()
     print(f"\n{len(PASSED)} passed, {len(FAILED)} failed")

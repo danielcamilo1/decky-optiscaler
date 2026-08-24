@@ -108,6 +108,13 @@ export interface InstallInfo {
   backed_up: string[];
   launch_record: LaunchRecord;
   fsr4: Fsr4Status;
+  /**
+   * Whether REFramework's dll is next to the executable, and whether this
+   * plugin is the one that put it there. Read from the folder rather than the
+   * manifest: the step is "is REF present", not "did we install REF", and
+   * somebody's own working copy counts.
+   */
+  reframework: { installed: boolean; revision: string | null; managed: boolean };
 }
 
 export interface IniInfo {
@@ -128,6 +135,7 @@ export interface GameDetail {
   candidates: ExeCandidate[];
   install: InstallInfo;
   launch_option: string;
+  reframework: ReframeworkStatus;
   writable: boolean;
 }
 
@@ -223,6 +231,47 @@ export interface PlannedSetting {
   source: string;
 }
 
+/**
+ * REFramework, for the RE Engine games that cannot host OptiScaler without it.
+ *
+ * `automatic` is the whole question: when it is true this plugin can fetch the
+ * right build itself, and when it is false `reason` says why not and `page` is
+ * where to get it by hand. `plugin` is the one file that is never automatic —
+ * PureDark's UpscalerBasePlugin lives behind a Nexus Mods login — so the pd
+ * entries name it and link it instead of pretending it has been handled.
+ */
+export interface PlannedReframework {
+  required: boolean;
+  /** "nightly" (praydog's unified build) or "pd-upscaler" (per game). */
+  variant: string;
+  dll: string;
+  /** The WINEDLLOVERRIDES stem REFramework needs from Proton. */
+  override: string;
+  source: string;
+  detail: string;
+  asset: string | null;
+  url: string | null;
+  page: string;
+  plugin: string | null;
+  plugin_name: string | null;
+  plugin_url: string | null;
+  automatic: boolean;
+  reason: string | null;
+}
+
+/** What is actually next to the executable, against what the entry asked for. */
+export interface ReframeworkStatus {
+  required: boolean;
+  installed: boolean;
+  dll: string;
+  path: string;
+  revision: string | null;
+  plugin: string | null;
+  plugin_installed: boolean;
+  plugin_url: string | null;
+  plugin_name: string | null;
+}
+
 /** The frame-generation pairing a wiki entry recommends. */
 export interface PlannedFrameGen {
   input: string;
@@ -257,6 +306,8 @@ export interface AutoPlan {
   launch_options: string;
   settings: PlannedSetting[];
   framegen: PlannedFrameGen | null;
+  /** Set only for the games whose entry says OptiScaler needs REFramework. */
+  reframework: PlannedReframework | null;
   /** Things the wiki named that could not be turned into a setting. */
   unresolved: { text: string; source: string }[];
   warnings: string[];
