@@ -147,6 +147,10 @@ export const installReframework = callable<
   ActionResult & { installed?: boolean; files?: string[]; page?: string }
 >("install_reframework");
 
+export const removeReframework = callable<[targetDir: string], ActionResult>(
+  "remove_reframework"
+);
+
 export const getOptipatcherStatus = callable<[targetDir: string], OptipatcherStatus>(
   "get_optipatcher_status"
 );

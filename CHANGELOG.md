@@ -7,6 +7,53 @@ All notable changes to this project are documented here. The format follows
 Each release ships `Decky OptiScaler.zip`, installable through Decky Loader's
 *Install from URL* (Developer mode).
 
+## [0.0.5.2-testing] - 2026-08-24
+
+A prerelease on the `testing` branch, fixing two games that 0.0.5.1-testing broke.
+Bundled OptiScaler release is unchanged at 0.9.4.
+
+### Fixed
+
+- **Monster Hunter Wilds would not boot.** Its wiki page lays out three
+  *mutually exclusive* install methods, and the settings miner read all of them.
+  `LoadReshade=true` belongs to METHOD 3 — the arrangement where REFramework's
+  dll is renamed to `ReShade64.dll` so OptiScaler loads it — and it was applied
+  on top of METHOD 1's files, which is what this plugin installs. OptiScaler was
+  told to load a `ReShade64.dll` that was not there while REFramework was already
+  loaded through `dinput8.dll`. Settings are now read only from the part of a
+  page describing the method actually performed; everything from the first
+  "METHOD 2" or "Alternate Method" heading onward is ignored.
+- **Resident Evil 2 was given 2× output scaling it never asked for.** The entry
+  says "*If* applying Output Scaling is crashing the game, then ... set
+  `Enabled=true` and the desired multiplier (*e.g.* `Multiplier=2.0`)" — advice
+  for a problem you may not have, with an example number — and both keys were
+  written unconditionally. A setting hedged by an "if", a "try", an "e.g." or a
+  "desired" is no longer applied; it is reported instead, naming the word that
+  made it a maybe. "Requires X, otherwise it crashes" is still an instruction,
+  because a refusal is not free either.
+- **The overlay moving to another key is said out loud.** Several REFramework
+  entries ask for `ShortcutKey=0x24` because REF's own overlay is on Insert too.
+  Applying it is right — doing it in silence meant Insert stopped opening the
+  OptiScaler overlay and looked broken, when it had simply moved to **Home**. The
+  plan now names the key to press, before it is written.
+- **REFramework only installs `dinput8.dll`.** Its release notes ask for nothing
+  else to go into the game folder, so the build stamp stays in the download cache
+  and is recorded in the manifest instead.
+
+### Changed
+
+- **REFramework can be removed without removing OptiScaler.** It is required for
+  these games to work, so it is still a compulsory step before the install — but
+  it is also a 23 MB third-party DLL that hooks the engine and can stop a game
+  booting, and an all-or-nothing install left no way to find out which of the two
+  mods was at fault. It is a toggle once installed, and turning it off restores
+  whatever `dinput8.dll` the game shipped with.
+- **A missing `PDPerfPlugin.dll` is now a warning, not a quiet row.** Without it
+  the Resident Evil entries do not upscale at all — while OptiScaler loads, live
+  control connects and the frame rate reads out normally, which is exactly how
+  this was reported. The setup now says in as many words that the panel will
+  connect and report normally while nothing on screen changes.
+
 ## [0.0.5.1-testing] - 2026-08-24
 
 A prerelease on the `testing` branch. Bundled OptiScaler release is unchanged at

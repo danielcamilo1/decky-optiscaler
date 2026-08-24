@@ -45,6 +45,7 @@ from . import wiki
 from .constants import (
     REFRAMEWORK_DLL,
     REFRAMEWORK_FILES,
+    REFRAMEWORK_INSTALL_FILES,
     REFRAMEWORK_NIGHTLY_PAGE,
     REFRAMEWORK_NIGHTLY_URL,
     REFRAMEWORK_PD_ASSETS,
@@ -151,26 +152,30 @@ def _describe(pd, game_key, origin, detail):
     return found
 
 
-def status(target_dir, wanted=None):
-    """What is actually sitting next to the game's executable right now."""
+def status(target_dir, wanted=None, revision=None):
+    """What is actually sitting next to the game's executable right now.
+
+    ``revision`` comes from our manifest rather than the folder: the build stamp
+    is deliberately not installed, so the only record of which build went in is
+    the one we kept.
+    """
     target = Path(target_dir)
     dll = target / REFRAMEWORK_DLL
     plugin_name = (wanted or {}).get("plugin")
     plugin = target / plugin_name if plugin_name else None
-    revision = target / REFRAMEWORK_REVISION
     return {
         "required": bool(wanted and wanted.get("required")),
         "installed": dll.is_file(),
         "dll": REFRAMEWORK_DLL,
         "path": str(dll),
-        "revision": (
-            revision.read_text(encoding="utf-8", errors="replace").strip()[:80]
-            if revision.is_file() else None
-        ),
+        "revision": revision,
         "plugin": plugin_name,
         "plugin_installed": bool(plugin and plugin.is_file()),
         "plugin_url": (wanted or {}).get("plugin_url"),
         "plugin_name": (wanted or {}).get("plugin_name"),
+        # The pd games do not upscale at all without it, so "REFramework is in
+        # and OptiScaler is in" is not the same as "this game will do anything".
+        "complete": dll.is_file() and (not plugin_name or bool(plugin and plugin.is_file())),
     }
 
 
@@ -259,7 +264,25 @@ def _extract(archive, dest):
 
 
 def _unpacked_files(unpacked):
-    """The cached files for one build, or [] when the main DLL is not there."""
+    """The files to install for one cached build, or [] when the DLL is absent.
+
+    Only the DLL: the revision stamp is unpacked beside it in the cache and read
+    from there, because the nightly's release notes ask for nothing else to be
+    put in the game folder.
+    """
     if not (unpacked / REFRAMEWORK_DLL).is_file():
         return []
-    return [unpacked / name for name in REFRAMEWORK_FILES if (unpacked / name).is_file()]
+    return [unpacked / name for name in REFRAMEWORK_INSTALL_FILES
+            if (unpacked / name).is_file()]
+
+
+def revision_of(files):
+    """The build stamp beside a fetched DLL, for the manifest and the UI."""
+    for path in files:
+        stamp = Path(path).parent / REFRAMEWORK_REVISION
+        if stamp.is_file():
+            try:
+                return stamp.read_text(encoding="utf-8", errors="replace").strip()[:80]
+            except OSError:
+                return None
+    return None

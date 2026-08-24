@@ -16,6 +16,7 @@ import {
   install,
   installReframework,
   refreshWiki,
+  removeReframework,
   resetConfig,
   setAutoMode,
   setGameTarget,
@@ -245,6 +246,23 @@ function PluginStep({
 }: Readonly<{ wanted: PlannedReframework; present: boolean }>) {
   if (!wanted.plugin) return null;
   return (
+    <>
+      {!present ? (
+        <PanelSectionRow>
+          {/* Loud, not a quiet pill. Without this file OptiScaler loads, the
+              live panel connects, the frame rate reads out — and the game
+              upscales nothing, which is exactly how this was reported: "it
+              shows as live and connected but doesn't seem to be doing
+              anything". A row nobody reads is how that happened. */}
+          <Notice tone="warn" title="This game will not upscale yet">
+            <Mono>{wanted.plugin}</Mono> has to be next to the executable before OptiScaler
+            can do anything in this game, and it is on Nexus Mods behind a login, so nothing
+            here can fetch it. Get {wanted.plugin_name} from <Mono>{wanted.plugin_url}</Mono>{" "}
+            and put <Mono>{wanted.plugin}</Mono> in the game folder. Until then the panel will
+            connect and report normally while nothing on screen changes.
+          </Notice>
+        </PanelSectionRow>
+      ) : null}
     <PanelSectionRow>
       <Field
         label={
@@ -274,6 +292,30 @@ function PluginStep({
       >
         {present ? <Pill color="#2f6b3f">done</Pill> : <Pill color="#5a4a20">you</Pill>}
       </Field>
+    </PanelSectionRow>
+    </>
+  );
+}
+
+/**
+ * What the plan will do to the overlay's shortcut key, said out loud.
+ *
+ * Several REFramework entries ask for `ShortcutKey=0x24` because REF's own
+ * overlay is on Insert as well. Applying it is right; applying it in silence is
+ * not — "pressing Insert doesn't pop the OptiScaler overlay" is what a moved
+ * key looks like from the outside, and it reads as the plugin being broken.
+ */
+function HotkeyNote({ plan }: Readonly<{ plan: AutoPlan }>) {
+  const hotkey = plan.hotkey;
+  if (!hotkey) return null;
+  return (
+    <PanelSectionRow>
+      <Notice tone="info" title="The overlay opens on a different key">
+        This entry asks for OptiScaler's overlay to move to{" "}
+        <Mono>{hotkey.name ?? hotkey.value}</Mono>
+        {plan.reframework ? ", because REFramework's overlay uses Insert too" : ""}. Press{" "}
+        <Mono>{hotkey.name ?? hotkey.value}</Mono> in game, not Insert.
+      </Notice>
     </PanelSectionRow>
   );
 }
@@ -473,6 +515,33 @@ export function SetupChecklist({
         await onChanged();
       } else {
         toaster.toast({ title: "Could not install REFramework", body: String(result.error) });
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /**
+   * Take REFramework back out, leaving OptiScaler where it is.
+   *
+   * The isolation test. REFramework is a third-party DLL that hooks the engine,
+   * and when a game stops booting after a set-up there is no way to learn
+   * whether that was OptiScaler or REF unless one of them can come out on its
+   * own. Making the install all-or-nothing left exactly that: a game that would
+   * not start and nothing to bisect it with.
+   */
+  const dropReframework = async () => {
+    setBusy(true);
+    try {
+      const result = await removeReframework(detail.install.path);
+      if (result.ok) {
+        toaster.toast({
+          title: "REFramework removed",
+          body: "OptiScaler is still installed. Launch the game to see which one it was.",
+        });
+        await onChanged();
+      } else {
+        toaster.toast({ title: "Could not remove REFramework", body: String(result.error) });
       }
     } finally {
       setBusy(false);
@@ -829,6 +898,8 @@ export function SetupChecklist({
               />
             </PanelSectionRow>
 
+            {planned && withSettings ? <HotkeyNote plan={planned} /> : null}
+
             {!detail.writable ? (
               <PanelSectionRow>
                 <Notice tone="error" title="Folder is not writable">
@@ -940,47 +1011,64 @@ export function SetupChecklist({
             library. */}
         {ref ? (
           <>
-            <PanelSectionRow>
-              <Field
-                label={
-                  <StepLabel done={refPresent}>
-                    {refPresent ? "REFramework installed" : "REFramework is missing"}
-                  </StepLabel>
-                }
-                description={
-                  refPresent
-                    ? [
-                        detail.reframework?.revision
-                          ? `Build ${detail.reframework.revision.slice(0, 12)}`
-                          : ref.variant === "pd-upscaler"
-                            ? "pd-upscaler build"
-                            : "nightly build",
-                        detail.install.reframework?.managed
-                          ? "installed by this plugin"
-                          : "already in the folder",
-                      ].join(" · ")
-                    : `Without it OptiScaler loads and changes nothing on screen — this game's
-                       entry says so under “${ref.source}”. ${reframeworkSummary(ref)}`
-                }
-                onClick={refPresent || !ref.automatic ? undefined : () => void addReframework()}
-                onActivate={refPresent || !ref.automatic ? undefined : () => void addReframework()}
-                focusable
-                bottomSeparator="standard"
-                childrenLayout="inline"
-                childrenContainerWidth="min"
-              >
-                {refPresent ? (
-                  <Pill color="#2f6b3f">ok</Pill>
-                ) : ref.automatic ? (
-                  <Pill color="#5a4a20">{busy ? "…" : "install it"}</Pill>
-                ) : (
+            {/* A toggle rather than a tick, and this is the one place the
+                "not a choice" reasoning was wrong. REFramework is required for
+                the game to work — but it is also a third-party DLL that can
+                stop the game booting, and when that happens the only way to
+                find out which of the two mods did it is to remove one. An
+                install with no way to bisect it is a bug report nobody can
+                answer. */}
+            {ref.automatic || refPresent ? (
+              <PanelSectionRow>
+                <ToggleField
+                  label={
+                    <StepLabel done={refPresent}>
+                      {refPresent ? "REFramework installed" : "REFramework is missing"}
+                    </StepLabel>
+                  }
+                  description={
+                    refPresent
+                      ? [
+                          detail.reframework?.revision
+                            ? `Build ${detail.reframework.revision.slice(0, 12)}`
+                            : ref.variant === "pd-upscaler"
+                              ? "pd-upscaler build"
+                              : "nightly build",
+                          detail.install.reframework?.managed
+                            ? "installed by this plugin"
+                            : "already in the folder",
+                          "turn off if the game stops launching",
+                        ].join(" · ")
+                      : `Without it OptiScaler loads and changes nothing on screen — this game's
+                         entry says so under “${ref.source}”. ${reframeworkSummary(ref)}`
+                  }
+                  checked={refPresent}
+                  disabled={busy}
+                  bottomSeparator="standard"
+                  onChange={(checked) =>
+                    void (checked ? addReframework() : dropReframework())}
+                />
+              </PanelSectionRow>
+            ) : (
+              <PanelSectionRow>
+                <Field
+                  label={<StepLabel done={refPresent}>REFramework is missing</StepLabel>}
+                  description={`Without it OptiScaler loads and changes nothing on screen —
+                    this game's entry says so under “${ref.source}”. ${reframeworkSummary(ref)}`}
+                  focusable
+                  bottomSeparator="standard"
+                  childrenLayout="inline"
+                  childrenContainerWidth="min"
+                >
                   <Pill color="#5a4a20">you</Pill>
-                )}
-              </Field>
-            </PanelSectionRow>
+                </Field>
+              </PanelSectionRow>
+            )}
             <PluginStep wanted={ref} present={pluginPresent} />
           </>
         ) : null}
+
+        {planned && auto ? <HotkeyNote plan={planned} /> : null}
 
         {!planned && !loadingWiki ? (
           recommendation && !recommendation.list_available ? (

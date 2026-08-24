@@ -47,7 +47,7 @@ const detail = {
   reframework: { required: false, installed: false, dll: "dinput8.dll",
                  path: "/games/Cyberpunk 2077/bin/x64/dinput8.dll", revision: null,
                  plugin: null, plugin_installed: false, plugin_url: null,
-                 plugin_name: null },
+                 plugin_name: null, complete: true },
   fsr4_sources: [{ path: "/home/deck/fgmod/fsr4-rdna2-3", files: ["amdxcffx64.dll", "amdxc64.dll"] }],
   ini_info: { present: true, legacy: true, keys: 288 },
   wiki_entry: null,
@@ -127,6 +127,7 @@ Object.assign(fixtures, {
         output_label: "FSR FG", source: "wiki entry, “FG Inputs”",
         detail: "DLSSG via Streamline",
       },
+      hotkey: null,
       reframework: null,
       unresolved: [{ text: "DontCreateD3D12DeviceForLuma=true (not an OptiScaler setting)",
                      source: "wiki entry, “Notes”" }],
@@ -134,6 +135,7 @@ Object.assign(fixtures, {
     },
   },
   install_reframework: { ok: true, installed: true, files: ["dinput8.dll"] },
+  remove_reframework: { ok: true, removed: ["dinput8.dll"], restored: ["dinput8.dll"] },
   set_auto_mode: { ok: true, enabled: true },
   auto_install: { ok: true, applied: [], rejected: [] },
   apply_auto_settings: { ok: true, applied: [] },
@@ -683,7 +685,9 @@ async function render(name: string, element: React.ReactElement) {
     ...detail,
     install: { ...detail.install, reframework: { installed: false, revision: null, managed: false } },
     reframework: { ...detail.reframework, required: true, plugin: "PDPerfPlugin.dll",
-                   plugin_installed: false },
+                   plugin_name: "UpscalerBasePlugin 1.1.2",
+                   plugin_url: "https://www.nexusmods.com/site/mods/502",
+                   plugin_installed: false, complete: false },
   };
   const gdRefMissing = await render("GameDetail (set up, REFramework missing)",
     <GameDetail gamePath="/games/RE2" gameName="Resident Evil 2" appid="883710"
@@ -694,8 +698,34 @@ async function render(name: string, element: React.ReactElement) {
   console.log(`  an install missing it says so rather than looking finished: ${
     missingText.includes("REFramework is missing") &&
     missingText.includes("loads and changes nothing on screen")}`);
-  console.log(`  with a way to add it that does not reinstall OptiScaler: ${
-    missingText.includes("install it")}`);
+  // The pd games do not upscale at all without PDPerfPlugin, and the panel
+  // still connects and reports a frame rate, so "live and connected" is not
+  // evidence of anything. This is how that was reported.
+  console.log(`  a missing companion file is said loudly, not as a quiet pill: ${
+    missingText.includes("This game will not upscale yet") &&
+    missingText.includes("connect and report normally while nothing on screen changes")}`);
+
+  fixtures.get_game = {
+    ...detail,
+    install: { ...detail.install,
+               reframework: { installed: true, revision: "684ca77369ec1050", managed: true } },
+    reframework: { ...detail.reframework, required: true, installed: true,
+                   revision: "684ca77369ec1050", plugin: null, plugin_installed: false,
+                   complete: true },
+  };
+  const gdRefToggle = await render("GameDetail (REFramework removable)",
+    <GameDetail gamePath="/games/MHW" gameName="Monster Hunter Wilds" appid="2246340"
+      status={fixtures.get_status}
+      runningGame={{ appid: 1091500, name: "Cyberpunk 2077", gameid: "1091500" }}
+      onBack={() => {}} />);
+  // REFramework is a third-party DLL that can stop a game booting. When that
+  // happens the only way to learn which of the two mods did it is to take one
+  // out, so it has to be removable without removing OptiScaler.
+  const refToggle = findAll(gdRefToggle.host,
+    '[data-mock="ToggleField"][data-label^="REFramework installed"]');
+  console.log(`  REFramework can be taken out on its own: ${refToggle.length === 1}`);
+  console.log(`  and the row says why you would: ${
+    gdRefToggle.host.textContent!.includes("turn off if the game stops launching")}`);
 
   fixtures.get_game = {
     ...detail,
@@ -703,7 +733,9 @@ async function render(name: string, element: React.ReactElement) {
                reframework: { installed: true, revision: "684ca77369ec1050", managed: true } },
     reframework: { ...detail.reframework, required: true, installed: true,
                    revision: "684ca77369ec1050", plugin: "PDPerfPlugin.dll",
-                   plugin_installed: true },
+                   plugin_name: "UpscalerBasePlugin 1.1.2",
+                   plugin_url: "https://www.nexusmods.com/site/mods/502",
+                   plugin_installed: true, complete: true },
   };
   const gdRefOk = await render("GameDetail (set up, REFramework present)",
     <GameDetail gamePath="/games/RE2" gameName="Resident Evil 2" appid="883710"
@@ -715,6 +747,27 @@ async function render(name: string, element: React.ReactElement) {
     okText.includes("REFramework installed") && okText.includes("684ca77369ec")}`);
   console.log(`  the plugin the user added is ticked too: ${
     okText.includes("PDPerfPlugin.dll is there")}`);
+
+  // Silently remapping the overlay key is how "pressing Insert does nothing"
+  // gets reported as the overlay being broken. It had simply moved.
+  fixtures.get_auto_plan = {
+    ...refPlan({}),
+    plan: {
+      ...refPlan({}).plan,
+      hotkey: { value: "0x24", name: "Home", source: "wiki entry, “Notes”" },
+    },
+  };
+  fixtures.get_game = { ...detail, install: { ...detail.install, installed: false } };
+  const gdHotkey = await render("GameDetail (entry moves the overlay key)",
+    <GameDetail gamePath="/games/RE2" gameName="Resident Evil 2" appid="883710"
+      status={fixtures.get_status}
+      runningGame={{ appid: 1091500, name: "Cyberpunk 2077", gameid: "1091500" }}
+      onBack={() => {}} />);
+  const hotkeyText = gdHotkey.host.textContent!;
+  console.log(`  a plan that moves the overlay key says so before writing it: ${
+    hotkeyText.includes("The overlay opens on a different key")}`);
+  console.log(`  and names the key to press, not the code: ${
+    hotkeyText.includes("Home") && hotkeyText.includes("not Insert")}`);
 
   // The other 676 games must not grow a permanently unticked REFramework step.
   fixtures.get_auto_plan = plainPlan;

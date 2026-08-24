@@ -270,6 +270,14 @@ export interface ReframeworkStatus {
   plugin_installed: boolean;
   plugin_url: string | null;
   plugin_name: string | null;
+  /**
+   * Whether everything this game needs is actually present. REFramework in and
+   * OptiScaler in is not the same as "this game will do anything": the
+   * pd-upscaler games do not upscale at all until PDPerfPlugin.dll is there,
+   * and without this the panel reports a live, connected, entirely inert
+   * install as working.
+   */
+  complete: boolean;
 }
 
 /** The frame-generation pairing a wiki entry recommends. */
@@ -306,6 +314,13 @@ export interface AutoPlan {
   launch_options: string;
   settings: PlannedSetting[];
   framegen: PlannedFrameGen | null;
+  /**
+   * The overlay shortcut this plan changes, when an entry asks for one. Several
+   * REFramework games do, because REF's overlay uses Insert too — and applying
+   * that without saying so is how "Insert does nothing" gets reported as the
+   * overlay being broken, when it had simply moved.
+   */
+  hotkey: { value: string; name: string | null; source: string } | null;
   /** Set only for the games whose entry says OptiScaler needs REFramework. */
   reframework: PlannedReframework | null;
   /** Things the wiki named that could not be turned into a setting. */

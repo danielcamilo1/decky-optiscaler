@@ -617,12 +617,14 @@ class OptiScalerService:
         """
         ref_result = {"required": False, "installed": False, "error": None}
         ref_files = None
+        ref_revision = None
         if reframework_plan and reframework_plan.get("required"):
             ref_result["required"] = True
             try:
                 ref_files = await self._run(
                     reframework.fetch, reframework_plan, self.reframework_cache(), self.log
                 )
+                ref_revision = await self._run(reframework.revision_of, ref_files)
             except Exception as exc:
                 self.log.warning("REFramework download failed for %s: %s", target_dir, exc)
                 ref_result["error"] = str(exc)
@@ -632,7 +634,7 @@ class OptiScalerService:
                 installer.install, target_dir, payload_root, filename, preserve_ini,
                 self.log, self.live_asi_path(),
                 self.optipatcher_path() if optipatcher else None,
-                ref_files,
+                ref_files, ref_revision,
             )
             if ref_result["required"]:
                 installed = result.get("reframework", {})
@@ -777,7 +779,9 @@ class OptiScalerService:
             planned = await self.get_auto_plan(name or Path(target_dir).name, extra_names,
                                                False, game_path)
             wanted = planned["plan"].get("reframework")
-        return await self._run(reframework.status, target_dir, wanted or {})
+        manifest = await self._run(installer.read_manifest, target_dir) or {}
+        return await self._run(reframework.status, target_dir, wanted or {},
+                               manifest.get("reframework_revision"))
 
     async def install_reframework(self, target_dir, game_path=None, name=None,
                                   extra_names=None):
@@ -801,13 +805,31 @@ class OptiScalerService:
                         "page": wanted.get("page")}
             files = await self._run(reframework.fetch, wanted, self.reframework_cache(),
                                     self.log)
-            result = await self._run(installer.add_files, target_dir, files, self.log)
+            revision = await self._run(reframework.revision_of, files)
+            result = await self._run(installer.add_files, target_dir, files, self.log,
+                                     revision)
             if not result.get("ok"):
                 return {"ok": False, "error": result.get("error")}
             return {"ok": True, "installed": True, "files": result["files"],
-                    "status": await self._run(reframework.status, target_dir, wanted)}
+                    "status": await self._run(reframework.status, target_dir, wanted,
+                                              revision)}
         except Exception as exc:
             self.log.exception("REFramework install failed for %s", target_dir)
+            return {"ok": False, "error": str(exc)}
+
+    async def remove_reframework(self, target_dir):
+        """Take REFramework back out without touching OptiScaler.
+
+        The isolation test a game that will not boot needs. Two mods went into
+        that folder and either could be the one at fault; being able to remove
+        one of them is the difference between a bug report and an answer.
+        """
+        try:
+            result = await self._run(installer.remove_files, target_dir,
+                                     [REFRAMEWORK_DLL], self.log)
+            return {"ok": True, **result}
+        except Exception as exc:
+            self.log.exception("REFramework removal failed for %s", target_dir)
             return {"ok": False, "error": str(exc)}
 
     def optipatcher_path(self):

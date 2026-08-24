@@ -48,6 +48,49 @@ USER_OWNED = {
 # the rest, and are searched afterwards so a specific field wins a conflict.
 DETAIL_FIELDS = ("Settings", "FG-Settings", "Known Issues", "Notes")
 
+# Where a page stops describing the install this plugin performs.
+#
+# These entries lay out several *mutually exclusive* install methods — "INSTALL
+# METHOD 1", then "METHOD 2", "METHOD 3", "Alternate Method 1" — and the ini
+# settings inside each belong to that method alone. This plugin always performs
+# the first one: OptiScaler as a proxy DLL, REFramework (where it is needed) as
+# its own default `dinput8.dll`.
+#
+# Reading past that heading is what put `LoadReshade=true` into Monster Hunter
+# Wilds. That setting is METHOD 3's, where REF's dll has been *renamed* to
+# `ReShade64.dll` so OptiScaler loads it; applied on top of METHOD 1's files it
+# tells OptiScaler to load a ReShade64.dll that is not there, while REF is
+# already loaded through dinput8. The game stopped booting, and nothing on
+# screen could have told anyone why.
+ALT_METHOD_RE = re.compile(r"\b(?:alternat(?:e|ive)\s+method|method\s*[2-9])\b", re.I)
+
+# Advice that is conditional, or an illustration rather than a value.
+#
+# "If applying Output Scaling is crashing the game, then ... set `Enabled=true`
+# and the desired multiplier (e.g. `Multiplier=2.0`)" is not an instruction to
+# turn on 2x output scaling. It is what to do *if* something else went wrong,
+# with an example number. Applying it unconditionally is guessing that the
+# condition holds, and on a Deck 2x output scaling is ruinous on its own.
+#
+# Refusing costs nothing: the key still reaches the user through `unresolved`,
+# which is where everything this cannot place in good conscience goes.
+# "otherwise" and "instead" are deliberately *not* here. "Requires disabling
+# FSR3 inputs, otherwise it crashes - set Fsr3=false" is an instruction stating
+# its consequence, not a condition, and refusing it would leave the crash the
+# entry exists to prevent. A false refusal is not free: it means a setting the
+# game needs is not written and nobody is told why in terms they can act on.
+CONDITIONAL_RE = re.compile(
+    r"\b(?:if|unless|in case|should you|only if|optionally|you can|you may|try|"
+    r"e\.?g\.?|for example|for instance|such as|desired|example)\b",
+    re.I,
+)
+# How far back to read for one of those. A window rather than "the enclosing
+# sentence": sentence splitting is defeated by the abbreviations that do the
+# hedging in the first place — "e.g." ends a sentence by any rule simple enough
+# to state, which orphaned `Multiplier=2.0` from the "e.g." four characters in
+# front of it and applied it anyway.
+HEDGE_LOOKBACK = 160
+
 # `Key = value`, with or without backticks. The key has to resolve in the
 # schema and the value has to validate, so this can afford to be broad.
 SETTING_RE = re.compile(r"`?\b([A-Za-z][A-Za-z0-9_]{2,})\s*=\s*([A-Za-z0-9._+-]+)\b`?")
@@ -101,6 +144,41 @@ FG_OUTPUT_LABELS = {
 }
 
 
+# The overlay's shortcut is a Windows virtual-key code, and several entries ask
+# for it to be changed because REFramework's overlay uses Insert too. Applying
+# that silently is how "pressing Insert does nothing" gets reported as the
+# overlay being broken — it is not, it moved. Only the keys an entry plausibly
+# names are here; anything else is shown as its own code rather than guessed.
+VK_NAMES = {
+    0x08: "Backspace", 0x09: "Tab", 0x0D: "Enter", 0x13: "Pause",
+    0x14: "Caps Lock", 0x1B: "Esc", 0x20: "Space", 0x21: "Page Up",
+    0x22: "Page Down", 0x23: "End", 0x24: "Home", 0x2D: "Insert",
+    0x2E: "Delete", 0x5D: "Menu", 0x90: "Num Lock", 0x91: "Scroll Lock",
+    **{0x70 + n: f"F{n + 1}" for n in range(12)},
+}
+
+
+def key_name(value):
+    """A shortcut code as something a person can press, or None."""
+    try:
+        code = int(str(value), 16 if str(value).lower().startswith("0x") else 10)
+    except (TypeError, ValueError):
+        return None
+    return VK_NAMES.get(code)
+
+
+def _hotkey(settings):
+    """The overlay shortcut this plan changes, when it changes one."""
+    for item in settings:
+        if (item["section"], item["key"]) == ("Menu", "ShortcutKey"):
+            return {
+                "value": item["value"],
+                "name": key_name(item["value"]),
+                "source": item["source"],
+            }
+    return None
+
+
 def _clean(text):
     """Strip the markup the wiki cells carry so patterns see plain words."""
     if not text:
@@ -111,15 +189,27 @@ def _clean(text):
     return text.replace("’", "'").replace("–", "-").replace("—", "-")
 
 
+def _this_method_only(text):
+    """The part of a blob that describes the install this plugin performs.
+
+    Everything from the first *alternative* method heading onward is a different
+    way of setting the same game up — a rename, an ASI loader, SpecialK in a
+    plugins folder — and its settings only make sense alongside its files.
+    "INSTALL METHOD 1" is the one performed here, so it is not a boundary.
+    """
+    cut = ALT_METHOD_RE.search(text)
+    return text[:cut.start()].rstrip(" -*_") if cut else text
+
+
 def _texts(recommendation):
     """Every blob of wiki prose worth reading, each with where it came from."""
     detail = recommendation.get("detail") or {}
     out = []
     for label in DETAIL_FIELDS:
-        value = _clean(detail.get(label, "")).strip()
+        value = _this_method_only(_clean(detail.get(label, "")).strip())
         if value and value not in ("-", "N/A"):
             out.append((f"wiki entry, “{label}”", value))
-    notes = _clean(recommendation.get("notes") or "").strip()
+    notes = _this_method_only(_clean(recommendation.get("notes") or "").strip())
     if notes:
         out.append(("compatibility list notes", notes))
     return out
@@ -136,6 +226,18 @@ def _mine_settings(sources):
     for origin, text in sources:
         for match in SETTING_RE.finditer(text):
             name, value = match.group(1), match.group(2)
+            # Judged by the claim leading up to it. Erring towards refusal is
+            # deliberate: a refused key is still shown to the user, and an
+            # applied one is written into their game.
+            hedge = CONDITIONAL_RE.search(
+                text[max(0, match.start() - HEDGE_LOOKBACK):match.start()])
+            if hedge:
+                note = (f"{name}={value} (the entry states this conditionally — "
+                        f"“{hedge.group(0)}” — so it is yours to decide)")
+                if note not in seen_unresolved:
+                    seen_unresolved.add(note)
+                    unresolved.append({"text": note, "source": origin})
+                continue
             # The nearest preceding [Section] marker, when there is one, is what
             # lets a shared key name like "Enabled" be placed at all.
             section = None
@@ -311,6 +413,7 @@ def build(recommendation):
         "launch_options": launch_options(DEFAULT_PROXY, []),
         "settings": [],
         "framegen": None,
+        "hotkey": None,
         "reframework": None,
         "unresolved": [],
         "warnings": [],
@@ -343,6 +446,7 @@ def build(recommendation):
         launch_options=launch_options(filename, flags, overrides),
         settings=settings,
         framegen=_mine_framegen(recommendation, sources),
+        hotkey=_hotkey(settings),
         reframework=ref,
         unresolved=unresolved,
     )

@@ -2110,6 +2110,118 @@ def check_reframework():
               for e in seed["entries"] if e["name"] in found))
 
 
+def check_prose_is_not_a_specification():
+    """Two ways a wiki page says something it is not asking you to do.
+
+    Both of these shipped, and both broke a real game on a real Deck.
+
+    Monster Hunter Wilds stopped booting. Its page lays out three *mutually
+    exclusive* install methods, and the miner read all of them: `LoadReshade=true`
+    belongs to METHOD 3, where REF's dll has been renamed to `ReShade64.dll` so
+    OptiScaler loads it. Applied on top of METHOD 1 — which is what this plugin
+    installs — it tells OptiScaler to load a file that is not there while REF is
+    already loaded through dinput8.
+
+    Resident Evil 2 rendered nothing useful. "If applying Output Scaling is
+    crashing the game, then ... set `Enabled=true` and the desired multiplier
+    (e.g. `Multiplier=2.0`)" is remediation advice with an example number, and it
+    was applied unconditionally — 2x output scaling, on a Steam Deck.
+    """
+    from optiscaler import autoplan
+
+    print("\nProse that is not an instruction")
+
+    def plan_for(**recommendation):
+        base = {"matched": True, "game": "Test Game", "filename": "dxgi.dll",
+                "filename_source": "wiki entry", "optipatcher": False,
+                "compatibility": "✅", "notes": None, "detail": {}}
+        base.update(recommendation)
+        return autoplan.build(base)
+
+    # -- alternative install methods -------------------------------------
+    wilds = ("*Requires REFramework to work* * *Download* - REF Nightly --- "
+             "*INSTALL METHOD 1* * Keep *REFramework's* default `dinput8.dll` "
+             "* Either install *OptiScaler* as `dxgi.dll` --- "
+             "*METHOD 3 - loading REF through OptiScaler* "
+             "* Rename *REF's* `dinput8.dll` to `ReShade64.dll` "
+             "* In `OptiScaler.ini`, set `LoadReshade=true`")
+    plan = plan_for(detail={"Notes": wilds})
+    check("a setting from an alternative install method is not applied",
+          not any(item["key"] == "LoadReshade" for item in plan["settings"]),
+          plan["settings"])
+    check("but the method this plugin does perform is still read",
+          plan["reframework"] and plan["reframework"]["variant"] == "nightly",
+          plan["reframework"])
+    check("“INSTALL METHOD 1” is not itself a boundary",
+          autoplan._this_method_only("a INSTALL METHOD 1 b").strip().endswith("b"))
+    check("but METHOD 2 is",
+          "gone" not in autoplan._this_method_only("keep this --- METHOD 2 gone"))
+    check("and so is an Alternate Method",
+          "gone" not in autoplan._this_method_only("keep --- Alternate Method 1 gone"))
+
+    # -- conditional and illustrative values ------------------------------
+    re2 = ("If applying Output Scaling is crashing the game, then manually enable it in "
+           "*OptiScaler.ini* * Find `[OutputScaling]` in the config, set `Enabled=true` "
+           "and the desired multiplier (e.g. `Multiplier=2.0`)")
+    plan = plan_for(detail={"Known Issues": re2})
+    check("a setting offered as a fix for a problem you may not have is refused",
+          not plan["settings"], plan["settings"])
+    check("both halves of it, including the one after the “e.g.”",
+          len(plan["unresolved"]) == 2, plan["unresolved"])
+    check("and the user is told which word made it a maybe",
+          all("conditionally" in item["text"] for item in plan["unresolved"]),
+          plan["unresolved"])
+
+    # A refusal is not free either: this one is an instruction that happens to
+    # name its consequence, and refusing it would leave the crash it prevents.
+    # "otherwise" and "instead" are excluded from the hedge words for this.
+    plan = plan_for(notes="Requires disabling spoofing, otherwise it crashes - "
+                          "set Dxgi=false in OptiScaler.ini.")
+    check("“do X, otherwise it crashes” is an instruction, not a condition",
+          [(i["key"], i["value"]) for i in plan["settings"]] == [("Dxgi", "false")],
+          plan["settings"])
+    plan = plan_for(notes="If crashing on certain screen openings, try setting "
+                          "`OverlayMenu=false` in OptiScaler.ini")
+    check("“if crashing, try setting X” is a condition, not an instruction",
+          not plan["settings"] and plan["unresolved"], plan)
+
+    # An unhedged statement in the same field is still taken.
+    plan = plan_for(detail={"Settings": "`Dxgi=false`, `OverlayMenu=false` "
+                                        "(required for OptiScaler menu to function)"})
+    check("a plain statement of two settings is unaffected",
+          len(plan["settings"]) == 2, plan["settings"])
+
+    # -- the overlay key it moves ----------------------------------------
+    plan = plan_for(detail={"Notes": "*OptiScaler*: set `ShortcutKey=0x24` (changes to "
+                                     "home key) in `OptiScaler.ini`."})
+    check("the shortcut the entry asks for is still applied",
+          any(i["key"] == "ShortcutKey" for i in plan["settings"]), plan["settings"])
+    check("and the plan says which key that is, in words",
+          plan["hotkey"] and plan["hotkey"]["name"] == "Home", plan["hotkey"])
+    check("a game whose entry moves nothing has no hotkey note",
+          plan_for()["hotkey"] is None)
+    check("a code with no name is reported rather than invented",
+          autoplan.key_name("0x9f") is None and autoplan.key_name("0x2D") == "Insert")
+
+    # -- the two games this came from, end to end -------------------------
+    plan = plan_for(game="Monster Hunter Wilds",
+                    notes="Requires REFramework, set Dxgi=false in the OptiScaler.ini "
+                          "to avoid crashes.",
+                    detail={"Notes": wilds})
+    applied = {(i["key"], i["value"]) for i in plan["settings"]}
+    check("Monster Hunter Wilds gets the one setting its entry actually asks for",
+          applied == {("Dxgi", "false")}, applied)
+
+    plan = plan_for(game="Resident Evil 2 (2019)",
+                    notes="Requires REFramework (pd-upscaler branch) + PDUpscaler plugin",
+                    detail={"Settings": "`Dxgi=false`, `OverlayMenu=false` (required for "
+                                        "OptiScaler menu to function correctly)",
+                            "Known Issues": re2})
+    applied = {(i["key"], i["value"]) for i in plan["settings"]}
+    check("Resident Evil 2 gets its two, and no output scaling",
+          applied == {("Dxgi", "false"), ("OverlayMenu", "false")}, applied)
+
+
 def check_parenthesised_pages():
     """A wiki page name with brackets in it has to survive being parsed.
 
@@ -2293,6 +2405,7 @@ def main():
     check_asi_state_layout()
     check_auto_plan()
     check_reframework()
+    check_prose_is_not_a_specification()
     check_parenthesised_pages()
     check_option_validation()
     check_library_labels()

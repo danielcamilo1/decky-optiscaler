@@ -30,7 +30,6 @@ from .constants import (
     PAYLOAD_FILES,
     PROXY_FILENAMES,
     REFRAMEWORK_DLL,
-    REFRAMEWORK_REVISION,
     RUNTIME_ARTIFACTS,
 )
 
@@ -158,14 +157,11 @@ def detect(target_dir):
     result["log_path"] = str(log)
     result["fsr4"] = fsr4_status(target)
 
-    ref_dll = target / REFRAMEWORK_DLL
-    ref_revision = target / REFRAMEWORK_REVISION
     result["reframework"] = {
-        "installed": ref_dll.is_file(),
-        "revision": (
-            ref_revision.read_text(encoding="utf-8", errors="replace").strip()[:80]
-            if ref_revision.is_file() else None
-        ),
+        "installed": (target / REFRAMEWORK_DLL).is_file(),
+        # Which build went in is only knowable from what we recorded: the
+        # stamp file is deliberately not installed next to the game.
+        "revision": None,
         "managed": False,
     }
 
@@ -188,6 +184,7 @@ def detect(target_dir):
                 installed_at=manifest.get("installed_at"),
             )
             result["reframework"]["managed"] = bool(manifest.get("reframework"))
+            result["reframework"]["revision"] = manifest.get("reframework_revision")
             result["extra_proxies"] = [p for p in present if p != name
                                        and _looks_like_optiscaler(target / p)]
             return result
@@ -283,7 +280,7 @@ def import_fsr4_files(target_dir, source_dir, logger=None):
     return {"path": str(target), "imported": names, "source": str(source)}
 
 
-def add_files(target_dir, sources, logger=None):
+def add_files(target_dir, sources, logger=None, reframework_revision=None):
     """Copy extra files into an existing install and register them for removal.
 
     The same contract as everything else this plugin puts in a game folder:
@@ -324,9 +321,57 @@ def add_files(target_dir, sources, logger=None):
         manifest["backups"] = backups
         if REFRAMEWORK_DLL in added:
             manifest["reframework"] = True
+            manifest["reframework_revision"] = reframework_revision
         (target / MANIFEST_NAME).write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
     return {"ok": True, "path": str(target), "files": added, "tracked": bool(manifest)}
+
+
+def remove_files(target_dir, names, logger=None):
+    """Take specific files back out, restoring anything they displaced.
+
+    The counterpart to `add_files`, and the reason it exists is Monster Hunter
+    Wilds: REFramework is a 23 MB third-party DLL that hooks the engine, and
+    when a game stops booting after an install there is no way to find out
+    whether that was OptiScaler or REF unless one of them can be taken out on
+    its own. Bundling them into a single all-or-nothing install left the user
+    with a game that would not start and no way to bisect it.
+    """
+    target = Path(target_dir)
+    if not target.is_dir():
+        raise NotADirectoryError(f"path does not exist: {target}")
+
+    manifest = read_manifest(target) or {}
+    files = list(manifest.get("files") or [])
+    backups = dict(manifest.get("backups") or {})
+    removed = []
+    restored = []
+
+    for name in names:
+        path = target / name
+        if path.is_file():
+            path.unlink()
+            removed.append(name)
+        if name in files:
+            files.remove(name)
+        # Whatever this displaced goes back, exactly as a full uninstall does.
+        if backups.pop(name, None):
+            stashed = backup_dir(target) / name
+            if stashed.is_file():
+                shutil.move(str(stashed), str(path))
+                restored.append(name)
+                if logger:
+                    logger.info("restored original %s", name)
+
+    if manifest:
+        manifest["files"] = files
+        manifest["backups"] = backups
+        if REFRAMEWORK_DLL in removed:
+            manifest["reframework"] = False
+            manifest["reframework_revision"] = None
+        (target / MANIFEST_NAME).write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+    return {"ok": True, "removed": removed, "restored": restored}
 
 
 def _stash(target, path, logger=None):
@@ -348,7 +393,8 @@ def _stash(target, path, logger=None):
 
 
 def install(target_dir, payload_root, filename=DEFAULT_PROXY, preserve_ini=True,
-            logger=None, live_asi=None, optipatcher=None, reframework_files=None):
+            logger=None, live_asi=None, optipatcher=None, reframework_files=None,
+            reframework_revision=None):
     """Copy OptiScaler into target_dir under the given proxy filename.
 
     ``live_asi`` is the path to the compiled live-control plugin; when given it
@@ -443,7 +489,8 @@ def install(target_dir, payload_root, filename=DEFAULT_PROXY, preserve_ini=True,
     # REFramework, for the games whose wiki entry says OptiScaler does nothing
     # without it. One file (plus the revision stamp REF itself writes), placed
     # next to the executable exactly as REF's own instructions describe.
-    ref_result = {"installed": False, "files": [], "error": None}
+    ref_result = {"installed": False, "files": [], "error": None,
+                  "revision": reframework_revision}
     for source in reframework_files or []:
         source = Path(source)
         if not source.is_file():
@@ -484,6 +531,7 @@ def install(target_dir, payload_root, filename=DEFAULT_PROXY, preserve_ini=True,
         "live_asi": live_result["installed"],
         "optipatcher": patcher_result["installed"],
         "reframework": ref_result["installed"],
+        "reframework_revision": ref_result["revision"],
         "optiscaler_version": OPTISCALER_VERSION,
         "filename": filename,
         "installed_at": time.time(),

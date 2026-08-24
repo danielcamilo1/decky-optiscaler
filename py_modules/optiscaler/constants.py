@@ -39,10 +39,16 @@ OPTIPATCHER_VERSION = "rolling (2026-08-18)"
 # from here is safe to do automatically.
 REFRAMEWORK_DLL = "dinput8.dll"
 REFRAMEWORK_REVISION = "reframework_revision.txt"
-# The files an REFramework archive is allowed to contain. Anything else in it is
-# ignored rather than unpacked: this writes into a folder full of somebody's
-# game, and "extract the zip" is not a thing to do on trust.
+# What may be taken out of an REFramework archive at all: this writes into a
+# folder full of somebody's game, and "extract the zip" is not a thing to do on
+# trust.
 REFRAMEWORK_FILES = [REFRAMEWORK_DLL, REFRAMEWORK_REVISION]
+# ...but only the DLL is placed next to the executable. The nightly's own
+# release notes are blunt about it — "do NOT extract any file other than
+# dinput8.dll into your game folder, or your game may become unstable" — so the
+# revision stamp stays in the download cache and is recorded in our manifest
+# instead, which is where we wanted to read it from anyway.
+REFRAMEWORK_INSTALL_FILES = [REFRAMEWORK_DLL]
 
 # praydog's own nightly, which is now one unified build covering every game it
 # supports — hence a single asset rather than the per-game ones the wiki text

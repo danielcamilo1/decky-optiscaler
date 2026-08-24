@@ -145,6 +145,9 @@ class Plugin:
         return await self.service.install_reframework(
             target_dir, game_path, name, extra_names)
 
+    async def remove_reframework(self, target_dir: str) -> dict:
+        return await self.service.remove_reframework(target_dir)
+
     async def get_optipatcher_status(self, target_dir: str) -> dict:
         return await self.service.get_optipatcher_status(target_dir)
 
