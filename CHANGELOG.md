@@ -3,6 +3,35 @@
 Newest first. Each release ships `Decky OptiScaler.zip` for Decky Loader's
 *Install from URL* (Developer mode), and bundles **OptiScaler 0.9.4**.
 
+## [0.0.6] - 2026-08-28
+
+Everything from the `0.0.5.x-testing` prereleases, as one release.
+
+### Added
+
+- Non-Steam games can be set up. Their folder is taken from the shortcut's
+  target, since Steam reports no install folder for them.
+- Games whose wiki entry requires
+  [REFramework](https://github.com/praydog/REFramework) say so on the setup
+  checklist and link the right build. Installing it for you is disabled for
+  now, until I can gather more information to get it fully working.
+
+### Fixed
+
+- A non-Steam game's launch options are read from `shortcuts.vdf`, so removing
+  OptiScaler no longer wipes them.
+- Settings are read only from the install method this plugin actually performs.
+  Monster Hunter Wilds would not boot because of this.
+- Settings hedged by an "if", a "try", an "e.g." or a "desired" are reported
+  rather than applied. Resident Evil 2 was getting 2× output scaling it never
+  asked for.
+- Setup names the OptiScaler overlay's new shortcut key when an entry moves it
+  off Insert.
+- Wiki pages with brackets in the name download again — Resident Evil, Dead
+  Space (2023) and Elden Ring were affected. Bundled list regenerated.
+
+[0.0.6]: https://github.com/danielcamilo1/decky-optiscaler/releases/tag/v0.0.6
+
 ## [0.0.5.3-testing] - 2026-08-27
 
 Prerelease on the `testing` branch.
