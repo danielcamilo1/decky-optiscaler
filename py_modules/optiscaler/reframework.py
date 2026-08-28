@@ -43,6 +43,7 @@ from pathlib import Path
 
 from . import wiki
 from .constants import (
+    REFRAMEWORK_AUTO_INSTALL,
     REFRAMEWORK_DLL,
     REFRAMEWORK_FILES,
     REFRAMEWORK_INSTALL_FILES,
@@ -55,6 +56,7 @@ from .constants import (
     REFRAMEWORK_PD_PLUGIN_URL,
     REFRAMEWORK_PD_RELEASES,
     REFRAMEWORK_REVISION,
+    REFRAMEWORK_WITHHELD,
 )
 
 # The Wine DLL override REFramework needs, for the same reason OptiScaler's
@@ -136,19 +138,28 @@ def _describe(pd, game_key, origin, detail):
     }
     if not pd:
         found.update(asset="REFramework.zip", url=REFRAMEWORK_NIGHTLY_URL, automatic=True)
-        return found
-
-    asset = REFRAMEWORK_PD_ASSETS.get(game_key or "")
-    if asset:
-        # The pd builds have no "latest" URL — the release has to be looked up
-        # when the download actually happens, so only the asset name is settled
-        # here.
-        found.update(asset=asset, automatic=True)
     else:
-        found["reason"] = (
-            "no REFramework build is known for this game, so it has to be "
-            "downloaded by hand"
-        )
+        asset = REFRAMEWORK_PD_ASSETS.get(game_key or "")
+        if asset:
+            # The pd builds have no "latest" URL — the release has to be looked
+            # up when the download actually happens, so only the asset name is
+            # settled here.
+            found.update(asset=asset, automatic=True)
+        else:
+            found["reason"] = (
+                "no REFramework build is known for this game, so it has to be "
+                "downloaded by hand"
+            )
+
+    # The build is still worked out — which one this entry wants is the part
+    # worth knowing, and it is what the checklist names when it sends the user
+    # to fetch it. Only the fetching is off. `reason` is set last so a game
+    # that has no known build keeps the more specific answer: "there is no
+    # build for this game" is a different problem from "this plugin will not
+    # download one", and telling somebody to go and get a file that does not
+    # exist would be worse than either.
+    if not REFRAMEWORK_AUTO_INSTALL and found["automatic"]:
+        found.update(automatic=False, reason=REFRAMEWORK_WITHHELD)
     return found
 
 

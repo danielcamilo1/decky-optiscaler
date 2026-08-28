@@ -1,6 +1,7 @@
 import { PanelSection, PanelSectionRow, Tabs } from "@decky/ui";
 import { useCallback, useEffect, useState } from "react";
-import { findRunningGame, getStatus, preparePayload } from "../api";
+import { getStatus, preparePayload } from "../api";
+import { resolveGame } from "../shortcuts";
 import {
   subscribeManagerTarget,
   takePendingTarget,
@@ -58,13 +59,17 @@ export function ManagerPage() {
     setResolving(true);
     void (async () => {
       try {
-        const game = await findRunningGame(appid);
+        const game = await resolveGame(appid);
         if (game.found && game.path && game.name) {
           setSelection({ path: game.path, name: game.name, appid });
         } else {
+          // A Steam game with no manifest, or a non-Steam shortcut whose
+          // target has moved: the folder was worked out from the shortcut's
+          // executable and there was no executable there to work from.
           setResolveError(
-            "Steam did not report an install folder for this game, so it cannot be " +
-              "opened directly. Pick it from the library list instead.",
+            "Neither Steam nor this game's shortcut points at a folder that exists, " +
+              "so it cannot be opened directly. Pick it from the library list, or add " +
+              "the folder it lives in as a custom library.",
           );
         }
       } catch (err) {

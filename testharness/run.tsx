@@ -387,6 +387,48 @@ async function render(name: string, element: React.ReactElement) {
     console.log(`  an app id is looked up, even while the page is open: ${
       findAll(plain.host, '[data-tab="now"]').length === 0 &&
       plain.host.textContent!.includes("Installed as")}`);
+
+    // A non-Steam shortcut has no app manifest, so Steam has no install folder
+    // to report and this used to be where every one of them stopped: "Steam
+    // did not report an install folder for this game". Its target is the
+    // answer, and the client is the only side that can read it — the backend's
+    // shortcuts.vdf is flushed on Steam's schedule, so a shortcut added this
+    // session is not in it yet. What matters here is that the target actually
+    // travels with the lookup rather than being dropped on the way.
+    const previousLookup = fixtures.find_running_game;
+    let handed: any = null;
+    fixtures.find_running_game = (_appid: string, shortcut: any) => {
+      handed = shortcut;
+      return previousLookup;
+    };
+    (globalThis as any).appDetailsStore = {
+      GetAppDetails: () => ({
+        strShortcutExe: '"/home/deck/Games/Some Game/Binaries/Win64/Game.exe"',
+        strShortcutStartDir: '"/home/deck/Games/Some Game"',
+        strDisplayName: "Some Game",
+      }),
+    };
+    await act(async () => {
+      openManager({ appid: "3060399406" });
+    });
+    await settle();
+    console.log(`  a non-Steam shortcut's target is handed to the lookup: ${
+      handed?.exe === '"/home/deck/Games/Some Game/Binaries/Win64/Game.exe"' &&
+      handed?.start_dir === '"/home/deck/Games/Some Game"' &&
+      handed?.name === "Some Game"}`);
+
+    // A Steam game has no shortcut fields at all, and asking for them must not
+    // turn into a target made up out of nothing.
+    (globalThis as any).appDetailsStore = { GetAppDetails: () => ({}) };
+    handed = undefined;
+    await act(async () => {
+      openManager({ appid: "1091500" });
+    });
+    await settle();
+    console.log(`  and a Steam game hands over nothing rather than an empty one: ${
+      handed === undefined}`);
+    (globalThis as any).appDetailsStore = undefined;
+    fixtures.find_running_game = previousLookup;
   }
 
   console.log("\n=== steam library context menu ===");
@@ -674,10 +716,32 @@ async function render(name: string, element: React.ReactElement) {
       onBack={() => {}} />);
   const refManualText = gdRefManual.host.textContent!;
   console.log(`  a game with no known build says so instead of guessing: ${
-    refManualText.includes("no REFramework build is known") &&
+    refManualText.includes("No REFramework build is known") &&
     refManualText.includes("TheRazerMD/REFramework")}`);
   console.log(`  and does not count itself as a step the button performs: ${
     refManualText.includes("Do all three")}`);
+
+  // Automatic installation is switched off (constants.REFRAMEWORK_AUTO_INSTALL),
+  // which reaches the UI as exactly the same shape: required, not automatic,
+  // with a reason. The requirement has to survive that — it is the half that
+  // keeps these games from installing successfully and doing nothing.
+  fixtures.get_auto_plan = refPlan({
+    automatic: false, reason: "this plugin no longer downloads it for you",
+  });
+  const gdRefOff = await render("GameDetail (REFramework, download withdrawn)",
+    <GameDetail gamePath="/games/RE2" gameName="Resident Evil 2" appid="883710"
+      status={fixtures.get_status}
+      runningGame={{ appid: 1091500, name: "Cyberpunk 2077", gameid: "1091500" }}
+      onBack={() => {}} />);
+  const refOffText = gdRefOff.host.textContent!;
+  console.log(`  with the download off the game still says it needs REFramework: ${
+    refOffText.includes("Install REFramework") &&
+    refOffText.includes("cannot hook this game without it")}`);
+  console.log(`  says the plugin will not fetch it, and where to get it: ${
+    refOffText.includes("This plugin no longer downloads it for you") &&
+    refOffText.includes("TheRazerMD/REFramework")}`);
+  console.log(`  and keeps the launch-options override REF needs from Proton: ${
+    refOffText.includes('WINEDLLOVERRIDES="dxgi=n,b;dinput8=n,b" %command% -dx12')}`);
 
   // -- the same game, already set up ---------------------------------------
   fixtures.get_auto_plan = refPlan({});

@@ -7,9 +7,8 @@
 A [Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader) plugin that installs and
 configures [OptiScaler](https://github.com/optiscaler/OptiScaler) per game from Game Mode
 (SteamOS, Bazzite, whatever you run). Frame generation, upscaler overrides and the rest of
-OptiScaler's settings, with a gamepad. The ones OptiScaler can change on the fly apply while the
-game is running, so you don't have to restart it every time you want to try something; the rest
-say plainly that they take effect on the next launch.
+OptiScaler's settings, with a gamepad. The ones OptiScaler can change on the fly apply to the
+running game; the rest say plainly that they take effect on the next launch.
 
 OptiScaler v0.9.4 is bundled, so installing works offline and every game gets the same build.
 
@@ -21,47 +20,36 @@ OptiScaler v0.9.4 is bundled, so installing works offline and every game gets th
 
 ## What it does
 
-- **Finds your games and the folder to install into.** Steam libraries come from
-  `libraryfolders.vdf`, including the SD card, and you can add any folder as a custom library.
-  OptiScaler has to sit next to the executable that creates the D3D device, so the plugin scores
-  the candidates (Unreal's `Binaries/Win64`, launchers like Cyberpunk's `bin/x64`) and lets you
-  override its pick.
+- **Finds your games and the folder to install into.** Steam libraries from
+  `libraryfolders.vdf` including the SD card, non-Steam shortcuts, and any folder you add as a
+  custom library. OptiScaler has to sit next to the executable that creates the D3D device, so
+  the plugin scores the candidates (Unreal's `Binaries/Win64`, Cyberpunk's `bin/x64`) and lets
+  you override its pick.
 - **Sets the game up from the wiki, online or not.** Your game is matched against the OptiScaler
   [Compatibility List](https://github.com/optiscaler/OptiScaler/wiki/Compatibility-List), with a
-  search box to pin the right entry when the name doesn't match. A copy of the list ships with
-  the plugin and the last download is cached, so answers come from disk and arrive at once; the
-  list is refreshed in the background and the page updates only if something actually changed. Setup is then a checklist:
-  install the DLL under the filename the entry names, write the launch options, apply the
-  settings it lists. Every line says which wiki field it came from before anything is written,
-  and anything the plugin couldn't place is shown to you instead of guessed at.
-- **Installs REFramework for the games that need it.** A handful of RE Engine titles — the
-  Resident Evil games, Devil May Cry 5, Monster Hunter Wilds, PRAGMATA — are on the compatibility
-  list as working, and are, but only with
-  [REFramework](https://github.com/praydog/REFramework) already next to the executable: it is
-  what exposes the upscaler OptiScaler hooks. The entry says so in prose, and the checklist now
-  reads it, states which of the two builds this game wants, downloads it and installs it as part
-  of the same step — including the `WINEDLLOVERRIDES` entry it needs from Proton, which the wiki
-  never mentions because those pages are written for Windows. The one file that can't be
-  automatic — PureDark's `PDPerfPlugin.dll`, which lives behind a Nexus Mods login — is named and
-  linked as a step for you, and ticks when you drop it in.
+  search box to pin the right entry. A copy of the list ships with the plugin and the last
+  download is cached, so answers come from disk at once and the refresh runs behind them. Setup
+  is then a checklist — install the DLL under the filename the entry names, write the launch
+  options, apply the settings it lists — and every line says which wiki field it came from
+  before anything is written. Anything the plugin couldn't place is shown to you rather than
+  guessed at, including the games that need
+  [REFramework](https://github.com/praydog/REFramework) installed first.
 - **Basic or Advanced settings.** Basic is a handful of controls (frame generation on/off, which
-  generator runs it, 2X/3X/4X, which upscaler to force), each driving several INI keys at once.
-  Advanced gives you all 288 settings across 34 sections. Controls and help text are generated
-  from the comments in `OptiScaler.ini`, so they match the shipped build, and edits keep every
-  comment in the file. Names are the overlay's own, so `fsr31` shows up as "FSR 3.1 / FSR 4".
-- **Changes settings while you play.** A bundled ASI plugin applies frame generation, FidelityFX
-  FG version, the upscaler and the FSR version immediately from the Quick Access panel — next to
-  what the game actually ended up running and, with frame generation on, both frame rates: what
-  the game renders and what reaches the screen. See
-  [Live in-game control](#live-in-game-control).
+  generator, 2X/3X/4X, which upscaler), each driving several INI keys at once. Advanced gives
+  you all 288 settings across 34 sections, generated from the comments in `OptiScaler.ini` so
+  they match the shipped build. Edits keep every comment in the file, and names are the
+  overlay's own.
+- **Changes settings while you play.** A bundled ASI plugin applies frame generation, the
+  FidelityFX FG version, the upscaler and the FSR version immediately from the Quick Access
+  panel — next to what the game actually ended up running and, with frame generation on, both
+  frame rates. See [Live in-game control](#live-in-game-control).
 - **Doesn't lose your files, or your launch options.** Anything an install would overwrite is
-  moved into `decky_optiscaler_backup_files/` and put back when you uninstall. The launch options
-  the game had before the install are kept the same way, so removing OptiScaler can offer to put
-  them back rather than clearing a field it never owned.
-- **Odds and ends.** `OptiScaler.log` is parsed for the backend that actually got created, the
-  GPU and the Proton version. [OptiPatcher](https://github.com/optiscaler/OptiPatcher) is bundled
-  for the games that need it. An **OptiScaler Settings** entry is added to the game's context
-  menu in the Steam library.
+  moved into `decky_optiscaler_backup_files/` and put back on uninstall. The launch options the
+  game had beforehand are kept the same way, so removing OptiScaler can offer to restore them
+  rather than clearing a field it never owned.
+- **Odds and ends.** `OptiScaler.log` is parsed for the backend that got created, the GPU and
+  the Proton version. [OptiPatcher](https://github.com/optiscaler/OptiPatcher) is bundled. An
+  **OptiScaler Settings** entry is added to the game's Steam library context menu.
 
 ## Screenshots
 
@@ -91,25 +79,23 @@ See the [changelog](CHANGELOG.md) for what changed.
 
 ## Live in-game control
 
-OptiScaler reads its INI once, at startup. There's no file watcher and no IPC, and its overlay
-gets away with live changes only because it *is* the game process. So the plugin ships a small
-ASI plugin that OptiScaler loads into the game and that makes the same writes the overlay makes,
-which is what lets the Quick Access panel change these three things mid-game:
+OptiScaler reads its INI once, at startup — no file watcher, no IPC — and its overlay gets away
+with live changes only because it *is* the game process. So the plugin ships a small ASI plugin
+that OptiScaler loads into the game and that makes the same writes the overlay makes. That is
+what lets the Quick Access panel change, mid-game:
 
-- **Frame generation** — flips `Config::FGEnabled`, which is read every frame.
-- **Upscaler** — writes the backend id into `State::newBackend` and marks every entry of
-  `State::changeBackend`. That's the overlay's "Change Upscaler" button in full.
-- **FidelityFX FG version** — writes `Config::FfxFGIndex`, then sets `State::FGchanged` and
-  `State::SCchanged` so the generator's context gets destroyed and rebuilt on the new index. The
-  versions you pick from are the ones the SDK reported to *that* game, read back out of `State`.
-- **FSR version** — writes `Config::FfxUpscalerIndex` and asks for the same feature rebuild the
-  upscaler switch uses, which is what the overlay's "Change Upscaler" under FFX Settings does.
-  One backend id covers every FSR from 2.3.4 to 4.1.1, so the exact version comes from the list
-  the running game reported — the same list its overlay names in the title bar.
+- **Frame generation** — `Config::FGEnabled`, read every frame.
+- **Upscaler** — the backend id into `State::newBackend`, then every entry of
+  `State::changeBackend` marked. The overlay's "Change Upscaler" in full.
+- **FidelityFX FG version** — `Config::FfxFGIndex`, then `State::FGchanged` and
+  `State::SCchanged`, so the generator's context is destroyed and rebuilt on the new index. The
+  versions offered are the ones the SDK reported to *that* game.
+- **FSR version** — `Config::FfxUpscalerIndex` plus the same feature rebuild. One backend id
+  covers every FSR from 2.3.4 to 4.1.1, so the exact version comes from the list the running
+  game reported — the same one its overlay names in the title bar.
 
-It also reads out both frame rates. Frame generation gives a game two of them, and OptiScaler
-times both sides; the panel shows what the game renders next to what reaches the screen, and says
-when the generator is switched on but not actually inserting frames.
+It also reads out both frame rates: what the game renders next to what reaches the screen, and
+says when the generator is switched on but not actually inserting frames.
 
 ## Steam launch options
 
@@ -119,14 +105,13 @@ Proton loads its own `dxgi.dll` unless you tell it not to, so the proxy needs an
 WINEDLLOVERRIDES="dxgi=n,b" %command%
 ```
 
-Setup shows the exact string for the filename you picked and can write it into the game's launch
-options for you. `OptiScaler.asi` installs don't need it.
+Setup shows the exact string for the filename you picked and can write it for you.
+`OptiScaler.asi` installs don't need it.
 
-Whatever Steam was passing before the install is recorded next to the install, so removing
-OptiScaler asks what to do with the field: put back exactly what was there, take only the
-OptiScaler override out and keep the rest, or leave it alone. "Put it back" is only offered when
-there *was* something. The answer can be remembered, and **Settings** on the main page is where
-remembered answers are listed and taken back.
+Whatever Steam was passing beforehand is recorded next to the install, so removing OptiScaler
+asks what to do with the field: restore exactly what was there, remove only the OptiScaler
+override, or leave it alone. The answer can be remembered; **Settings** on the main page lists
+remembered answers and takes them back.
 
 ## Requirements
 

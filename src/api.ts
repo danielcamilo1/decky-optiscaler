@@ -46,8 +46,11 @@ export const removeCustomLibrary = callable<[path: string], ActionResult>(
 
 export const listGames = callable<[libraryPath: string, source: string], Game[]>("list_games");
 export const getGame = callable<[gamePath: string, name?: string], GameDetail>("get_game");
+/* `shortcut` carries what the Steam client said about a non-Steam entry, which
+   is the only place a shortcut's install folder can come from. Call it through
+   `resolveGame` in shortcuts.ts rather than directly. */
 export const findRunningGame = callable<
-  [appid: string],
+  [appid: string, shortcut?: { exe?: string; start_dir?: string; name?: string }],
   { found: boolean; appid?: string; name?: string; path?: string; detail?: GameDetail }
 >("find_running_game");
 export const getFsr4Info = callable<

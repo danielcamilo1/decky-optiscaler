@@ -37,6 +37,22 @@ OPTIPATCHER_VERSION = "rolling (2026-08-18)"
 #
 # Both builds ship the same single file, which is the whole reason installing it
 # from here is safe to do automatically.
+#
+# **Automatic installation is withdrawn** as of 0.0.5.3-testing. Downloading a
+# third-party engine hook and placing it in somebody's game folder on their
+# behalf is a bigger promise than the rest of this plugin makes, and the two
+# prereleases that did it turned up more ways for that to go wrong than it was
+# worth. Nothing is deleted: detection, classification, the launch-options
+# override, the status read and the removal path all stay exactly as they were
+# and are still covered by the selftest, because the requirement is real and
+# saying so is the useful half. What the flag switches off is the download —
+# the plugin states what the game needs and where to get it, and the file is
+# the user's to place. Setting this back to True restores the whole feature.
+REFRAMEWORK_AUTO_INSTALL = False
+# What the plan says instead, in the sentence the checklist builds around it.
+REFRAMEWORK_WITHHELD = (
+    "this plugin no longer downloads it for you"
+)
 REFRAMEWORK_DLL = "dinput8.dll"
 REFRAMEWORK_REVISION = "reframework_revision.txt"
 # What may be taken out of an REFramework archive at all: this writes into a

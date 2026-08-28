@@ -223,9 +223,12 @@ function reframeworkSummary(ref: PlannedReframework) {
     ref.variant === "pd-upscaler"
       ? "the pd-upscaler build for this game"
       : "praydog's nightly build";
-  return ref.automatic
-    ? `Downloads ${build} and puts ${ref.dll} next to the executable.`
-    : `${ref.reason ?? "It cannot be downloaded from here"} — get ${build} from ${ref.page}.`;
+  if (ref.automatic) return `Downloads ${build} and puts ${ref.dll} next to the executable.`;
+  // The reason is a clause written to sit mid-sentence — "no build is known for
+  // this game", "this plugin no longer downloads it for you" — and this is
+  // where it starts one.
+  const why = ref.reason ?? "it cannot be downloaded from here";
+  return `${why.charAt(0).toUpperCase()}${why.slice(1)} — get ${build} from ${ref.page}, and put ${ref.dll} next to the executable yourself.`;
 }
 
 /**

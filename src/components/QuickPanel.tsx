@@ -1,7 +1,7 @@
 import { ButtonItem, PanelSection, PanelSectionRow } from "@decky/ui";
 import { toaster } from "@decky/api";
 import { useCallback, useEffect, useState } from "react";
-import { findRunningGame } from "../api";
+import { resolveGame } from "../shortcuts";
 import { useAutoPlan } from "../hooks/useAutoPlan";
 import { useConfig } from "../hooks/useConfig";
 import { useLiveStatus } from "../hooks/useLiveStatus";
@@ -97,7 +97,7 @@ function NowPlayingTab({
     setResolving(true);
     setNotFound(false);
     try {
-      const result = await findRunningGame(String(runningGame.appid));
+      const result = await resolveGame(runningGame.appid);
       if (result.found && result.detail) {
         setDetail(result.detail);
       } else {

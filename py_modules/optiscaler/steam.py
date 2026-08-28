@@ -2,6 +2,7 @@
 
 import os
 import re
+import zlib
 from pathlib import Path
 
 from .constants import EXE_DIR_BLACKLIST, EXE_NAME_BLACKLIST, STEAM_ROOTS
@@ -126,6 +127,190 @@ def _local_configs(home):
     return [config for _, config in found]
 
 
+def _shortcut_files(home):
+    """Every account's shortcuts.vdf on this machine, newest first."""
+    found = []
+    for root in steam_roots(home):
+        userdata = root / "userdata"
+        if not userdata.is_dir():
+            continue
+        try:
+            entries = sorted(userdata.iterdir())
+        except OSError:
+            continue
+        for entry in entries:
+            path = entry / "config" / "shortcuts.vdf"
+            if not path.is_file():
+                continue
+            try:
+                found.append((path.stat().st_mtime, path))
+            except OSError:
+                continue
+    found.sort(key=lambda pair: -pair[0])
+    return [path for _, path in found]
+
+
+def parse_binary_vdf(data):
+    """Valve's binary KeyValues, as the nested dict it encodes.
+
+    ``shortcuts.vdf`` is the only file this plugin reads in this format, and it
+    is not the text one everything else here uses. Four byte markers matter: a
+    nested map opens with 0x00, a string is 0x01, a 32-bit int is 0x02, and
+    0x08 closes the map. Keys are NUL-terminated and their capitalisation is
+    not stable across client versions, so every key is lowercased on the way
+    in and looked up that way.
+    """
+    pos = 0
+    end = len(data)
+
+    def read_cstring():
+        nonlocal pos
+        stop = data.find(b"\x00", pos)
+        if stop < 0:
+            raise ValueError("unterminated string in binary VDF")
+        raw = data[pos:stop]
+        pos = stop + 1
+        return raw.decode("utf-8", errors="replace")
+
+    def read_map():
+        nonlocal pos
+        out = {}
+        while pos < end:
+            marker = data[pos]
+            pos += 1
+            if marker == 0x08:
+                return out
+            key = read_cstring().lower()
+            if marker == 0x00:
+                out[key] = read_map()
+            elif marker == 0x01:
+                out[key] = read_cstring()
+            elif marker == 0x02:
+                if pos + 4 > end:
+                    raise ValueError("truncated int in binary VDF")
+                out[key] = int.from_bytes(data[pos:pos + 4], "little", signed=True)
+                pos += 4
+            else:
+                # 0x03 (int64), 0x07 (uint64) and the colour/pointer types do
+                # not appear in shortcuts.vdf. Refusing is right: guessing a
+                # width here would desynchronise every field after it.
+                raise ValueError(f"unsupported binary VDF type {marker:#x}")
+        return out
+
+    return read_map()
+
+
+def _shortcut_appid(entry):
+    """The app id Steam's own UI uses for one shortcut.
+
+    Stored as a signed 32-bit int and used unsigned everywhere else, so the two
+    disagree for every shortcut Steam has ever created — they all have the top
+    bit set. Very old entries have no ``appid`` field at all; theirs is derived
+    from the target and the name the same way Steam derived it.
+    """
+    value = entry.get("appid")
+    if isinstance(value, int):
+        return str(value & 0xFFFFFFFF)
+    exe = entry.get("exe") or entry.get("executable") or ""
+    name = entry.get("appname") or ""
+    if not exe:
+        return None
+    crc = zlib.crc32((exe + name).encode("utf-8")) & 0xFFFFFFFF
+    return str(crc | 0x80000000)
+
+
+def _unquote(value):
+    """Strip the quotes Steam wraps a shortcut's target in."""
+    return (value or "").strip().strip('"').strip()
+
+
+def shortcut_folder(exe, start_dir=None):
+    """The folder to manage OptiScaler in, for a target this plugin was given.
+
+    A non-Steam shortcut has no app manifest and therefore no install
+    directory: Steam knows only what to run. The folder holding that executable
+    *is* the install folder — it is where the renderer lives, which is the only
+    thing OptiScaler cares about — so that is what this returns, and the
+    shortcut's start directory is only a fallback for a target that is a
+    launcher script somewhere else. Neither is trusted without looking: a
+    shortcut can name a path that no longer exists, or one inside a Proton
+    prefix this plugin cannot see.
+    """
+    exe = _unquote(exe)
+    start_dir = _unquote(start_dir)
+    if exe:
+        target = Path(exe)
+        try:
+            if target.is_file():
+                return str(target.parent.resolve())
+            if target.is_dir():
+                return str(target.resolve())
+        except OSError:
+            pass
+    if start_dir:
+        try:
+            folder = Path(start_dir)
+            if folder.is_dir():
+                return str(folder.resolve())
+        except OSError:
+            pass
+    return None
+
+
+def shortcut_entry(home, appid):
+    """One shortcut as Steam recorded it, with the file it came out of.
+
+    Steam's own record on disk, which is what makes any of this work when the
+    client will not answer — the same reason ``launch_options`` reads
+    ``localconfig.vdf``. It lags, though: a shortcut added this session may not
+    have been flushed yet, which is why callers ask the client first.
+    """
+    appid = str(appid)
+    for path in _shortcut_files(home):
+        try:
+            data = parse_binary_vdf(path.read_bytes())
+        except (OSError, ValueError):
+            continue
+        entries = data.get("shortcuts")
+        if not isinstance(entries, dict):
+            continue
+        for entry in entries.values():
+            if isinstance(entry, dict) and _shortcut_appid(entry) == appid:
+                return entry, path
+    return None, None
+
+
+def find_shortcut_by_appid(home, appid):
+    """Locate a non-Steam game by the app id its library entry uses."""
+    entry, _ = shortcut_entry(home, appid)
+    if not entry:
+        return None
+    folder = shortcut_folder(entry.get("exe"), entry.get("startdir"))
+    if not folder:
+        return None
+    return {
+        "appid": str(appid),
+        "name": entry.get("appname") or Path(folder).name,
+        "path": folder,
+        "source": "shortcut",
+        "size_on_disk": 0,
+        "library": str(Path(folder).parent),
+    }
+
+
+def _is_shortcut_appid(appid):
+    """Whether an id belongs to a non-Steam shortcut rather than a Steam app.
+
+    Steam derives every shortcut id with the top bit set, and no real app id
+    comes anywhere near that, so the range is the distinction — there is no
+    flag to read and nothing to look up first.
+    """
+    try:
+        return int(appid) >= 0x80000000
+    except (TypeError, ValueError):
+        return False
+
+
 def launch_options(home, appid):
     """What Steam passes this game, read out of its own config.
 
@@ -137,6 +322,19 @@ def launch_options(home, appid):
     logins has two of these files and only one of them owns the game.
     """
     appid = str(appid)
+    # A non-Steam shortcut keeps its launch options in shortcuts.vdf, not in
+    # localconfig.vdf — where it has no entry at all. Reading the wrong file
+    # would answer "this game has none", which is the state that lets removal
+    # clear the field outright, so a shortcut with a wrapper command in it
+    # would have had that wrapper deleted.
+    if _is_shortcut_appid(appid):
+        entry, path = shortcut_entry(home, appid)
+        if entry is not None:
+            value = entry.get("launchoptions")
+            return {"found": True, "value": value if isinstance(value, str) else "",
+                    "source": str(path)}
+        return {"found": False, "value": "", "source": None}
+
     fallback = None
     for config in _local_configs(home):
         try:
@@ -328,8 +526,21 @@ def find_exe_dirs(game_path, max_depth=6, limit=40):
     return ordered
 
 
-def find_by_appid(home, appid):
-    """Locate an installed Steam game by its app id."""
+def find_by_appid(home, appid, exe=None, start_dir=None, name=None):
+    """Locate a game by the app id its library entry uses.
+
+    Two kinds of entry, and only one of them has an app manifest. A Steam game
+    is found the usual way. A **non-Steam shortcut** has no manifest, no
+    ``steamapps/common`` folder and no install directory anywhere in Steam's
+    records — the client knows what to run and nothing else — so its folder is
+    derived from that target instead: the executable the shortcut points at
+    lives in the folder OptiScaler has to go into.
+
+    ``exe``/``start_dir``/``name`` are what the client said, passed down by the
+    frontend when it could read them. They are tried before ``shortcuts.vdf`` for the
+    reason the launch-options read tries the client first: the file is flushed
+    on Steam's schedule and a shortcut added this session may not be in it yet.
+    """
     appid = str(appid)
     for library in library_folders(home):
         manifest = Path(library) / "steamapps" / f"appmanifest_{appid}.acf"
@@ -349,4 +560,15 @@ def find_by_appid(home, appid):
             "size_on_disk": info["size_on_disk"],
             "library": str(library),
         }
-    return None
+
+    folder = shortcut_folder(exe, start_dir)
+    if folder:
+        return {
+            "appid": appid,
+            "name": name or Path(folder).name,
+            "path": folder,
+            "source": "shortcut",
+            "size_on_disk": 0,
+            "library": str(Path(folder).parent),
+        }
+    return find_shortcut_by_appid(home, appid)

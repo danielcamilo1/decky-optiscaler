@@ -1083,6 +1083,134 @@ def check_launch_options_read():
         shutil.rmtree(root, ignore_errors=True)
 
 
+def check_non_steam_shortcut():
+    """A game Steam runs but has no install folder for.
+
+    Everything else here starts from an app manifest, and a shortcut added by
+    hand has none: Steam stores a command line and nothing more. Asking it for
+    the install directory got no answer, so the library context menu's
+    OptiScaler Settings entry ended on "Steam did not report an install folder"
+    for every non-Steam game — the panel, Now Playing and the page all failed
+    on it identically, because all three come through one lookup. The folder
+    the shortcut's target sits in is the answer.
+    """
+    import struct
+    import tempfile
+    import zlib
+    from optiscaler import steam as steam_mod
+
+    print("\nNon-Steam shortcuts")
+
+    def encode(entries):
+        """shortcuts.vdf as Steam writes it: binary KeyValues."""
+        def field(marker, key, payload):
+            return bytes([marker]) + key.encode() + b"\x00" + payload
+
+        out = b""
+        for index, entry in enumerate(entries):
+            body = b""
+            for key, value in entry.items():
+                if isinstance(value, int):
+                    body += field(0x02, key, struct.pack("<i", value))
+                else:
+                    body += field(0x01, key, value.encode() + b"\x00")
+            out += field(0x00, str(index), body + b"\x08")
+        return field(0x00, "shortcuts", out + b"\x08") + b"\x08"
+
+    # Resolved, because the folder is: a shortcut's target is canonicalised
+    # before it is handed back, so the temp dir has to be compared the same way.
+    root = Path(tempfile.mkdtemp(prefix="optiscaler-shortcut-")).resolve()
+    try:
+        home = root / "home"
+        steam_root = home / ".local" / "share" / "Steam"
+        config = steam_root / "userdata" / "12345" / "config"
+        config.mkdir(parents=True)
+        (steam_root / "steamapps").mkdir(parents=True)
+        (home / ".steam").mkdir(parents=True, exist_ok=True)
+        os.symlink(steam_root, home / ".steam" / "steam")
+
+        game = root / "Games" / "Some Launcher Game" / "Binaries" / "Win64"
+        game.mkdir(parents=True)
+        (game / "Game-Win64-Shipping.exe").write_bytes(b"MZ")
+
+        # Steam stores the id signed and uses it unsigned; every shortcut it
+        # has ever made has the top bit set, so the two always disagree.
+        signed = -1234567890
+        unsigned = str(signed & 0xFFFFFFFF)
+        (config / "shortcuts.vdf").write_bytes(encode([
+            {"appid": signed,
+             "AppName": "Some Launcher Game",
+             "Exe": f'"{game / "Game-Win64-Shipping.exe"}"',
+             "StartDir": f'"{game}"'},
+        ]))
+
+        found = steam_mod.find_by_appid(home, unsigned)
+        check("a shortcut is found by the id the library shows, not the stored one",
+              found and found["path"] == str(game), found)
+        check("and keeps the name Steam displays rather than the folder's",
+              found and found["name"] == "Some Launcher Game", found)
+        check("and is marked as a shortcut, not a Steam install",
+              found and found["source"] == "shortcut", found)
+        check("the signed form is not what the library asks with",
+              steam_mod.find_by_appid(home, str(signed)) is None)
+
+        # The client answers before the file does: shortcuts.vdf is flushed on
+        # Steam's schedule, so a shortcut added this session is not in it yet.
+        other = root / "Games" / "Added Just Now"
+        other.mkdir(parents=True)
+        (other / "game.exe").write_bytes(b"MZ")
+        hinted = steam_mod.find_by_appid(home, "4200000000",
+                                         exe=f'"{other / "game.exe"}"', name="Added Just Now")
+        check("a target the client supplied resolves with nothing on disk to read",
+              hinted and hinted["path"] == str(other), hinted)
+
+        # A quoted path is how Steam stores every one of them, and a target
+        # that has moved is not a folder to go writing into.
+        check("a target that no longer exists is refused rather than guessed at",
+              steam_mod.shortcut_folder('"/nowhere/at/all/game.exe"') is None)
+        check("but its start directory is taken when that does exist",
+              steam_mod.shortcut_folder('"/nowhere/at/all/game.exe"', f'"{game}"')
+              == str(game))
+
+        # Launch options for a shortcut are in this file, not localconfig.vdf,
+        # where it has no entry at all. Reading the wrong one answers "this
+        # game has none" — the state that lets removal clear the field — so a
+        # wrapper command would have been deleted along with our override.
+        (config / "shortcuts.vdf").write_bytes(encode([
+            {"appid": signed,
+             "AppName": "Some Launcher Game",
+             "Exe": f'"{game / "Game-Win64-Shipping.exe"}"',
+             "StartDir": f'"{game}"',
+             "LaunchOptions": 'WINEDLLOVERRIDES="dxgi=n,b" mangohud %command%'},
+        ]))
+        options = steam_mod.launch_options(home, unsigned)
+        check("a shortcut's launch options come out of shortcuts.vdf",
+              options["found"] and options["value"]
+              == 'WINEDLLOVERRIDES="dxgi=n,b" mangohud %command%', options)
+        check("and an id that is in no shortcuts file is not called empty",
+              steam_mod.launch_options(home, "4200000000")
+              == {"found": False, "value": "", "source": None},
+              steam_mod.launch_options(home, "4200000000"))
+
+        # Very old entries predate the appid field; Steam derives one.
+        legacy_exe = f'"{game / "Game-Win64-Shipping.exe"}"'
+        legacy_id = str((zlib.crc32((legacy_exe + "Legacy Game").encode()) & 0xFFFFFFFF)
+                        | 0x80000000)
+        (config / "shortcuts.vdf").write_bytes(encode([
+            {"AppName": "Legacy Game", "Exe": legacy_exe, "StartDir": f'"{game}"'},
+        ]))
+        check("an entry with no stored appid is matched by the one Steam derives",
+              (steam_mod.find_by_appid(home, legacy_id) or {}).get("path") == str(game))
+
+        # Fails closed: a file that is not this format must not half-decode
+        # into a folder this plugin then writes OptiScaler into.
+        (config / "shortcuts.vdf").write_bytes(b"\x00shortcuts\x00\x09junk")
+        check("an unreadable shortcuts file yields nothing rather than a guess",
+              steam_mod.find_by_appid(home, unsigned) is None)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def check_wiki_failure_reporting():
     """A list that will not download must not read as "your game is not on it".
 
@@ -1903,9 +2031,18 @@ def check_reframework():
     Everything below is driven by the text real entries actually carry.
     """
     from optiscaler import autoplan, reframework
-    from optiscaler.constants import REFRAMEWORK_DLL, REFRAMEWORK_PD_ASSETS
+    from optiscaler.constants import (
+        REFRAMEWORK_AUTO_INSTALL, REFRAMEWORK_DLL, REFRAMEWORK_PD_ASSETS,
+    )
 
     print("\nREFramework")
+    # Automatic installation is switched off (see constants), and everything
+    # else about the feature is deliberately kept: which games need it, which
+    # of the two builds, the launch-options override, the status read and the
+    # removal path. So the checks below assert against the flag rather than
+    # against a constant — turning it back on has to make the fetch work again,
+    # and turning it off must not stop the requirement being *read*, which is
+    # the half that keeps these games from silently doing nothing.
 
     def plan_for(**recommendation):
         base = {"matched": True, "game": "Test Game", "filename": "dxgi.dll",
@@ -1922,7 +2059,10 @@ def check_reframework():
     check("a list row stating the requirement is read as one", bool(ref), plan["reframework"])
     check("praydog's unified nightly is the default build",
           ref["variant"] == "nightly" and ref["asset"] == "REFramework.zip", ref)
-    check("and it can be fetched without help", ref["automatic"], ref)
+    check("and whether it is fetched from here follows the flag, nothing else",
+          ref["automatic"] == REFRAMEWORK_AUTO_INSTALL, ref)
+    check("with a reason to show the user whenever it is not",
+          ref["automatic"] or bool(ref["reason"]), ref)
     check("the entry that said so is cited", "notes" in ref["source"].lower(), ref["source"])
 
     # The pd entries name a different mod that happens to share a filename.
@@ -2103,7 +2243,9 @@ def check_reframework():
           [found[name] for name in sorted(found)] ==
           ["pd-upscaler", "nightly", "nightly", "pd-upscaler", "pd-upscaler",
            "pd-upscaler", "pd-upscaler", "pd-upscaler", "nightly"], found)
-    check("and every automatic one resolves to an asset",
+    # The asset is what the checklist names when it sends somebody to fetch
+    # the file, so it has to resolve whether or not the download is on.
+    check("and every one of them resolves to a named build",
           all(autoplan.build(dict(e, matched=True, game=e["name"], detail={},
                                   filename="dxgi.dll", filename_source="x"))
               ["reframework"]["asset"]
@@ -2390,6 +2532,7 @@ def main():
     check_remembered_choices()
     check_launch_record()
     check_launch_options_read()
+    check_non_steam_shortcut()
     check_asi_reporting()
     check_asi_staleness()
     check_reported_folder()

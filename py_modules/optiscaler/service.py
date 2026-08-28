@@ -387,10 +387,21 @@ class OptiScalerService:
 
         return await self._run(work)
 
-    async def find_running_game(self, appid):
-        """Resolve a running Steam app id to its game folder and install state."""
+    async def find_running_game(self, appid, shortcut=None):
+        """Resolve an app id to its game folder and install state.
+
+        ``shortcut`` is what the Steam client said about a non-Steam entry —
+        its target, its start directory and its name — or None for a game
+        Steam has a manifest for. A shortcut has no install directory anywhere
+        in Steam's records, so without this a game added by hand answered "no
+        install folder" and could not be opened at all: the Quick Access panel,
+        Now Playing and the library context menu all come through here.
+        """
+        shortcut = shortcut or {}
+
         def work():
-            game = steam.find_by_appid(self.home, appid)
+            game = steam.find_by_appid(self.home, appid, shortcut.get("exe"),
+                                       shortcut.get("start_dir"), shortcut.get("name"))
             if not game:
                 return {"found": False, "appid": str(appid)}
             return {"found": True, **game}
@@ -614,12 +625,24 @@ class OptiScalerService:
         separate mods and the OptiScaler half is still worth having on disk;
         what matters is that the failure is *reported*, because for these games
         an install without REF is one that will do nothing and say nothing.
+
+        Which is also why the requirement is still carried through here with
+        automatic installation switched off: the plan says the game needs REF,
+        the checklist says where to get it, and only the download is gone.
         """
         ref_result = {"required": False, "installed": False, "error": None}
         ref_files = None
         ref_revision = None
         if reframework_plan and reframework_plan.get("required"):
             ref_result["required"] = True
+        # `automatic` is the whole gate: a game with no known build has never
+        # had one, and since 0.0.5.3-testing no game does, because downloading
+        # a third-party engine hook into somebody's game folder is not a
+        # promise this plugin makes any more. The requirement still travelled
+        # here and is still reported — the checklist says what the game needs
+        # and where to get it — so this is a step left to the user, not an
+        # error to put in front of them.
+        if reframework_plan and reframework_plan.get("automatic"):
             try:
                 ref_files = await self._run(
                     reframework.fetch, reframework_plan, self.reframework_cache(), self.log

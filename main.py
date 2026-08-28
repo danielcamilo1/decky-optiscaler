@@ -69,8 +69,8 @@ class Plugin:
     async def get_game(self, game_path: str, name: str = None) -> dict:
         return await self.service.get_game(game_path, name)
 
-    async def find_running_game(self, appid: str) -> dict:
-        return await self.service.find_running_game(appid)
+    async def find_running_game(self, appid: str, shortcut: dict = None) -> dict:
+        return await self.service.find_running_game(appid, shortcut)
 
     async def get_fsr4_info(self, target_dir: str) -> dict:
         return await self.service.get_fsr4_info(target_dir)

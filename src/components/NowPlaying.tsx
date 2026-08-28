@@ -1,6 +1,6 @@
 import { ButtonItem, PanelSection, PanelSectionRow } from "@decky/ui";
 import { useCallback, useEffect, useState } from "react";
-import { findRunningGame } from "../api";
+import { resolveGame } from "../shortcuts";
 import { useAutoPlan } from "../hooks/useAutoPlan";
 import { useConfig } from "../hooks/useConfig";
 import { useLiveStatus } from "../hooks/useLiveStatus";
@@ -34,7 +34,7 @@ export function NowPlaying({
     }
     setResolving(true);
     try {
-      const result = await findRunningGame(String(runningGame.appid));
+      const result = await resolveGame(runningGame.appid);
       setDetail(result.found && result.detail ? result.detail : null);
     } catch {
       setDetail(null);
