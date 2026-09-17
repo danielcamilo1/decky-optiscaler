@@ -16,9 +16,9 @@ const GPU_NOTE: Record<string, string> = {
   native: "This GPU runs FSR 4 natively.",
   int8: "This GPU can run FSR 4 through the INT8 model.",
   experimental:
-    "Steam Deck / RDNA 2 can try FSR 4 INT8 (experimental) in Basic settings. Restart the game and verify the FSR4-I8 watermark. Performance and compatibility vary by game.",
+    "FSR 4 runs here through the forced INT8 model. Turn on FSR 4 INT8 (experimental) in Basic settings, restart the game, and check the overlay's FSR watermark — FSR4-I8 means the INT8 model ran, plain FSR3 means OptiScaler fell back. Performance and stability vary by game.",
   unsupported:
-    "FSR 4 support has not been established for this device.",
+    "AMD does not support FSR 4 on this device. The INT8 override under Advanced is the only route OptiScaler offers for it.",
   unknown: "Could not identify this GPU from sysfs.",
 };
 

@@ -49,6 +49,17 @@ function accepts(section: string, key: string, value: string) {
   return true;
 }
 
+/** The two device stories this harness needs: the Deck the INT8 route is for,
+ *  and a card OptiScaler's own GPU checks already cover. Neither is fixed
+ *  inside a test — the FSR version section plays both in turn. */
+const DECK_GPU = {
+  name: "Van Gogh (Steam Deck)", vendor: "amd", generation: "RDNA2",
+  fsr4: "experimental" as const,
+};
+const RDNA4_GPU = {
+  name: "Radeon RX 9070 XT", vendor: "amd", generation: "RDNA4", fsr4: "native" as const,
+};
+
 const detail = {
   path: "/games/Cyberpunk 2077",
   name: "Cyberpunk 2077",
@@ -66,7 +77,7 @@ const detail = {
              version: "4.1.1.2740", fsr4_capable: true },
     },
   },
-  gpu: { name: "Van Gogh (Steam Deck)", vendor: "amd", generation: "RDNA2", fsr4: "unsupported" },
+  gpu: DECK_GPU,
   wiki_entry: null,
 };
 
@@ -172,6 +183,14 @@ function setIni(entries: Record<string, Record<string, string>>) {
   forgetWrites(detail.install.path);
 }
 
+/** The same trick for the device: which GPU is under the game decides whether
+ *  an FSR 4 version is reachable through OptiScaler's own checks or only
+ *  through the INT8 override, and the fixture is one object either way. */
+function setGpu(gpu: typeof detail.gpu) {
+  detail.gpu = gpu;
+  forgetWrites(detail.install.path);
+}
+
 const all = (node: Element, selector: string) => Array.from(node.querySelectorAll(selector));
 const control = (host: Element, label: string) =>
   all(host, `[data-mock][data-label="${label}"]`)[0];
@@ -262,10 +281,69 @@ const tile = (host: Element, label: string) => {
   });
   await settle(200);
   check("asking for FSR 4 records the version", ini.FSR.UpscalerIndex, "0");
-  // Without this, OptiScaler reaches FSR 4 only on RDNA4 and the request falls
-  // back to FSR 3 on a Deck with nothing said about it.
-  check("and switches on the path that makes it reachable",
+  // But not the upgrade path, on the device this plugin exists for: v0.9.4's
+  // notes say setting it on an unsupported GPU forces FP8 and OptiScaler
+  // answers with its internal FSR 3 fallback, and the maintainer's answer to
+  // exactly this device on the tracker was that the INT8 override is the only
+  // option it needs. Writing it here would be the bug, not the fix.
+  check("and leaves the upgrade path alone where INT8 is the route",
+    ini.FSR.Fsr4Update, "false");
+
+  // On a device OptiScaler's own GPU checks cover, the same click has to write
+  // it — that is what this section has always covered, and it still holds.
+  setGpu(RDNA4_GPU);
+  const onAmd = control(host, "FSR version");
+  await act(async () => {
+    (all(onAmd, '[data-opt-value="3"]')[0] as HTMLElement).click();
+  });
+  await settle(200);
+  await act(async () => {
+    (all(control(host, "FSR version"), '[data-opt-value="0"]')[0] as HTMLElement).click();
+  });
+  await settle(200);
+  check("asking for FSR 4 on a supported GPU switches the upgrade path on",
     ini.FSR.Fsr4Update, "true");
+  setGpu(DECK_GPU);
+
+  console.log("=== the INT8 preset on that same Deck ===");
+  // The other half of the device story: the preset the INT8 route needs,
+  // recognised from the ini like any other, and the one control it must not
+  // offer. The backend switch is live and the override is not — it is read while
+  // the upscaler is created — so a switch under this preset would move the game
+  // now and leave the thing that was asked for waiting for a restart.
+  setIni({
+    Upscalers: { Dx12Upscaler: "fsr31" },
+    FSR: { Fsr4ForceEnableInt8: "true", Fsr4Update: "auto", UpscalerIndex: "0" },
+  });
+  // A backend the game is not on, so a switch would otherwise be on offer.
+  liveBackend = "xess";
+  const host5 = document.createElement("div");
+  document.body.appendChild(host5);
+  const root5 = createRoot(host5);
+  await act(async () => {
+    root5.render(
+      <QuickPanel
+        runningGame={{ appid: 1091500, name: "Cyberpunk 2077", gameid: "1091500" }}
+        onOpenManager={() => {}}
+      />
+    );
+  });
+  await settle();
+  check("the INT8 preset is the one recognised",
+    selected(host5, "Override upscaler with"), "fsr4-int8");
+  check("and the panel says the override waits for a launch",
+    host5.textContent!.includes("takes effect on the next launch"), true);
+  await act(async () => {
+    (all(control(host5, "Override upscaler with"),
+      '[data-opt-value="fsr4-int8"]')[0] as HTMLElement).click();
+  });
+  await settle(200);
+  check("picking it offers no switch that cannot apply it",
+    host5.textContent!.includes("Switch now"), false);
+  await act(async () => root5.unmount());
+  liveBackend = "fsr31";
+  setIni({ FSR: { Fsr4ForceEnableInt8: "false", Fsr4Update: "false" } });
+  await settle(200);
 
   console.log("=== the live tiles ===");
   // The backend id cannot say which FSR is running and OptiScaler's own name

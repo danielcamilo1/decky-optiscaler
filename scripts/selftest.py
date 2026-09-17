@@ -2499,6 +2499,20 @@ def check_option_validation():
     check("an index that is not one is still refused",
           not valid(ups_index, "-1") and not valid(ups_index, "fsr4"))
 
+    # FSR4Preset is a closed set of six, and the reference ini writes it as one
+    # comma-separated list rather than the "0 = A / 1 = B" form the generator was
+    # built around. It read that as two entries with the other four buried in the
+    # labels, which made "1", "3", "4" and "5" unwritable — the Quality and
+    # Performance models among them. OptiScaler clamps the same range, so six is
+    # the truth rather than one build's snapshot.
+    fsr4_preset = SCHEMA[("FSR", "Fsr4Preset")]
+    check("the FSR4 preset names all six presets",
+          fsr4_preset["options"] == ["0", "1", "2", "3", "4", "5"],
+          fsr4_preset["options"])
+    check("so Quality and Performance can be picked",
+          valid(fsr4_preset, "1") and valid(fsr4_preset, "3"))
+    check("and one OptiScaler does not have is refused", not valid(fsr4_preset, "6"))
+
     # Everything else keeps the closed-set treatment: these lists are the
     # backends OptiScaler has, not a snapshot of one runtime's answer.
     dx12 = SCHEMA[("Upscalers", "Dx12Upscaler")]
@@ -2511,10 +2525,15 @@ def check_option_validation():
     presets = {
         "fsr4": [("Upscalers", "Dx12Upscaler", "fsr31"), ("Upscalers", "Dx11Upscaler", "fsr31_12"),
                  ("Upscalers", "VulkanUpscaler", "fsr31_12"), ("FSR", "Fsr4Update", "true"),
-                 ("FSR", "UpscalerIndex", "0")],
+                 ("FSR", "UpscalerIndex", "0"), ("FSR", "Fsr4ForceEnableInt8", "false")],
+        "fsr4-int8": [("Upscalers", "Dx12Upscaler", "fsr31"),
+                      ("Upscalers", "Dx11Upscaler", "fsr31_12"),
+                      ("Upscalers", "VulkanUpscaler", "fsr31_12"),
+                      ("FSR", "Fsr4Update", "auto"), ("FSR", "Fsr4ForceEnableInt8", "true"),
+                      ("FSR", "UpscalerIndex", "0")],
         "fsr31": [("Upscalers", "Dx12Upscaler", "fsr31"), ("Upscalers", "Dx11Upscaler", "fsr31"),
                   ("Upscalers", "VulkanUpscaler", "fsr31"), ("FSR", "Fsr4Update", "false"),
-                  ("FSR", "UpscalerIndex", "1")],
+                  ("FSR", "UpscalerIndex", "1"), ("FSR", "Fsr4ForceEnableInt8", "false")],
         "xess": [("Upscalers", "Dx12Upscaler", "xess"), ("Upscalers", "Dx11Upscaler", "xess_12"),
                  ("Upscalers", "VulkanUpscaler", "xess")],
     }

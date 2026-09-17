@@ -52,7 +52,7 @@ const detail = {
   ini_info: { present: true, legacy: true, keys: 288 },
   wiki_entry: null,
   gpu: { names: ["Van Gogh (Steam Deck)"], name: "Van Gogh (Steam Deck)", gfx: "gfx1033",
-         vendor: "amd", generation: "RDNA2", fsr4: "unsupported" },
+         vendor: "amd", generation: "RDNA2", fsr4: "experimental" },
   launch_option: 'WINEDLLOVERRIDES="dxgi=n,b" %command%',
   writable: true,
 };
@@ -495,6 +495,10 @@ async function render(name: string, element: React.ReactElement) {
   console.log(`  tabs (basic mode): ${tabs.join(", ")}`);
   console.log(`  basic FG controls present: ${gd.host.textContent!.includes("Frame multiplier")}`);
   console.log(`  basic upscaler presets named as OptiScaler names them: ${["FSR 3.X/4", "FSR 2.2.1", "XeSS"].every((n) => gd.host.textContent!.includes(n))}`);
+  // The Deck's own row: FSR 4 here is the INT8 override, so the panel has to
+  // offer it rather than hide the upscaler entirely. What choosing it does is
+  // asserted in live-fields.tsx, which can drive the control.
+  console.log(`  RDNA 2 is offered the INT8 preset: ${gd.host.textContent!.includes("FSR 4 INT8 (experimental)")}`);
   // Driving the running game is the Quick Access panel's job; this page is for
   // setting a game up, so it must not offer the live switch at all.
   console.log(`  settings tab has no live upscaler switch: ${!gd.host.textContent!.includes("Switch now")}`);

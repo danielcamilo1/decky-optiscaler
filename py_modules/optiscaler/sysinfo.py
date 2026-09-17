@@ -1,7 +1,13 @@
 """GPU identification, used to explain what FSR4 can and cannot do on this device.
 
-RDNA2, including Steam Deck's Van Gogh APU, can try the bundled SDK's forced
-INT8 path. This is experimental compatibility, not official AMD support.
+FSR4 is officially RDNA3 (desktop) and RDNA4 only, and AMD has said RDNA2 will
+follow later. Until then 0.9.4 reaches RDNA2 through ``Fsr4ForceEnableInt8``:
+the release notes describe that override as being for "FSR4 incompatible GPUs",
+and the maintainer's answer to a Steam Deck/RDNA2 report on the tracker was that
+it is the only option such a device needs. The bundled build is enough for it —
+a Deck logging ``FSR4-I8 UPSCALE 4.1.1`` on stock 0.9.4 files is issue #1078.
+So RDNA2 reads as "experimental" rather than "unsupported": reachable, not
+promised.
 """
 
 import re

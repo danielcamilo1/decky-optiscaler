@@ -17,6 +17,7 @@ import {
   ffxUpscalerChanges,
   frameGenEnabled,
   isFfxBackend,
+  needsForcedInt8,
   runningBackend,
   supportsMultiplier,
   usesFfxFrameGen,
@@ -262,7 +263,14 @@ export function BasicPanel({
 
   const fsr4Selected = upscalerPreset?.id === "fsr4";
   const int8Selected = upscalerPreset?.id === "fsr4-int8";
-  const needsInt8 = fsr4Selected && gpu?.generation === "RDNA2";
+  // On a device without native FSR 4 the plain FSR 4 preset is the wrong choice
+  // rather than an impossible one: the INT8 override is what makes it reachable.
+  const int8Only = needsForcedInt8(gpu);
+  const needsInt8 = fsr4Selected && int8Only;
+  // An FSR 4 version picked while the FidelityFX backend is on something else.
+  // The version is recorded, but nothing here makes it reachable, and the one
+  // setting that would is the setting this device must not have written.
+  const ffxUpsNeedsInt8 = ffxUpscalerChanged && int8Only && !int8Selected;
 
   // The FFX frame generator, which only the FSR FG output runs. When the game
   // is attached its own reported list wins; otherwise the shipped INI's.
@@ -305,6 +313,11 @@ export function BasicPanel({
   const ffxUpsNotLive =
     ffxUpscalerChanged && Boolean(live?.attached) && !live?.can_change_ffx_upscaler;
   const wanted = backendCode(UPSCALER_PRESETS.find((preset) => preset.id === picked));
+  // The backend switch is live; the INT8 override is not, and it is read where
+  // the upscaler is created. Offering the switch under that preset would move
+  // the backend now and leave the thing the user actually asked for waiting for
+  // a restart, so that preset says so and this stays out of it.
+  const int8RestartOnly = int8Selected;
   // Nothing to apply once the game is already on it, or if the choice cannot be
   // pushed at all — the plugin has to be attached with an upscaler registered.
   const canSwitchNow =
@@ -312,7 +325,8 @@ export function BasicPanel({
     Boolean(wanted) &&
     wanted !== liveBackend &&
     Boolean(live?.attached) &&
-    Boolean(live?.can_switch_upscaler);
+    Boolean(live?.can_switch_upscaler) &&
+    !int8RestartOnly;
   // Attached, a different upscaler picked, and still no switch on offer. The
   // one thing that causes this is a game that has not built an upscaler yet, so
   // say so rather than leaving the button mysteriously absent.
@@ -321,7 +335,8 @@ export function BasicPanel({
     Boolean(wanted) &&
     wanted !== liveBackend &&
     Boolean(live?.attached) &&
-    !live?.can_switch_upscaler;
+    !live?.can_switch_upscaler &&
+    !int8RestartOnly;
 
   const applyUpscalerNow = async () => {
     if (!targetDir || !wanted) return;
@@ -646,7 +661,7 @@ export function BasicPanel({
                   ffxUpscalerChanges(
                     index,
                     ffxUpsChoices.options.find((choice) => choice.data === index)?.version,
-                    values
+                    gpu
                   )
                 );
               }}
@@ -700,18 +715,30 @@ export function BasicPanel({
 
         {int8Selected ? (
           <PanelSectionRow>
-            <Notice tone="info" title="FSR 4 INT8 — restart required">
-              Restart the game after enabling or disabling INT8. Tested with Cyberpunk 2077
-              on Steam Deck; compatibility and performance vary by game. Enable the FSR
-              watermark in Advanced settings to check for FSR4-I8 rather than an FSR3
-              fallback. Frame generation is configured separately.
+            <Notice tone="info" title="FSR 4 INT8 — takes effect on the next launch">
+              The override is read while the upscaler is being created, so restart the game
+              before judging the picture. Confirm it in the overlay with the FSR watermark:
+              <b> FSR4-I8</b> is the INT8 model, plain <b>FSR3</b> is OptiScaler's fallback.
+              Leave the FSR4 preset in Advanced on Default — preset 0 is the Native AA model,
+              and forcing it while the game upscales has been reported to break the game's
+              own frame generation. Frame generation itself is configured separately.
             </Notice>
           </PanelSectionRow>
         ) : needsInt8 ? (
           <PanelSectionRow>
-            <Notice tone="warn" title="Choose FSR 4 INT8 on Steam Deck">
-              {gpu?.name ?? "This GPU"} is RDNA 2. Choose FSR 4 INT8 (experimental)
-              to use the bundled SDK's compatibility path, then restart the game.
+            <Notice tone="warn" title="FSR 4 here runs through the INT8 override">
+              {gpu?.name ?? "This GPU"} is {gpu?.generation}. OptiScaler's own GPU checks do
+              not offer FSR 4 on it — the forced INT8 model does — so choose
+              <b> FSR 4 INT8 (experimental)</b> instead, then restart the game. Performance
+              and stability vary by game.
+            </Notice>
+          </PanelSectionRow>
+        ) : ffxUpsNeedsInt8 ? (
+          <PanelSectionRow>
+            <Notice tone="warn" title="This version is recorded, but not reachable">
+              FSR 4 on this device needs the INT8 override, and the FSR upgrade path is the
+              setting that must not be forced on it. Pick <b>FSR 4 INT8 (experimental)</b>
+              above and restart the game.
             </Notice>
           </PanelSectionRow>
         ) : fsr4Selected && !compact ? (
