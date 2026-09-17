@@ -55,6 +55,24 @@ export const FSR_BACKEND_LABELS: Record<string, string> = {
   "2": "FSR 2.3.4",
 };
 
+/** The overlay's own "FSR4 Preset" combo, plus what its help marker says each
+ * one is for (menu_common.cpp: "Preset 0 is meant for FSR Native AA", …).
+ *
+ * The numbers are kept because that is how OptiScaler's overlay names them, and
+ * because preset 0 is the one entry that is not just a quality hint: OptiScaler
+ * uses the model itself to pick the FSR 4 preset, and it corrects 0 to 1 when
+ * the feature's ratio is 1.29 or more (FSR4ModelSelection.cpp). Setting 0 from
+ * here discards that correction, which is why the help text on the panel calls
+ * it out. */
+export const FSR4_PRESET_LABELS: Record<string, string> = {
+  "0": "Preset 0 — Native AA",
+  "1": "Preset 1 — Quality / Ultra Quality",
+  "2": "Preset 2 — Balanced",
+  "3": "Preset 3 — Performance",
+  "4": "Preset 4 — DRS",
+  "5": "Preset 5 — Ultra Performance",
+};
+
 /** Curated labels keyed by "Section.Key". Applied on top of generated ones. */
 export const VALUE_LABELS: Record<string, Record<string, string>> = {
   "Upscalers.Dx11Upscaler": UPSCALER_LABELS,
@@ -63,6 +81,7 @@ export const VALUE_LABELS: Record<string, Record<string, string>> = {
   "FrameGen.FGInput": FG_INPUT_LABELS,
   "FrameGen.FGOutput": FG_OUTPUT_LABELS,
   "FSR.UpscalerIndex": FSR_BACKEND_LABELS,
+  "FSR.Fsr4Preset": FSR4_PRESET_LABELS,
   "FSR.FGIndex": { "0": "FSR 4.0.0", "1": "FSR 3.1.6" },
   "XeFG.InterpolationCount": { "1": "2X", "2": "3X", "3": "4X" },
 };

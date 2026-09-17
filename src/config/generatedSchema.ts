@@ -1003,11 +1003,19 @@ export const GENERATED_OPTIONS: OptionMeta[] = [
     "type": "enum",
     "options": [
       "0",
-      "2"
+      "1",
+      "2",
+      "3",
+      "4",
+      "5"
     ],
     "optionLabels": {
-      "0": "For FSR Native AA, 1 = Ultra Quality",
-      "2": "Balanced, 3 = Performance, 4 = DRS, 5 = Ultra Performance"
+      "0": "For FSR Native AA",
+      "1": "Ultra Quality",
+      "2": "Balanced",
+      "3": "Performance",
+      "4": "DRS",
+      "5": "Ultra Performance"
     }
   },
   {
