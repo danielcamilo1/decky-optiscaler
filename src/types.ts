@@ -60,7 +60,7 @@ export interface GpuInfo {
   gfx: string | null;
   vendor: string | null;
   generation: string | null;
-  fsr4: "native" | "int8" | "unsupported" | "unknown";
+  fsr4: "native" | "int8" | "experimental" | "unsupported" | "unknown";
 }
 
 export interface FfxUpscalerInfo {

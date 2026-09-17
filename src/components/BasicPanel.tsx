@@ -261,7 +261,8 @@ export function BasicPanel({
   );
 
   const fsr4Selected = upscalerPreset?.id === "fsr4";
-  const gpuBlocked = fsr4Selected && gpu?.fsr4 === "unsupported";
+  const int8Selected = upscalerPreset?.id === "fsr4-int8";
+  const needsInt8 = fsr4Selected && gpu?.generation === "RDNA2";
 
   // The FFX frame generator, which only the FSR FG output runs. When the game
   // is attached its own reported list wins; otherwise the shipped INI's.
@@ -644,7 +645,8 @@ export function BasicPanel({
                 onApply(
                   ffxUpscalerChanges(
                     index,
-                    ffxUpsChoices.options.find((choice) => choice.data === index)?.version
+                    ffxUpsChoices.options.find((choice) => choice.data === index)?.version,
+                    values
                   )
                 );
               }}
@@ -696,11 +698,20 @@ export function BasicPanel({
           </PanelSectionRow>
         ) : null}
 
-        {gpuBlocked ? (
+        {int8Selected ? (
           <PanelSectionRow>
-            <Notice tone="error" title="This GPU cannot run FSR 4">
-              {gpu?.name ?? "This GPU"} is {gpu?.generation}. AMD supports FSR 4 on RDNA 3 and
-              RDNA 4 only. Use FSR 3.1 or XeSS instead.
+            <Notice tone="info" title="FSR 4 INT8 — restart required">
+              Restart the game after enabling or disabling INT8. Tested with Cyberpunk 2077
+              on Steam Deck; compatibility and performance vary by game. Enable the FSR
+              watermark in Advanced settings to check for FSR4-I8 rather than an FSR3
+              fallback. Frame generation is configured separately.
+            </Notice>
+          </PanelSectionRow>
+        ) : needsInt8 ? (
+          <PanelSectionRow>
+            <Notice tone="warn" title="Choose FSR 4 INT8 on Steam Deck">
+              {gpu?.name ?? "This GPU"} is RDNA 2. Choose FSR 4 INT8 (experimental)
+              to use the bundled SDK's compatibility path, then restart the game.
             </Notice>
           </PanelSectionRow>
         ) : fsr4Selected && !compact ? (

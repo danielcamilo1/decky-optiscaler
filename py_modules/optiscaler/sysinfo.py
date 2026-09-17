@@ -1,8 +1,7 @@
 """GPU identification, used to explain what FSR4 can and cannot do on this device.
 
-FSR4 is officially RDNA3 (dGPU) and RDNA4 only; RDNA2 — which includes the Steam
-Deck's Van Gogh APU — is not supported by AMD yet. Knowing the generation lets
-the UI say why FSR4 is or is not going to appear.
+RDNA2, including Steam Deck's Van Gogh APU, can try the bundled SDK's forced
+INT8 path. This is experimental compatibility, not official AMD support.
 """
 
 import re
@@ -48,7 +47,7 @@ FSR4_SUPPORT = {
     "RDNA4": "native",
     "RDNA3": "int8",
     "RDNA3.5": "int8",
-    "RDNA2": "unsupported",
+    "RDNA2": "experimental",
 }
 
 

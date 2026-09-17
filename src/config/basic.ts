@@ -45,6 +45,7 @@ function upscalerPreset(
     change("Upscalers", "Dx12Upscaler", dx12),
     change("Upscalers", "Dx11Upscaler", dx11),
     change("Upscalers", "VulkanUpscaler", vulkan),
+    change("FSR", "Fsr4ForceEnableInt8", "false"),
   ];
   if (fsr4Update !== undefined) {
     changes.push(change("FSR", "Fsr4Update", fsr4Update ? "true" : "false"));
@@ -60,6 +61,7 @@ function upscalerPreset(
     matches: (values) => {
       if (get(values, "Upscalers", "Dx12Upscaler") !== dx12) return false;
       if (fsr4Update === undefined) return true;
+      if (get(values, "FSR", "Fsr4ForceEnableInt8") === "true") return false;
       const flag = get(values, "FSR", "Fsr4Update");
       return fsr4Update ? flag === "true" : flag !== "true";
     },
@@ -76,8 +78,30 @@ export const UPSCALER_PRESETS: Preset[] = [
       change("Upscalers", "Dx11Upscaler", AUTO),
       change("Upscalers", "VulkanUpscaler", AUTO),
       change("FSR", "Fsr4Update", AUTO),
+      change("FSR", "Fsr4ForceEnableInt8", AUTO),
+      change("FSR", "UpscalerIndex", AUTO),
     ],
     matches: (values) => isAuto(get(values, "Upscalers", "Dx12Upscaler")),
+  },
+  {
+    id: "fsr4-int8",
+    label: "FSR 4 INT8 (experimental)",
+    description: "Force the bundled FSR 4 INT8 upscaler on Steam Deck / RDNA 2. Restart the game to apply. Frame generation is configured separately.",
+    changes: [
+      change("Upscalers", "Dx12Upscaler", "fsr31"),
+      change("Upscalers", "Dx11Upscaler", "fsr31_12"),
+      change("Upscalers", "VulkanUpscaler", "fsr31_12"),
+      // The bundled 0.9.4 SDK uses an initialization hook for INT8. Forcing
+      // the separate driver-upgrade path can instead select its FSR3 fallback.
+      change("FSR", "Fsr4Update", AUTO),
+      change("FSR", "Fsr4ForceEnableInt8", "true"),
+      change("FSR", "UpscalerIndex", "0"),
+    ],
+    matches: (values) =>
+      get(values, "Upscalers", "Dx12Upscaler") === "fsr31" &&
+      get(values, "FSR", "Fsr4ForceEnableInt8") === "true" &&
+      get(values, "FSR", "Fsr4Update") !== "true" &&
+      get(values, "FSR", "UpscalerIndex") === "0",
   },
   upscalerPreset(
     "fsr4",
@@ -254,9 +278,14 @@ export function isFsr4Version(name: string | null | undefined): boolean {
  * it off. `Fsr4Update` is the hook that makes FSR 4 *available*, not a request
  * for it, and switching it off would be undoing a setting nobody asked about.
  */
-export function ffxUpscalerChanges(index: string, version?: string | null): OptionChange[] {
+export function ffxUpscalerChanges(
+  index: string, version?: string | null, values: ConfigValues = {}
+): OptionChange[] {
   const changes = [change(FFX_UPSCALER_SECTION, FFX_UPSCALER_KEY, index)];
-  if (isFsr4Version(version)) changes.push(change("FSR", "Fsr4Update", "true"));
+  if (isFsr4Version(version)) {
+    changes.push(change("FSR", "Fsr4Update",
+      get(values, "FSR", "Fsr4ForceEnableInt8") === "true" ? AUTO : "true"));
+  }
   return changes;
 }
 

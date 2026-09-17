@@ -15,8 +15,10 @@ interface Props {
 const GPU_NOTE: Record<string, string> = {
   native: "This GPU runs FSR 4 natively.",
   int8: "This GPU can run FSR 4 through the INT8 model.",
+  experimental:
+    "Steam Deck / RDNA 2 can try FSR 4 INT8 (experimental) in Basic settings. Restart the game and verify the FSR4-I8 watermark. Performance and compatibility vary by game.",
   unsupported:
-    "AMD supports FSR 4 on RDNA 3 and RDNA 4 only. RDNA 2 — which includes the Steam Deck — is not supported yet.",
+    "FSR 4 support has not been established for this device.",
   unknown: "Could not identify this GPU from sysfs.",
 };
 
@@ -77,8 +79,9 @@ export function Fsr4Panel({ targetDir, sources, gpu, onChanged }: Props) {
         <PanelSectionRow>
           <Notice tone="success" title="FSR 4 is present">
             The FidelityFX SDK bundled with OptiScaler is v{ffx.version}, which provides
-            FSR 4. If it is not offered in the overlay, set the upscaler to <b>FSR 4</b> in
-            Settings — OptiScaler's own default only selects FSR 4 automatically on RDNA 4.
+            FSR 4. On Steam Deck / RDNA 2, select <b>FSR 4 INT8 (experimental)</b> in
+            Basic settings and restart the game. The installed version alone does not
+            confirm the active model; use the FSR watermark to check for fallback.
           </Notice>
         </PanelSectionRow>
       ) : null}
@@ -93,7 +96,7 @@ export function Fsr4Panel({ targetDir, sources, gpu, onChanged }: Props) {
 
       {gpu?.fsr4 ? (
         <PanelSectionRow>
-          <Notice tone={gpu.fsr4 === "unsupported" ? "warn" : "info"} title="This device">
+          <Notice tone={gpu.fsr4 === "unsupported" || gpu.fsr4 === "experimental" ? "warn" : "info"} title="This device">
             {gpu.name ? `${gpu.name}. ` : ""}
             {GPU_NOTE[gpu.fsr4] ?? GPU_NOTE.unknown}
           </Notice>
