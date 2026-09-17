@@ -7,6 +7,23 @@ Newest first. Each release ships `Decky OptiScaler.zip` for Decky Loader's
 
 ### Added
 
+- **The FSR 4 upscaler build can be swapped without leaving the plugin.** The
+  release carries AMD's 4.1.1 SDK build; the Setup tab now offers the pinned INT8
+  builds from the OptiScaler-Extras mirror — 4.1.1b, 4.0.2d and 4.0.2c, the last
+  being the one the OptiScaler Client points RDNA 2 users at — downloading only
+  when a build is picked, checking the archive against GitHub's own digest and
+  the DLL inside it against a hash this plugin pins, and recording which release
+  it came from. "Restore the bundled build" puts the released one back, as do a
+  reinstall and an uninstall.
+- The build is identified by its **hash rather than its version**: the modelled
+  4.1.1b reports 4.1.1.2740, exactly what the released SDK reports, so a version
+  string cannot tell them apart. A file that matches nothing this plugin pins is
+  reported as an unrecognised build — with its hash — instead of passing as the
+  released one.
+- Which setting reaches FSR 4 follows the build as well as the GPU. OptiScaler's
+  menu offers FSR 4 off the INT8 override only when the local upscaler is 4.1.1
+  or newer, so with a 4.0.2 build in place the INT8 preset is not offered and
+  asking for an FSR 4 version writes the FSR upgrade path instead.
 - FSR 4 on RDNA 2 (Steam Deck / Van Gogh). OptiScaler 0.9.4 reaches it through
   `Fsr4ForceEnableInt8`, the override its release notes describe as being for
   "FSR4 incompatible GPUs", so Basic mode offers an **FSR 4 INT8 (experimental)**
