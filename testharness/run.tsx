@@ -194,13 +194,16 @@ Object.assign(fixtures, {
     },
     sources: [], gpu: {},
     builds: [
-      { id: "4.1.1b", label: "4.1.1b (INT8)", note: "The newest INT8 build.",
-        reaches_fsr4_by: "int8", mb: 20, cached: false,
-        page: "https://github.com/Optiscaler-Client/OptiScaler-Extras/releases/tag/FSR_4.1.1b" },
+      { id: "4.1.1b", label: "4.1.1b (INT8, RDNA 2 ghosting fix)",
+        note: "The build the RDNA 2 coverage is about.",
+        reaches_fsr4_by: "int8", mb: 3.5, cached: false,
+        source: "the3rdparty1917/fsr4xyz",
+        page: "https://github.com/the3rdparty1917/fsr4xyz/releases/tag/4.1.1b" },
       { id: "4.0.2c", label: "4.0.2c (INT8, RDNA 2 fix)",
         note: "The build the OptiScaler Client points RDNA 2 users at.",
         reaches_fsr4_by: "upgrade", mb: 3.2, cached: false,
-        page: "https://github.com/Optiscaler-Client/OptiScaler-Extras/releases/tag/FSR_4.0.2c" },
+        source: "the3rdparty1917/fsr4xyz",
+        page: "https://github.com/the3rdparty1917/fsr4xyz/releases/tag/4.0.2c" },
     ],
   },
   verify_install: {
@@ -605,10 +608,10 @@ async function render(name: string, element: React.ReactElement) {
     manualText.includes("Bundled (FidelityFX SDK 4.1.1)")}`);
   console.log(`  and identified by its hash: ${manualText.includes("Its hash")}`);
   console.log(`  the pinned builds are offered to download: ${
-    ["4.1.1b (INT8)", "4.0.2c (INT8, RDNA 2 fix)"].every((n) => manualText.includes(n))}`);
-  console.log(`  and the mirror is named, with what it is worth: ${
-    manualText.includes("Optiscaler-Client/OptiScaler-Extras") &&
-    manualText.includes("community work")}`);
+    ["4.1.1b (INT8, RDNA 2 ghosting fix)", "4.0.2c (INT8, RDNA 2 fix)"].every((n) => manualText.includes(n))}`);
+  console.log(`  and the source and the anti-cheat warning are on the panel: ${
+    manualText.includes("the3rdparty1917/fsr4xyz") &&
+    manualText.includes("anti-cheat")}`);
   console.log(`  the launch options are spelled out there: ${
     manualText.includes("WINEDLLOVERRIDES")}`);
   // "The plugin cannot read them" and "they are empty" look identical from the

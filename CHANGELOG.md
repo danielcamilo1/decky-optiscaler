@@ -8,13 +8,19 @@ Newest first. Each release ships `Decky OptiScaler.zip` for Decky Loader's
 ### Added
 
 - **The FSR 4 upscaler build can be swapped without leaving the plugin.** The
-  release carries AMD's 4.1.1 SDK build; the Setup tab now offers the pinned INT8
-  builds from the OptiScaler-Extras mirror — 4.1.1b, 4.0.2d and 4.0.2c, the last
-  being the one the OptiScaler Client points RDNA 2 users at — downloading only
-  when a build is picked, checking the archive against GitHub's own digest and
-  the DLL inside it against a hash this plugin pins, and recording which release
-  it came from. "Restore the bundled build" puts the released one back, as do a
-  reinstall and an uninstall.
+  release carries AMD's 4.1.1 SDK build; the Setup tab now offers the community
+  INT8 builds for RDNA 2 — 4.1.1b, whose release describes itself as "modified
+  for fixing RDNA2 ghosting issues", plus 4.0.2d and 4.0.2c, the last being the
+  one the OptiScaler Client points those users at. They come from the mod's own
+  releases (`the3rdparty1917/fsr4xyz`; the OptiScaler-Extras mirror carries the
+  same DLLs in larger packages — both were downloaded and compared, byte for
+  byte). A build is downloaded only when it is picked, the archive is checked
+  against the hash GitHub publishes for it and the DLL inside it against a hash
+  this plugin pins, and the panel names the release it came from. "Restore the
+  bundled build" puts the released one back, as do a reinstall and an uninstall.
+- The panel says what these are: modified game DLLs, redistributed by hand, so
+  best kept away from anything with anti-cheat, and not AMD's implementation —
+  FSR 4 on RDNA 2 is unofficial until AMD ships it.
 - The build is identified by its **hash rather than its version**: the modelled
   4.1.1b reports 4.1.1.2740, exactly what the released SDK reports, so a version
   string cannot tell them apart. A file that matches nothing this plugin pins is

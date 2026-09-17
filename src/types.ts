@@ -96,6 +96,8 @@ export interface Fsr4BuildOption {
   reaches_fsr4_by: string;
   mb: number;
   cached: boolean;
+  /** The GitHub repo the package is fetched from. */
+  source: string;
   page: string;
 }
 

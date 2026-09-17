@@ -3,15 +3,20 @@
 The FidelityFX library inside the OptiScaler release is AMD's own 4.1.1 SDK
 build, and on a Deck it is enough: OptiScaler reaches RDNA 2 through the forced
 INT8 model, which that build supports. What it is not is *modelled* for those
-parts, and the OptiScaler-Extras mirror is where the OptiScaler Client gets the
-builds that are — 4.0.2c, which that client points RDNA 2 users at, and the
-newer 4.1.1b.
+parts. The community builds that are come from ``the3rdparty1917/fsr4xyz`` —
+"FSR4 INT8 fixes for RDNA2", whose 4.1.1b release describes itself as
+"modified for fixing RDNA2 ghosting issues" — and the OptiScaler-Extras mirror
+carries the same files for the OptiScaler Client's FSR 4 Swap. Both were
+downloaded here and compared: the DLL is byte-identical from either host, so the
+table pins the *file* and only the download differs (3.5 MB against 20 MB).
 
 Three things about these packages shape this module.
 
 Each one holds exactly one file, ``amd_fidelityfx_upscaler_dx12.dll`` — the name
 the release's own SDK carries — so installing a build *replaces* that file
-inside the game folder rather than adding to it.
+inside the game folder rather than adding to it. The mod's own instruction is
+the same sentence: "just drop inside the game folder and replace existing
+``amd_fidelityfx_upscaler_dx12.dll``".
 
 **A version number cannot say which build is installed.** The modelled 4.1.1b
 reports 4.1.1.2740, exactly what the released SDK reports; reading the version
@@ -27,7 +32,9 @@ the one that applies to it, because guessing wrong here means a game that offers
 neither.
 
 Nothing in here downloads anything on its own. The plugin works offline, and a
-build is fetched only when somebody picks one.
+build is fetched only when somebody picks one — which is also the point at which
+the panel says what these are: modified game DLLs, redistributed by hand, best
+kept away from anything with anti-cheat.
 """
 
 import shutil
@@ -37,8 +44,7 @@ from . import payload, wiki
 from .constants import (
     FFX_UPSCALER_DLL,
     FSR4_BUILDS,
-    FSR4_BUILD_RELEASES,
-    FSR4_BUILD_REPO,
+    FSR4_BUILD_MIRROR,
     FSR4_BUNDLED_BUILD_ID,
     FSR4_BUNDLED_FILE_SHA256,
     FSR4_INT8_MIN_SDK_VERSION,
@@ -78,11 +84,13 @@ def cached_path(cache_dir, build):
 
 
 def release_page(build):
-    return f"https://github.com/{FSR4_BUILD_REPO}/releases/tag/{build['tag']}"
+    repo = build.get("repo") or FSR4_BUILD_MIRROR
+    return f"https://github.com/{repo}/releases/tag/{build['tag']}"
 
 
 def url_for(build):
-    return f"{FSR4_BUILD_RELEASES}/{build['tag']}/{build['asset']}"
+    repo = build.get("repo") or FSR4_BUILD_MIRROR
+    return f"https://github.com/{repo}/releases/download/{build['tag']}/{build['asset']}"
 
 
 def digest(path):
@@ -151,6 +159,7 @@ def catalog(cache_dir):
             "reaches_fsr4_by": build["reaches_fsr4_by"],
             "mb": round(build["archive_bytes"] / 1e6, 1),
             "cached": _matches(cached_path(cache_dir, build), build),
+            "source": build.get("repo") or FSR4_BUILD_MIRROR,
             "page": release_page(build),
         })
     return items

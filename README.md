@@ -45,11 +45,12 @@ OptiScaler v0.9.4 is bundled, so installing works offline and every game gets th
   FSR watermark — `FSR4-I8` rather than a plain `FSR3` — is what says which model ran. It is
   experimental: how well it holds up varies by game.
 - **The upscaler itself, when the bundled one is not what you want.** The Setup tab lists the
-  pinned FSR 4 INT8 builds from the OptiScaler-Extras mirror, downloads the one you pick and
-  puts it in place — checking the archive and the DLL against hashes this plugin pins, and
-  saying which release the file in the folder came from, because the modelled builds report
-  the same version the released SDK does. Restore, reinstall or uninstall puts the released
-  one back.
+  community FSR 4 INT8 builds for RDNA 2, downloads the one you pick and puts it in place —
+  checking the archive and the DLL against hashes this plugin pins, and saying which release
+  the file in the folder came from, because the modelled builds report the same version the
+  released SDK does. They are modified game DLLs, so keep them away from anything with
+  anti-cheat, and not AMD's implementation — RDNA 2 support is unofficial until AMD ships it.
+  Restore, reinstall or uninstall puts the released one back.
 - **Changes settings while you play.** A bundled ASI plugin applies frame generation, the
   FidelityFX FG version, the upscaler and the FSR version immediately from the Quick Access
   panel — next to what the game actually ended up running and, with frame generation on, both

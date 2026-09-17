@@ -245,7 +245,7 @@ export function Fsr4Panel({ targetDir, sources, gpu, onChanged }: Props) {
           <ButtonItem
             layout="below"
             disabled={Boolean(busy)}
-            description={`${option.note} (${option.mb} MB${
+            description={`${option.note} (${option.mb} MB from ${option.source}${
               option.cached ? ", already downloaded" : ""
             })`}
             onClick={() => void useBuild(option)}
@@ -284,12 +284,23 @@ export function Fsr4Panel({ targetDir, sources, gpu, onChanged }: Props) {
 
       <PanelSectionRow>
         <Notice tone="info" title="These builds are community work">
-          Mirrored from <Mono>Optiscaler-Client/OptiScaler-Extras</Mono>, not from AMD. Each
-          package is one modelled copy of <Mono>amd_fidelityfx_upscaler_dx12.dll</Mono> that
-          replaces the released one in this game's folder. The archive is checked against
-          GitHub's own digest and the file inside it against the hash this plugin pins, and
-          both are shown above once it is in place. Restoring, reinstalling OptiScaler, or
-          uninstalling it takes the released build back.
+          Each package is one modified copy of <Mono>amd_fidelityfx_upscaler_dx12.dll</Mono>
+          that replaces the released one in this game's folder — the same file, by the same
+          instruction the releases themselves give ("just drop inside the game folder"). The
+          archive is checked against the hash GitHub publishes for it and the DLL inside it
+          against the hash this plugin pins, and the result is named above once it is in
+          place. Restoring, reinstalling OptiScaler, or uninstalling it takes the released
+          build back.
+        </Notice>
+      </PanelSectionRow>
+
+      <PanelSectionRow>
+        <Notice tone="warn" title="What these are, and are not">
+          Modified game DLLs, redistributed by hand, so keep them away from anything with
+          anti-cheat — the same warning the OptiScaler project and the people behind these
+          builds publish with them. They are also not AMD's implementation: FSR 4 for RDNA 2
+          is not official until AMD ships it, and how a build like this behaves will differ
+          from game to game. Nothing here is downloaded until a build is picked.
         </Notice>
       </PanelSectionRow>
     </PanelSection>

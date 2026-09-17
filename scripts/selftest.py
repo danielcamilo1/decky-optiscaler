@@ -297,6 +297,12 @@ async def run():
               all(len(b["archive_sha256"]) == 64 for b in fsr4build.FSR4_BUILDS))
         check("every build names the one file these packages hold",
               all(b["file"] == installer.FFX_UPSCALER_DLL for b in fsr4build.builds()))
+        check("every build names the release to fetch it from",
+              all(b.get("repo") and b.get("tag") and b.get("asset")
+                  for b in fsr4build.FSR4_BUILDS))
+        check("and no two builds install the same file",
+              len({b["file_sha256"] for b in fsr4build.FSR4_BUILDS})
+              == len(fsr4build.FSR4_BUILDS))
         check("which setting reaches FSR 4 follows the version, not the GPU",
               fsr4build.reaches_fsr4_by([4, 1, 1, 2740]) == "int8"
               and fsr4build.reaches_fsr4_by([4, 0, 2, 0]) == "upgrade")
