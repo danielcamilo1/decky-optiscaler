@@ -285,6 +285,57 @@ async def run():
         check("driver FSR4 dlls detected after import",
               installer.fsr4_status(str(target))["ready"])
 
+        # The FSR 4 builds the panel offers, without the network: they are pinned
+        # by hash, so the table can be checked and a local file identified
+        # without a download, and installing one is a copy either way.
+        print("\nFSR 4 upscaler builds")
+        from optiscaler import fsr4build  # noqa: E402
+
+        check("every build pins a 64-character hash for the file it installs",
+              all(len(b["file_sha256"]) == 64 for b in fsr4build.builds()))
+        check("and one for the archive it arrives in",
+              all(len(b["archive_sha256"]) == 64 for b in fsr4build.FSR4_BUILDS))
+        check("every build names the one file these packages hold",
+              all(b["file"] == installer.FFX_UPSCALER_DLL for b in fsr4build.builds()))
+        check("which setting reaches FSR 4 follows the version, not the GPU",
+              fsr4build.reaches_fsr4_by([4, 1, 1, 2740]) == "int8"
+              and fsr4build.reaches_fsr4_by([4, 0, 2, 0]) == "upgrade")
+        check("the released upscaler is identified by its bytes",
+              (fsr4build.identify(target / installer.FFX_UPSCALER_DLL) or {}).get("id")
+              == "bundled")
+        check("a build that is not one of ours says so",
+              (fsr4build.identify(source / "amdxc64.dll") or {}).get("known") is False)
+
+        catalogue = fsr4build.catalog(root / "cache")
+        check("the panel is offered the pinned builds with their sizes",
+              len(catalogue) == len(fsr4build.FSR4_BUILDS)
+              and all(item["mb"] > 0 for item in catalogue), catalogue)
+        check("and none of them is offered as already downloaded",
+              not any(item["cached"] for item in catalogue))
+
+        # Install one from a hand-made "download": the same call the service
+        # makes once `fetch` has verified a real one.
+        fake_build = dict(fsr4build.FSR4_BUILDS[0], file_sha256="0" * 64)
+        fake = root / "fake-4.1.1b.dll"
+        fake.write_bytes(b"NOT A REAL FSR4 DLL" * 1024)
+        installed = installer.install_fsr4_build(str(target), fake, fake_build, None)
+        check("a build installs over the released one",
+              installed["build"]["id"] == fake_build["id"], installed)
+        check("and the folder now reports an unrecognised build rather than the released one",
+              (installer.fsr4_status(str(target))["build"] or {}).get("known") is False)
+        check("the manifest records which build is in place",
+              (installer.read_manifest(target) or {}).get("fsr4_build", {}).get("id")
+              == fake_build["id"])
+
+        restored = installer.restore_fsr4_build(
+            str(target), str(await service.ensure_payload()), None
+        )
+        check("restoring puts the released build back",
+              restored["restored"] == installer.FFX_UPSCALER_DLL
+              and (restored["build"] or {}).get("id") == "bundled", restored)
+        check("and clears the record of the imported one",
+              not (installer.read_manifest(target) or {}).get("fsr4_build"))
+
         print("\nConfiguration")
         config = await service.read_config(str(target))
         check("ini parsed", config["ok"] and len(config["values"]) == 34, len(config["values"]))

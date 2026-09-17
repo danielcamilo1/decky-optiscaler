@@ -2,6 +2,7 @@ import { callable } from "@decky/api";
 import type {
   AutoPlanResult,
   ConfigResult,
+  Fsr4BuildOption,
   Fsr4Source,
   Fsr4Status,
   GpuInfo,
@@ -55,12 +56,20 @@ export const findRunningGame = callable<
 >("find_running_game");
 export const getFsr4Info = callable<
   [targetDir: string],
-  { status: Fsr4Status; sources: Fsr4Source[]; gpu: GpuInfo }
+  { status: Fsr4Status; sources: Fsr4Source[]; gpu: GpuInfo; builds: Fsr4BuildOption[] }
 >("get_fsr4_info");
 export const importFsr4Files = callable<
   [targetDir: string, sourceDir: string],
   ActionResult
 >("import_fsr4_files");
+/** Download a pinned FSR 4 upscaler build and put it in the game folder. */
+export const setFsr4Build = callable<[targetDir: string, buildId: string], ActionResult>(
+  "set_fsr4_build"
+);
+/** Put the build that ships inside the OptiScaler release back. */
+export const restoreFsr4Build = callable<[targetDir: string], ActionResult>(
+  "restore_fsr4_build"
+);
 export const setGameTarget = callable<[gamePath: string, targetDir: string], ActionResult>(
   "set_game_target"
 );

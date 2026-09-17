@@ -189,10 +189,14 @@ EXE_NAME_BLACKLIST = {
 # the SDK does not supply the effect. It is optional, not required.
 FSR4_SUPPORT_FILES = ["amdxcffx64.dll", "amdxc64.dll"]
 
-# The FidelityFX SDK dll that actually carries FSR4, and the minimum version
-# that reports INT8 model support (see FSR4Upgrade.cpp).
+# The FidelityFX SDK dll that actually carries FSR4. FSR 4 arrived with the
+# 4.0.2 build (FFX SDK 2.0), so that is the floor for "this file is a FSR 4
+# library at all"; the INT8 model specifically needs 4.1.1, which is what
+# OptiScaler's own menu asks for before it will offer the FSR 3.X/4 entry off
+# the back of Fsr4ForceEnableInt8 (menu_common.cpp).
 FFX_UPSCALER_DLL = "amd_fidelityfx_upscaler_dx12.dll"
-FSR4_MIN_SDK_VERSION = (4, 1, 1, 0)
+FSR4_MIN_SDK_VERSION = (4, 0, 2, 0)
+FSR4_INT8_MIN_SDK_VERSION = (4, 1, 1, 0)
 
 # Places a user is likely to already have those DLLs.
 FSR4_SOURCE_HINTS = [
@@ -204,6 +208,86 @@ FSR4_SOURCE_HINTS = [
     "Downloads",
     "decky-optiscaler",
 ]
+
+# ---------------------------------------------------------------- FSR 4 builds
+#
+# The upscaler the game loads, as the community builds it. OptiScaler's own
+# release carries AMD's 4.1.1 SDK build; these are the INT8 builds for parts AMD
+# does not cover, mirrored in the OptiScaler-Extras repository that the
+# OptiScaler Client picks its FSR 4 Swap versions from.
+#
+# Every package holds exactly one file, `amd_fidelityfx_upscaler_dx12.dll` —
+# the same name the release's SDK carries — so installing one replaces that file
+# inside the game folder, and uninstalling OptiScaler takes it with it.
+#
+# **A version number cannot say which of them is installed.** The modelled 4.1.1b
+# reports 4.1.1.2740, exactly what the released SDK reports; only the bytes
+# differ. So each entry pins the SHA-256 of the file it unpacks (and of the
+# archive it comes in, which is GitHub's own digest for the asset), and what the
+# panel reports about the installed build is that hash and the release it came
+# from — never a version string that two different builds share.
+#
+# `reaches_fsr4_by` records which setting actually gets FSR 4 running with that
+# build in place, because it changes with the build rather than the device:
+# OptiScaler offers the FSR 3.X/4 entry off `Fsr4ForceEnableInt8` only when the
+# local upscaler is 4.1.1 or newer, so a 4.0.2 build is reached through
+# `Fsr4Update` (the upgrade path) instead — which is what the OptiScaler Client
+# sets for RDNA 2, both flags at once, for exactly this reason.
+FSR4_BUILD_REPO = "Optiscaler-Client/OptiScaler-Extras"
+FSR4_BUILD_RELEASES = f"https://github.com/{FSR4_BUILD_REPO}/releases/download"
+FSR4_BUNDLED_BUILD_ID = "bundled"
+#: The released SDK build, identified by hash like any other. Not downloadable:
+#: it is already in bin/ and is what "reinstall" and "restore" put back.
+FSR4_BUNDLED_FILE_SHA256 = (
+    "d0dcccc74a43c44ba435b7a369b456e0970d8a4464e4bd683119b374f2c9fb46"
+)
+FSR4_BUILDS = [
+    {
+        "id": "4.1.1b",
+        "label": "4.1.1b (INT8)",
+        "note": "The newest INT8 build. Reports the same version as the bundled "
+                "SDK, so it is identified by hash. Reaches FSR 4 through the INT8 "
+                "override, like the bundled one.",
+        "tag": "FSR_4.1.1b",
+        "asset": "FSR4_INT8_4.1.1b.7z",
+        "archive_sha256": "ddedf6fd452904c4598719feac33f098644de7e1f0ed53c54274aedb0a586be1",
+        "archive_bytes": 20030057,
+        "file": "amd_fidelityfx_upscaler_dx12.dll",
+        "file_sha256": "0dd77d9c78d1ef9bc330cf4697ab3ffe24bc1aa7850e4130263dc922107fbd75",
+        "file_bytes": 34013696,
+        "reaches_fsr4_by": "int8",
+    },
+    {
+        "id": "4.0.2d",
+        "label": "4.0.2d (INT8)",
+        "note": "4.0.2 branch, modelled. Reaches FSR 4 through the FSR upgrade "
+                "path rather than the INT8 override, which needs 4.1.1 or newer.",
+        "tag": "FSR_4.0.2d",
+        "asset": "FSR4_INT8_4.0.2d.7z",
+        "archive_sha256": "801e6cfc10ed62e2ccc4ea0c6561b702e225e3cf40d94d06a0f86871774d9a40",
+        "archive_bytes": 21138258,
+        "file": "amd_fidelityfx_upscaler_dx12.dll",
+        "file_sha256": "0e60f2ff9130b08440bbdbc47c3775e818601bd534cf5eec2d0937a3458f34cc",
+        "file_bytes": 40664064,
+        "reaches_fsr4_by": "upgrade",
+    },
+    {
+        "id": "4.0.2c",
+        "label": "4.0.2c (INT8, RDNA 2 fix)",
+        "note": "The build the OptiScaler Client points RDNA 2 users at. Reaches "
+                "FSR 4 through the FSR upgrade path rather than the INT8 override, "
+                "which needs 4.1.1 or newer.",
+        "tag": "FSR_4.0.2c",
+        "asset": "FSR4_INT8_4.0.2c_with_RDNA2_fix.7z",
+        "archive_sha256": "1a0f669ed24fecb4f6bbb5c0fb93ef0595b2c12451133c04f7f7b4051cb1d46d",
+        "archive_bytes": 3240356,
+        "file": "amd_fidelityfx_upscaler_dx12.dll",
+        "file_sha256": "c7720bc16bede334f59a1a32cd22edbcbbb159685ed5240e61350a5fb0bc8a94",
+        "file_bytes": 41036800,
+        "reaches_fsr4_by": "upgrade",
+    },
+]
+
 
 WIKI_RAW_BASE = "https://raw.githubusercontent.com/wiki/optiscaler/OptiScaler"
 WIKI_HTML_BASE = "https://github.com/optiscaler/OptiScaler/wiki"

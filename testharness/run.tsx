@@ -179,7 +179,30 @@ Object.assign(fixtures, {
   record_launch_options: { ok: true, recorded: true, value: "gamemoderun %command%" },
   get_live_log: { lines: ["decky_optiscaler_live loaded", "config at 0x1234"] },
   install_live: { ok: true },
-  get_fsr4_info: { status: { files: {}, ready: false, required: [] }, sources: [], gpu: {} },
+  get_fsr4_info: {
+    status: {
+      files: {}, ready: false, required: [],
+      // The released SDK build, identified by hash: the version alone could not
+      // say, since the modelled 4.1.1b reports exactly this one.
+      build: {
+        known: true, id: "bundled", label: "Bundled (FidelityFX SDK 4.1.1)",
+        note: "The build the OptiScaler release ships.",
+        reaches_fsr4_by: "int8", sha256: "d0dcccc74a43c44b" + "0".repeat(48),
+        bytes: 28761864,
+      },
+      reaches_fsr4_by: "int8",
+    },
+    sources: [], gpu: {},
+    builds: [
+      { id: "4.1.1b", label: "4.1.1b (INT8)", note: "The newest INT8 build.",
+        reaches_fsr4_by: "int8", mb: 20, cached: false,
+        page: "https://github.com/Optiscaler-Client/OptiScaler-Extras/releases/tag/FSR_4.1.1b" },
+      { id: "4.0.2c", label: "4.0.2c (INT8, RDNA 2 fix)",
+        note: "The build the OptiScaler Client points RDNA 2 users at.",
+        reaches_fsr4_by: "upgrade", mb: 3.2, cached: false,
+        page: "https://github.com/Optiscaler-Client/OptiScaler-Extras/releases/tag/FSR_4.0.2c" },
+    ],
+  },
   verify_install: {
     ok: true, path: "/x", complete: true, problems: [],
     files: [{ name: "dxgi.dll", present: true, matches_payload: true, size: 1, expected_size: 1 }],
@@ -575,6 +598,17 @@ async function render(name: string, element: React.ReactElement) {
   const manualText = gd.host.textContent!;
   console.log(`  and the live-control panel with them: ${
     manualText.includes("Live in-game control")}`);
+  // The FSR 4 panel is here, and the build it reports comes from the bytes in
+  // the game folder rather than from a version: the modelled builds report the
+  // version the released SDK reports.
+  console.log(`  the FSR 4 build in the folder is named: ${
+    manualText.includes("Bundled (FidelityFX SDK 4.1.1)")}`);
+  console.log(`  and identified by its hash: ${manualText.includes("Its hash")}`);
+  console.log(`  the pinned builds are offered to download: ${
+    ["4.1.1b (INT8)", "4.0.2c (INT8, RDNA 2 fix)"].every((n) => manualText.includes(n))}`);
+  console.log(`  and the mirror is named, with what it is worth: ${
+    manualText.includes("Optiscaler-Client/OptiScaler-Extras") &&
+    manualText.includes("community work")}`);
   console.log(`  the launch options are spelled out there: ${
     manualText.includes("WINEDLLOVERRIDES")}`);
   // "The plugin cannot read them" and "they are empty" look identical from the

@@ -71,11 +71,44 @@ export interface FfxUpscalerInfo {
   fsr4_capable: boolean;
 }
 
+/** Which FSR 4 upscaler build is in the game folder.
+ *
+ * `known` is false for a file that hashes to nothing this plugin pins: it is
+ * still reported — with its hash — rather than being passed off as the one the
+ * release carries. Which build it is cannot be read from a version number,
+ * because the modelled 4.1.1b reports exactly what the released SDK reports. */
+export interface Fsr4Build {
+  known: boolean;
+  id: string | null;
+  label: string;
+  note: string;
+  /** "int8" (the override) or "upgrade" (the FSR 3 → FSR 4 path). */
+  reaches_fsr4_by: string | null;
+  sha256: string | null;
+  bytes: number;
+}
+
+/** One build the panel can download, with what it costs and where it comes from. */
+export interface Fsr4BuildOption {
+  id: string;
+  label: string;
+  note: string;
+  reaches_fsr4_by: string;
+  mb: number;
+  cached: boolean;
+  page: string;
+}
+
 export interface Fsr4Status {
   files: Record<string, boolean>;
   ready: boolean;
   required: string[];
   ffx?: FfxUpscalerInfo;
+  build?: Fsr4Build | null;
+  /** What the manifest says this plugin installed, when it installed one. */
+  recorded_build?: Record<string, string> | null;
+  /** Which setting reaches FSR 4 with the upscaler that is in the folder. */
+  reaches_fsr4_by?: "int8" | "upgrade" | null;
 }
 
 export interface Fsr4Source {

@@ -290,6 +290,28 @@ export function needsForcedInt8(gpu: GpuInfo | null | undefined): boolean {
 }
 
 /**
+ * Whether the FidelityFX upscaler in the folder is new enough for that override.
+ *
+ * This is not the same question as the GPU's, and it is the one that changes when
+ * somebody swaps in a different build from the FSR 4 panel. OptiScaler's menu
+ * offers its FSR 3.X/4 entry off `Fsr4ForceEnableInt8` only when the local
+ * upscaler is 4.1.1 or newer (menu_common.cpp), so a 4.0.2 build — the one the
+ * OptiScaler Client points RDNA 2 users at — is reached through `Fsr4Update`
+ * instead, and the INT8 preset would do nothing at all with it in place.
+ *
+ * An unreadable version reads as yes: the file in an OptiScaler install is the
+ * released 4.1.1 SDK unless somebody changed it, and the alternative is telling
+ * every user of the bundled build to stop using the route that works for them.
+ */
+export function supportsInt8Override(ffx?: { version?: string | null } | null): boolean {
+  const parts = String(ffx?.version ?? "").split(".");
+  const major = Number.parseInt(parts[0] ?? "", 10);
+  if (!Number.isFinite(major)) return true;
+  const minor = Number.parseInt(parts[1] ?? "0", 10);
+  return major > 4 || (major === 4 && (Number.isFinite(minor) ? minor : 0) >= 1);
+}
+
+/**
  * Pick a FidelityFX upscaler version, and make it reachable.
  *
  * Asking for FSR 4 is not enough on its own. OptiScaler only reaches it when
@@ -299,22 +321,27 @@ export function needsForcedInt8(gpu: GpuInfo | null | undefined): boolean {
  * "(Potential FSR3 fallback)" the overlay prints.
  *
  * `Fsr4Update` is only the right lever where OptiScaler's own GPU checks allow
- * it, which is RDNA 3 and up. On RDNA 2 it is the wrong one: v0.9.4's notes say
- * not to set it on an unsupported GPU because the upgrade path forces FP8 and
- * OptiScaler answers with its internal FSR 3 fallback — the maintainer said the
- * same thing, twice, on the bug tracker, and pointed at the INT8 override as
- * the only option such a device needs. So a device whose FSR 4 runs through
- * INT8 gets the version written and nothing else, and `BasicPanel` says why.
+ * it, which is RDNA 3 and up. Where the INT8 override is what reaches FSR 4, it
+ * is the wrong one: v0.9.4's notes say setting it on an unsupported GPU forces
+ * FP8 and OptiScaler answers with its internal FSR 3 fallback, and the
+ * maintainer said the same thing on the bug tracker, pointing at the override as
+ * the option such a device needs. So `int8Route` — the device and the upscaler
+ * build together, as `BasicPanel` works it out — turns this write off, and the
+ * caller says what to do instead.
+ *
+ * Note that the build is half of that condition: a 4.0.2 upscaler is below the
+ * 4.1.1 the override needs, so on the same device the upgrade path is the one
+ * that works and this write is the right answer again.
  *
  * The reverse is deliberately not done: choosing an older version does not turn
  * it off. `Fsr4Update` is the hook that makes FSR 4 *available*, not a request
  * for it, and switching it off would be undoing a setting nobody asked about.
  */
 export function ffxUpscalerChanges(
-  index: string, version?: string | null, gpu?: GpuInfo | null
+  index: string, version?: string | null, int8Route = false
 ): OptionChange[] {
   const changes = [change(FFX_UPSCALER_SECTION, FFX_UPSCALER_KEY, index)];
-  if (isFsr4Version(version) && !needsForcedInt8(gpu)) {
+  if (isFsr4Version(version) && !int8Route) {
     changes.push(change("FSR", "Fsr4Update", "true"));
   }
   return changes;

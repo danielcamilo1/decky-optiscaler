@@ -5,7 +5,7 @@ import os
 import time
 from pathlib import Path
 
-from . import autoplan, installer, live, monitor, reframework, steam
+from . import autoplan, fsr4build, installer, live, monitor, reframework, steam
 from .constants import (
     DEFAULT_PROXY,
     INI_NAME,
@@ -433,6 +433,11 @@ class OptiScalerService:
         return {"ok": True}
 
     # -- FSR4 support files ----------------------------------------------
+    def fsr4_build_cache(self):
+        """Where downloaded FSR 4 builds live. Shared by every game, so a second
+        game is a copy rather than a second download."""
+        return self.runtime_dir / "fsr4-builds"
+
     async def get_fsr4_info(self, target_dir):
         """FSR4 readiness for one install, plus where the files could come from."""
         def work():
@@ -441,9 +446,44 @@ class OptiScalerService:
                 "status": status,
                 "sources": installer.find_fsr4_sources(self.home),
                 "gpu": gpu_info(),
+                # The builds that can be fetched, with what each costs and which
+                # setting it needs to reach FSR 4 — the panel offers these.
+                "builds": fsr4build.catalog(self.fsr4_build_cache()),
             }
 
         return await self._run(work)
+
+    async def set_fsr4_build(self, target_dir, build_id):
+        """Download a pinned FSR 4 build and put it in the game folder.
+
+        Both hashes are checked on the way — the archive against GitHub's own
+        digest for the asset, and the DLL that comes out of it against this
+        plugin's — so a mirror that has been tampered with, or a download that
+        was cut short, is refused rather than installed.
+        """
+        try:
+            build = fsr4build.find(build_id)
+            if not build:
+                return {"ok": False, "error": f"unknown FSR 4 build: {build_id}"}
+            dll = await self._run(fsr4build.fetch, build, self.fsr4_build_cache(), self.log)
+            result = await self._run(
+                installer.install_fsr4_build, target_dir, dll, build, self.log
+            )
+            return {"ok": True, **result}
+        except Exception as exc:
+            self.log.exception("FSR 4 build install failed for %s", target_dir)
+            return {"ok": False, "error": str(exc)}
+
+    async def restore_fsr4_build(self, target_dir):
+        """Put the build that ships with OptiScaler back."""
+        try:
+            payload_root = await self.ensure_payload()
+            return {"ok": True, **await self._run(
+                installer.restore_fsr4_build, target_dir, payload_root, self.log
+            )}
+        except Exception as exc:
+            self.log.exception("FSR 4 build restore failed for %s", target_dir)
+            return {"ok": False, "error": str(exc)}
 
     async def import_fsr4_files(self, target_dir, source_dir):
         try:

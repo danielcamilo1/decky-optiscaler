@@ -44,6 +44,57 @@ def available_extractor():
     return None
 
 
+def extract_archive(archive, dest, logger=None):
+    """Unpack an archive with whichever archiver the system has.
+
+    The payload is unpacked through this too, because the reason it cannot be
+    unpacked in Python is not specific to it: a 7z that uses the BCJ2 filter is
+    beyond the stdlib and py7zr alike, and the FSR 4 build packages on the mirror
+    are 7z as well. SteamOS has p7zip and bsdtar; a desktop usually has one of
+    the two.
+
+    Unpacking is not the same as trusting: callers here check the bytes that
+    came out against a pinned hash before any of it goes near a game folder.
+    """
+    archive, dest = Path(archive), Path(dest)
+    dest.mkdir(parents=True, exist_ok=True)
+
+    errors = []
+    for command, dest_flag in EXTRACTORS:
+        if not shutil.which(command[0]):
+            continue
+        ok, message = _run(command + [dest_flag.format(dest=str(dest)), str(archive)], logger)
+        if ok:
+            return dest
+        errors.append(f"{command[0]}: {message}")
+
+    if shutil.which(BSDTAR[0]):
+        ok, message = _run(BSDTAR + [str(archive), "-C", str(dest)], logger)
+        if ok:
+            return dest
+        errors.append(f"bsdtar: {message}")
+
+    detail = "; ".join(errors) if errors else (
+        "no supported archiver found (need one of 7z, 7zz, 7za, 7zr or bsdtar)"
+    )
+    raise RuntimeError(f"could not extract {archive.name}: {detail}")
+
+
+def _run(argv, logger=None):
+    """Run one archiver invocation; returns (ok, message)."""
+    if logger:
+        logger.info("extracting with: %s", " ".join(argv))
+    try:
+        result = subprocess.run(
+            argv, capture_output=True, text=True, timeout=600, check=False
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, str(exc)
+    if result.returncode != 0:
+        return False, (result.stderr or result.stdout or "").strip()[:400]
+    return True, ""
+
+
 class Payload:
     """Manages the extracted copy of the OptiScaler release."""
 
@@ -108,14 +159,6 @@ class Payload:
 
     @staticmethod
     def _run(argv, logger=None):
-        if logger:
-            logger.info("extracting payload with: %s", " ".join(argv))
-        try:
-            result = subprocess.run(
-                argv, capture_output=True, text=True, timeout=600, check=False
-            )
-        except (OSError, subprocess.SubprocessError) as exc:
-            return False, str(exc)
-        if result.returncode != 0:
-            return False, (result.stderr or result.stdout or "").strip()[:400]
-        return True, ""
+        # The payload has always unpacked through this name; it is the same call
+        # `extract_archive` above makes.
+        return _run(argv, logger)

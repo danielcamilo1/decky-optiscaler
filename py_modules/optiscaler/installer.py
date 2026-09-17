@@ -12,7 +12,7 @@ import shutil
 import time
 from pathlib import Path
 
-from . import live
+from . import fsr4build, live
 from .constants import (
     OPTIPATCHER_NAME,
     BACKUP_DIR,
@@ -213,7 +213,12 @@ def ffx_upscaler_info(target_dir):
         "present": dll.is_file(),
         "name": FFX_UPSCALER_DLL,
         "version": ".".join(str(n) for n in version) if version else None,
-        # OptiScaler treats an SDK at or above 4.1.1 as providing FSR 4.
+        # The tuple as well, because callers compare it against the floor FSR 4
+        # starts at and against the 4.1.1 the INT8 override needs — and parsing
+        # the string back into numbers in each of them is a chance for them to
+        # disagree.
+        "version_tuple": list(version) if version else None,
+        # OptiScaler treats an SDK at or above 4.0.2 as providing FSR 4.
         "fsr4_capable": bool(version and version[:3] >= FSR4_MIN_SDK_VERSION[:3]),
     }
 
@@ -222,11 +227,25 @@ def fsr4_status(target_dir):
     """Which FSR4 support DLLs are present next to the game executable."""
     target = Path(target_dir)
     present = {name: (target / name).is_file() for name in FSR4_SUPPORT_FILES}
+    manifest = read_manifest(target) or {}
+    ffx = ffx_upscaler_info(target_dir)
     return {
         "files": present,
         "ready": present.get("amdxcffx64.dll", False),
         "required": FSR4_SUPPORT_FILES,
-        "ffx": ffx_upscaler_info(target_dir),
+        "ffx": ffx,
+        # Which upscaler build this actually is. Read out of the bytes rather
+        # than the manifest, so a game that had a build dropped into it by hand
+        # — or by another tool — is reported the same way one installed from
+        # here is, and reported as *unknown* rather than as the released one when
+        # the hash matches nothing (see fsr4build.identify).
+        "build": fsr4build.identify(target / FFX_UPSCALER_DLL),
+        "recorded_build": manifest.get("fsr4_build") or None,
+        # Which setting has to be set for FSR 4 to be reachable with the
+        # upscaler that is in the folder, since that follows the build's version
+        # and not the GPU: 4.0.2 needs the FSR upgrade path, 4.1.1 the INT8
+        # override (menu_common.cpp).
+        "reaches_fsr4_by": fsr4build.reaches_fsr4_by(ffx.get("version_tuple")),
     }
 
 
@@ -278,6 +297,81 @@ def import_fsr4_files(target_dir, source_dir, logger=None):
         (target / MANIFEST_NAME).write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
     return {"path": str(target), "imported": names, "source": str(source)}
+
+
+def install_fsr4_build(target_dir, dll_path, build, logger=None):
+    """Put a downloaded FSR 4 build in place of the one the release ships.
+
+    The file keeps the name the released SDK carries, so this is a replacement
+    rather than an addition, and it is tracked like one: a game file that was
+    there before is stashed, the name goes into the manifest so uninstalling
+    OptiScaler takes it out with everything else, and which build it is is
+    recorded beside it — because the version string cannot say, and a panel that
+    cannot say which build is in place is a panel that cannot tell you why FSR 4
+    is being reached one way rather than the other.
+    """
+    target = Path(target_dir)
+    dll_path = Path(dll_path)
+    if not target.is_dir():
+        raise NotADirectoryError(f"install target does not exist: {target}")
+    if not dll_path.is_file():
+        raise FileNotFoundError(f"no such FSR 4 build file: {dll_path}")
+
+    name = build.get("file") or FFX_UPSCALER_DLL
+    destination = target / name
+    manifest = read_manifest(target) or {}
+    backups = dict(manifest.get("backups") or {})
+    files = list(manifest.get("files") or [])
+
+    if destination.exists() and name not in backups and name not in files:
+        backups[name] = _stash(target, destination, logger)
+    shutil.copy2(dll_path, destination)
+    if name not in files:
+        files.append(name)
+
+    recorded = {
+        "id": build.get("id"),
+        "label": build.get("label"),
+        "file": name,
+        "sha256": fsr4build.digest(destination),
+        "reaches_fsr4_by": build.get("reaches_fsr4_by"),
+    }
+    if manifest:
+        manifest["files"] = files
+        manifest["backups"] = backups
+        manifest["fsr4_build"] = recorded
+        (target / MANIFEST_NAME).write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    if logger:
+        logger.info("installed FSR 4 %s as %s", build.get("id"), name)
+    return {"path": str(target), "file": name, "build": recorded}
+
+
+def restore_fsr4_build(target_dir, payload_root, logger=None):
+    """Put the build inside the release back, over one that was downloaded.
+
+    Copying the release's own file over the top is the whole job: the name is the
+    same one, so nothing else in the folder has to change, and the version of the
+    build that is now there is the one the manifest was pinned against.
+    """
+    target = Path(target_dir)
+    source = Path(payload_root) / FFX_UPSCALER_DLL
+    if not target.is_dir():
+        raise NotADirectoryError(f"install target does not exist: {target}")
+    if not source.is_file():
+        raise FileNotFoundError(f"the release does not carry {FFX_UPSCALER_DLL}")
+
+    shutil.copy2(source, target / FFX_UPSCALER_DLL)
+    manifest = read_manifest(target) or {}
+    if manifest:
+        manifest["fsr4_build"] = {}
+        (target / MANIFEST_NAME).write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    if logger:
+        logger.info("restored the released %s", FFX_UPSCALER_DLL)
+    return {
+        "path": str(target),
+        "restored": FFX_UPSCALER_DLL,
+        "build": fsr4build.identify(target / FFX_UPSCALER_DLL),
+    }
 
 
 def add_files(target_dir, sources, logger=None, reframework_revision=None):

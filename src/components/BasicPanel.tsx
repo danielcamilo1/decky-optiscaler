@@ -19,6 +19,7 @@ import {
   isFfxBackend,
   needsForcedInt8,
   runningBackend,
+  supportsInt8Override,
   supportsMultiplier,
   usesFfxFrameGen,
   usesFfxUpscaler,
@@ -250,27 +251,38 @@ export function BasicPanel({
   // turning it on would only produce FG that never engages.
   const fgUnavailable = automatic && plannedFg?.input === "nofg";
 
+  // On a device without native FSR 4 the plain FSR 4 preset is the wrong choice
+  // rather than an impossible one — but only while the upscaler in the folder is
+  // new enough for the INT8 override to be the route. With a 4.0.2 build swapped
+  // in it is the other way round: the upgrade path is what reaches FSR 4, and
+  // the INT8 preset is the one that does nothing.
+  const fsr4Selected = upscalerPreset?.id === "fsr4";
+  const int8Selected = upscalerPreset?.id === "fsr4-int8";
+  const int8Route = needsForcedInt8(gpu) && supportsInt8Override(ffx);
+
   // DLSS needs a real Nvidia GPU; offering it on a Deck is offering a setting
   // that can only fail. Kept visible when the ini already selects it, so the
   // dropdown can still show what is configured, and when the GPU is unknown.
+  //
+  // The INT8 preset gets the same treatment for the same reason: with an
+  // upscaler that is below the 4.1.1 its override needs, picking it writes a
+  // setting OptiScaler then ignores, and the FSR 3.X/4 preset beside it is the
+  // one that works. Visible while it is what the ini holds, so the selection can
+  // still be read.
   const upscalerChoices = UPSCALER_PRESETS.filter(
     (preset) =>
-      preset.id !== "dlss" ||
-      upscalerPreset?.id === "dlss" ||
-      !gpu?.vendor ||
-      gpu.vendor === "nvidia"
+      (preset.id !== "dlss" ||
+        upscalerPreset?.id === "dlss" ||
+        !gpu?.vendor ||
+        gpu.vendor === "nvidia") &&
+      (preset.id !== "fsr4-int8" || int8Route || int8Selected)
   );
 
-  const fsr4Selected = upscalerPreset?.id === "fsr4";
-  const int8Selected = upscalerPreset?.id === "fsr4-int8";
-  // On a device without native FSR 4 the plain FSR 4 preset is the wrong choice
-  // rather than an impossible one: the INT8 override is what makes it reachable.
-  const int8Only = needsForcedInt8(gpu);
-  const needsInt8 = fsr4Selected && int8Only;
+  const needsInt8 = fsr4Selected && int8Route;
   // An FSR 4 version picked while the FidelityFX backend is on something else.
   // The version is recorded, but nothing here makes it reachable, and the one
   // setting that would is the setting this device must not have written.
-  const ffxUpsNeedsInt8 = ffxUpscalerChanged && int8Only && !int8Selected;
+  const ffxUpsNeedsInt8 = ffxUpscalerChanged && int8Route && !int8Selected;
 
   // The FFX frame generator, which only the FSR FG output runs. When the game
   // is attached its own reported list wins; otherwise the shipped INI's.
@@ -661,7 +673,7 @@ export function BasicPanel({
                   ffxUpscalerChanges(
                     index,
                     ffxUpsChoices.options.find((choice) => choice.data === index)?.version,
-                    gpu
+                    int8Route
                   )
                 );
               }}

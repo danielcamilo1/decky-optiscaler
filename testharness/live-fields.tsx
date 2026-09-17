@@ -345,6 +345,41 @@ const tile = (host: Element, label: string) => {
   setIni({ FSR: { Fsr4ForceEnableInt8: "false", Fsr4Update: "false" } });
   await settle(200);
 
+  console.log("=== a 4.0.2 upscaler in the folder ===");
+  // The other half of the version question, and the reason the INT8 preset is
+  // not offered blindly. A 4.0.2 build is below the 4.1.1 OptiScaler asks for
+  // before it will offer FSR 4 off the override, so on the same Deck the upgrade
+  // path is what reaches it — the opposite of what the same click does with the
+  // released 4.1.1 SDK in the folder.
+  detail.install.fsr4.ffx.version = "4.0.2.0";
+  setIni({
+    Upscalers: { Dx12Upscaler: "fsr31" },
+    FSR: { Fsr4ForceEnableInt8: "false", Fsr4Update: "false", UpscalerIndex: "1" },
+  });
+  const host6 = document.createElement("div");
+  document.body.appendChild(host6);
+  const root6 = createRoot(host6);
+  await act(async () => {
+    root6.render(
+      <QuickPanel
+        runningGame={{ appid: 1091500, name: "Cyberpunk 2077", gameid: "1091500" }}
+        onOpenManager={() => {}}
+      />
+    );
+  });
+  await settle();
+  check("the INT8 preset is not offered with a build that cannot use it",
+    all(control(host6, "Override upscaler with"), '[data-opt-value="fsr4-int8"]').length, 0);
+  await act(async () => {
+    (all(control(host6, "FSR version"), '[data-opt-value="0"]')[0] as HTMLElement).click();
+  });
+  await settle(200);
+  check("and asking for FSR 4 writes the upgrade path instead",
+    ini.FSR.Fsr4Update, "true");
+  await act(async () => root6.unmount());
+  detail.install.fsr4.ffx.version = "4.1.1.2740";
+  setIni({ FSR: { Fsr4Update: "false", UpscalerIndex: "0" } });
+
   console.log("=== the live tiles ===");
   // The backend id cannot say which FSR is running and OptiScaler's own name
   // for it — "FSR 3.X/4" — says so out loud. The version list can, and the game

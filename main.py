@@ -78,6 +78,12 @@ class Plugin:
     async def import_fsr4_files(self, target_dir: str, source_dir: str) -> dict:
         return await self.service.import_fsr4_files(target_dir, source_dir)
 
+    async def set_fsr4_build(self, target_dir: str, build_id: str) -> dict:
+        return await self.service.set_fsr4_build(target_dir, build_id)
+
+    async def restore_fsr4_build(self, target_dir: str) -> dict:
+        return await self.service.restore_fsr4_build(target_dir)
+
     async def get_launch_options(self, appid: str) -> dict:
         return await self.service.get_launch_options(appid)
 
