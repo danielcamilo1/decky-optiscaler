@@ -39,6 +39,11 @@ OptiScaler v0.9.4 is bundled, so installing works offline and every game gets th
   you all 288 settings across 34 sections, generated from the comments in `OptiScaler.ini` so
   they match the shipped build. Edits keep every comment in the file, and names are the
   overlay's own.
+- **FSR 4 on an RDNA 2 Deck.** OptiScaler reaches FSR 4 on RDNA 2 through its forced INT8
+  model rather than through its own GPU checks, so Basic mode offers that as a preset instead
+  of saying FSR 4 is impossible here. It takes effect on the next launch, and the overlay's
+  FSR watermark — `FSR4-I8` rather than a plain `FSR3` — is what says which model ran. It is
+  experimental: how well it holds up varies by game.
 - **Changes settings while you play.** A bundled ASI plugin applies frame generation, the
   FidelityFX FG version, the upscaler and the FSR version immediately from the Quick Access
   panel — next to what the game actually ended up running and, with frame generation on, both

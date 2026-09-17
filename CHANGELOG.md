@@ -3,6 +3,40 @@
 Newest first. Each release ships `Decky OptiScaler.zip` for Decky Loader's
 *Install from URL* (Developer mode), and bundles **OptiScaler 0.9.4**.
 
+## [Unreleased]
+
+### Added
+
+- FSR 4 on RDNA 2 (Steam Deck / Van Gogh). OptiScaler 0.9.4 reaches it through
+  `Fsr4ForceEnableInt8`, the override its release notes describe as being for
+  "FSR4 incompatible GPUs", so Basic mode offers an **FSR 4 INT8 (experimental)**
+  preset instead of refusing the upscaler on that hardware. It writes the
+  override and the FSR 4 version, and deliberately leaves `Fsr4Update` alone:
+  those same notes say setting it on an unsupported GPU forces FP8 and
+  OptiScaler answers with its internal FSR 3 fallback. The override is read
+  while the upscaler is created, so the panel says it takes effect on the next
+  launch rather than offering the live switch it cannot honour, and the Setup
+  tab says to confirm it with the overlay's FSR watermark (FSR4-I8, not FSR3).
+
+### Fixed
+
+- The FSR4 preset only offered 0 and 2. The reference ini writes those six
+  entries as a single comma-separated list, which the schema generator read as
+  two entries with the rest buried inside their labels, so "1", "3", "4" and
+  "5" — the Quality and Performance models among them — were refused by the
+  config writer and never reached the file.
+- Asking for an FSR 4 version from the FSR 3.X backend wrote `Fsr4Update=true`
+  even on a device whose FSR 4 runs through the INT8 override. The version is
+  recorded, the upgrade path is left where it was, and the panel points at the
+  preset that actually makes FSR 4 reachable.
+- Choosing XeSS, DLSS or FSR 2.2.1 no longer clears the INT8 override on the way
+  past. Only the presets that make a claim about FSR 4 touch it.
+
+### Changed
+
+- RDNA 2 reads as `experimental` rather than `unsupported` in the GPU verdict,
+  and the notice that called FSR 4 impossible there is gone.
+
 ## [0.0.6] - 2026-08-28
 
 Everything from the `0.0.5.x-testing` prereleases, as one release.
