@@ -54,6 +54,9 @@ jobs:
       - name: Build frontend
         run: pnpm build
 
+      - name: Steam Deck FSR4 lifecycle
+        run: python3 scripts/test_fsr4.py
+
       # Includes check_version_pin(), which holds asi/optiscaler_ref/ to the
       # exact OptiScaler tag whose release sits in bin/.
       - name: Backend selftest

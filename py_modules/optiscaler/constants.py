@@ -189,10 +189,14 @@ EXE_NAME_BLACKLIST = {
 # the SDK does not supply the effect. It is optional, not required.
 FSR4_SUPPORT_FILES = ["amdxcffx64.dll", "amdxc64.dll"]
 
-# The FidelityFX SDK dll that actually carries FSR4, and the minimum version
-# that reports INT8 model support (see FSR4Upgrade.cpp).
+# The FidelityFX SDK dll that actually carries FSR4. FSR 4 arrived with the
+# 4.0.2 build (FFX SDK 2.0), so that is the floor for "this file is a FSR 4
+# library at all"; the INT8 model specifically needs 4.1.1, which is what
+# OptiScaler's own menu asks for before it will offer the FSR 3.X/4 entry off
+# the back of Fsr4ForceEnableInt8 (menu_common.cpp).
 FFX_UPSCALER_DLL = "amd_fidelityfx_upscaler_dx12.dll"
-FSR4_MIN_SDK_VERSION = (4, 1, 1, 0)
+FSR4_MIN_SDK_VERSION = (4, 0, 2, 0)
+FSR4_INT8_MIN_SDK_VERSION = (4, 1, 1, 0)
 
 # Places a user is likely to already have those DLLs.
 FSR4_SOURCE_HINTS = [
@@ -204,6 +208,45 @@ FSR4_SOURCE_HINTS = [
     "Downloads",
     "decky-optiscaler",
 ]
+
+# Community RDNA2 upscaler, pinned independently of the bundled runtime.
+# Version resources are identical to stock 4.1.1; identify by SHA-256.
+FSR4_BUILD_PRIMARY = "the3rdparty1917/fsr4xyz"
+FSR4_BUILD_MIRROR = "Optiscaler-Client/OptiScaler-Extras"
+FSR4_BUNDLED_BUILD_ID = "bundled"
+#: The released SDK build, identified by hash like any other. Not downloadable:
+#: it is already in bin/ and is what "reinstall" and "restore" put back.
+FSR4_BUNDLED_FILE_SHA256 = (
+    "d0dcccc74a43c44ba435b7a369b456e0970d8a4464e4bd683119b374f2c9fb46"
+)
+FSR4_BUNDLED_FILE_BYTES = 28761864
+FSR4_BUILDS = [
+    {
+        "id": "4.1.1b",
+        "label": "4.1.1b (INT8, RDNA 2 ghosting fix)",
+        "note": "Community INT8 build with the RDNA2 ghosting fix.",
+        "sources": [
+            {
+                "repo": FSR4_BUILD_PRIMARY,
+                "tag": "4.1.1b",
+                "asset": "FSR_4.1.1b_INT8_with_RDNA2_fix.7z",
+                "archive_sha256": "66e9a818e0c914def7712c8dac06b08e64a64dbcfe77f3162d43ea6de93869ff",
+            },
+            {
+                "repo": FSR4_BUILD_MIRROR,
+                "tag": "FSR_4.1.1b",
+                "asset": "FSR4_INT8_4.1.1b.7z",
+                "archive_sha256": "ddedf6fd452904c4598719feac33f098644de7e1f0ed53c54274aedb0a586be1",
+            },
+        ],
+        "file": "amd_fidelityfx_upscaler_dx12.dll",
+        "file_sha256": "0dd77d9c78d1ef9bc330cf4697ab3ffe24bc1aa7850e4130263dc922107fbd75",
+        "file_bytes": 34013696,
+        "reaches_fsr4_by": "int8",
+    },
+
+]
+
 
 WIKI_RAW_BASE = "https://raw.githubusercontent.com/wiki/optiscaler/OptiScaler"
 WIKI_HTML_BASE = "https://github.com/optiscaler/OptiScaler/wiki"

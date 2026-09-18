@@ -220,6 +220,8 @@ function NowPlayingTab({
               auto={auto}
               compact
               onLiveChanged={() => void refreshLive()}
+              fsr4Build={config.fsr4Build}
+              onEnableFsr4={config.enableFsr4}
               onApply={config.setOptions}
             />
           )}

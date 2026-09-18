@@ -1,8 +1,8 @@
 import { ButtonItem, PanelSection, PanelSectionRow } from "@decky/ui";
 import { toaster } from "@decky/api";
 import { useCallback, useEffect, useState } from "react";
-import { importFsr4Files, verifyInstall } from "../api";
-import type { Fsr4Source, GpuInfo, VerifyResult } from "../types";
+import { getFsr4Info, restoreFsr4Build, importFsr4Files, verifyInstall } from "../api";
+import type { Fsr4Build, Fsr4Source, GpuInfo, VerifyResult } from "../types";
 import { KeyValue, Mono, Notice, Pill } from "./Common";
 
 interface Props {
@@ -15,6 +15,7 @@ interface Props {
 const GPU_NOTE: Record<string, string> = {
   native: "This GPU runs FSR 4 natively.",
   int8: "This GPU can run FSR 4 through the INT8 model.",
+  experimental: "Select FSR 4.1.1b — Steam Deck in Basic settings for experimental RDNA2 upscaling.",
   unsupported:
     "AMD supports FSR 4 on RDNA 3 and RDNA 4 only. RDNA 2 — which includes the Steam Deck — is not supported yet.",
   unknown: "Could not identify this GPU from sysfs.",
@@ -29,11 +30,13 @@ const GPU_NOTE: Record<string, string> = {
  */
 export function Fsr4Panel({ targetDir, sources, gpu, onChanged }: Props) {
   const [report, setReport] = useState<VerifyResult | null>(null);
+  const [build, setBuild] = useState<Fsr4Build | null>(null);
   const [busy, setBusy] = useState(false);
 
   const verify = useCallback(async () => {
     try {
       setReport(await verifyInstall(targetDir));
+      setBuild((await getFsr4Info(targetDir)).status.build ?? null);
     } catch (exc) {
       toaster.toast({ title: "Verification failed", body: String(exc) });
     }
@@ -60,6 +63,7 @@ export function Fsr4Panel({ targetDir, sources, gpu, onChanged }: Props) {
             )}
             {gpu?.generation ? <Pill>{gpu.generation}</Pill> : null}
           </div>
+          <KeyValue label="Upscaler build" value={build?.label ?? "Unknown"} />
           <KeyValue
             label={<Mono>amd_fidelityfx_upscaler_dx12.dll</Mono>}
             value={
@@ -76,9 +80,8 @@ export function Fsr4Panel({ targetDir, sources, gpu, onChanged }: Props) {
       {ffx?.fsr4_capable ? (
         <PanelSectionRow>
           <Notice tone="success" title="FSR 4 is present">
-            The FidelityFX SDK bundled with OptiScaler is v{ffx.version}, which provides
-            FSR 4. If it is not offered in the overlay, set the upscaler to <b>FSR 4</b> in
-            Settings — OptiScaler's own default only selects FSR 4 automatically on RDNA 4.
+            On Steam Deck, select <b>FSR 4.1.1b — Steam Deck</b> in Basic settings.
+            This installs the community RDNA2 fix and enables INT8 upscaling.
           </Notice>
         </PanelSectionRow>
       ) : null}
@@ -86,7 +89,7 @@ export function Fsr4Panel({ targetDir, sources, gpu, onChanged }: Props) {
       {problems.length > 0 ? (
         <PanelSectionRow>
           <Notice tone="warn" title="Some files did not install cleanly">
-            {problems.join(", ")}. Reinstall from the button above to replace them.
+            {problems.join(", ")}. For a changed FSR 4 build, enable it again in Basic settings or restore the bundled upscaler. Reinstall to repair other files.
           </Notice>
         </PanelSectionRow>
       ) : null}
@@ -100,6 +103,25 @@ export function Fsr4Panel({ targetDir, sources, gpu, onChanged }: Props) {
         </PanelSectionRow>
       ) : null}
 
+      {build?.known && build.id !== "bundled" ? (
+        <PanelSectionRow>
+          <ButtonItem layout="below" disabled={Boolean(busy)}
+            description="Close the game first. Keeps your upscaler and frame generation settings."
+            onClick={async () => {
+              setBusy(true);
+              try {
+                const result = await restoreFsr4Build(targetDir);
+                if (!result.ok) throw new Error(result.error);
+                await onChanged();
+                await verify();
+              } catch (error) {
+                toaster.toast({ title: "Could not restore bundled upscaler", body: String(error) });
+              } finally { setBusy(false); }
+            }}>
+            Restore bundled upscaler
+          </ButtonItem>
+        </PanelSectionRow>
+      ) : null}
       <PanelSectionRow>
         <ButtonItem layout="below" disabled={busy} onClick={() => void verify()}>
           Re-check installed files

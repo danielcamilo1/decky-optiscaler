@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { readConfig, writeConfig } from "../api";
+import { readConfig, setFsr4Build, writeConfig } from "../api";
 import { AUTO } from "../config/values";
 import { optionsInSection } from "../config/tabs";
 import { forgetWrites, overlayWrites, rememberWrites } from "../config/writeRecord";
@@ -33,6 +33,7 @@ const changeId = (change: OptionChange) => `${change.section}.${change.key}`;
  */
 export function useConfig(targetDir: string | null, enabled: boolean, reloadKey?: unknown) {
   const [values, setValues] = useState<ConfigValues>({});
+  const [fsr4Build, setFsr4BuildId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
@@ -76,6 +77,7 @@ export function useConfig(targetDir: string | null, enabled: boolean, reloadKey?
     try {
       const result = await readConfig(targetDir);
       if (result.ok) {
+        setFsr4BuildId(result.fsr4_build ?? null);
         seen.current = targetDir;
         setValues(overlay(result.values));
       } else {
@@ -190,6 +192,24 @@ export function useConfig(targetDir: string | null, enabled: boolean, reloadKey?
     [queue]
   );
 
+  const enableFsr4 = useCallback(async () => {
+    if (!targetDir) throw new Error("Install OptiScaler first.");
+    setSaving(true);
+    try {
+      // Finish queued edits before the backend changes the preset as one operation.
+      if (timer.current !== null) window.clearTimeout(timer.current);
+      await flush();
+      setSaving(true);
+      const result = await setFsr4Build(targetDir, "4.1.1b");
+      if (!result.ok) throw new Error(result.error ?? "Could not enable FSR 4.1.1b");
+      forgetWrites(targetDir);
+      await load();
+      setDirty(true);
+    } finally {
+      setSaving(false);
+    }
+  }, [targetDir, flush, load]);
+
   const resetSection = useCallback(
     (section: string) => {
       const options = optionsInSection(section);
@@ -213,6 +233,8 @@ export function useConfig(targetDir: string | null, enabled: boolean, reloadKey?
 
   return {
     values,
+    fsr4Build,
+    enableFsr4,
     loading,
     error,
     dirty,

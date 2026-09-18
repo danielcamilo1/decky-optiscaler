@@ -52,7 +52,7 @@ const detail = {
   ini_info: { present: true, legacy: true, keys: 288 },
   wiki_entry: null,
   gpu: { names: ["Van Gogh (Steam Deck)"], name: "Van Gogh (Steam Deck)", gfx: "gfx1033",
-         vendor: "amd", generation: "RDNA2", fsr4: "unsupported" },
+         vendor: "amd", generation: "RDNA2", fsr4: "experimental" },
   launch_option: 'WINEDLLOVERRIDES="dxgi=n,b" %command%',
   writable: true,
 };
@@ -179,7 +179,20 @@ Object.assign(fixtures, {
   record_launch_options: { ok: true, recorded: true, value: "gamemoderun %command%" },
   get_live_log: { lines: ["decky_optiscaler_live loaded", "config at 0x1234"] },
   install_live: { ok: true },
-  get_fsr4_info: { status: { files: {}, ready: false, required: [] }, sources: [], gpu: {} },
+  get_fsr4_info: {
+    status: {
+      files: {}, ready: false, required: [],
+      // The released SDK build, identified by hash: the version alone could not
+      // say, since the modelled 4.1.1b reports exactly this one.
+      build: {
+        known: true, id: "bundled", label: "Bundled (FidelityFX SDK 4.1.1)",
+        note: "The build the OptiScaler release ships.",
+        reaches_fsr4_by: "int8", sha256: "d0dcccc74a43c44b" + "0".repeat(48),
+        bytes: 28761864,
+      },
+    },
+    sources: [], gpu: {},
+  },
   verify_install: {
     ok: true, path: "/x", complete: true, problems: [],
     files: [{ name: "dxgi.dll", present: true, matches_payload: true, size: 1, expected_size: 1 }],
@@ -495,6 +508,10 @@ async function render(name: string, element: React.ReactElement) {
   console.log(`  tabs (basic mode): ${tabs.join(", ")}`);
   console.log(`  basic FG controls present: ${gd.host.textContent!.includes("Frame multiplier")}`);
   console.log(`  basic upscaler presets named as OptiScaler names them: ${["FSR 3.X/4", "FSR 2.2.1", "XeSS"].every((n) => gd.host.textContent!.includes(n))}`);
+  // The Deck's own row: FSR 4 here is the INT8 override, so the panel has to
+  // offer it rather than hide the upscaler entirely. What choosing it does is
+  // asserted in live-fields.tsx, which can drive the control.
+  console.log(`  RDNA 2 is offered the INT8 preset: ${gd.host.textContent!.includes("FSR 4.1.1b — Steam Deck")}`);
   // Driving the running game is the Quick Access panel's job; this page is for
   // setting a game up, so it must not offer the live switch at all.
   console.log(`  settings tab has no live upscaler switch: ${!gd.host.textContent!.includes("Switch now")}`);
@@ -571,6 +588,13 @@ async function render(name: string, element: React.ReactElement) {
   const manualText = gd.host.textContent!;
   console.log(`  and the live-control panel with them: ${
     manualText.includes("Live in-game control")}`);
+  // The FSR 4 panel is here, and the build it reports comes from the bytes in
+  // the game folder rather than from a version: the modelled builds report the
+  // version the released SDK reports.
+  console.log(`  the FSR 4 build in the folder is named: ${
+    manualText.includes("Bundled (FidelityFX SDK 4.1.1)")}`);
+  console.log(`  Setup directs users to the combined Deck preset: ${manualText.includes("FSR 4.1.1b — Steam Deck")}`);
+  console.log(`  older community builds are not offered: ${!manualText.includes("Use 4.0.2")}`);
   console.log(`  the launch options are spelled out there: ${
     manualText.includes("WINEDLLOVERRIDES")}`);
   // "The plugin cannot read them" and "they are empty" look identical from the
@@ -583,7 +607,7 @@ async function render(name: string, element: React.ReactElement) {
   console.log(`  legacy ini warning shown: ${manualText.includes("FGType")}`);
   console.log(`  backup folder mentioned: ${
     manualText.includes("decky_optiscaler_backup_files")}`);
-  console.log(`  RDNA2 warning present: ${manualText.includes("RDNA 2")}`);
+  console.log(`  Deck setup guidance present: ${manualText.includes("Steam Deck")}`);
   // The manual panel is several screens long, so the way out is at both ends.
   console.log(`  the way back is at both ends of it: ${
     findAll(gd.host, '[data-back="setup"]').length === 2}`);

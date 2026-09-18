@@ -285,6 +285,58 @@ async def run():
         check("driver FSR4 dlls detected after import",
               installer.fsr4_status(str(target))["ready"])
 
+        # The FSR 4 builds the panel offers, without the network: they are pinned
+        # by hash, so the table can be checked and a local file identified
+        # without a download, and installing one is a copy either way.
+        print("\nFSR 4 upscaler builds")
+        from optiscaler import fsr4build  # noqa: E402
+
+        check("every build pins a 64-character hash for the file it installs",
+              all(len(b["file_sha256"]) == 64 for b in fsr4build.builds()))
+        check("and one for the archive it arrives in",
+              all(len(source["archive_sha256"]) == 64
+                  for b in fsr4build.FSR4_BUILDS for source in b["sources"]))
+        check("every build names the one file these packages hold",
+              all(b["file"] == installer.FFX_UPSCALER_DLL for b in fsr4build.builds()))
+        check("every build names the release to fetch it from",
+              all(source.get("repo") and source.get("tag") and source.get("asset")
+                  for b in fsr4build.FSR4_BUILDS for source in b["sources"]))
+        check("and no two builds install the same file",
+              len({b["file_sha256"] for b in fsr4build.FSR4_BUILDS})
+              == len(fsr4build.FSR4_BUILDS))
+        check("which setting reaches FSR 4 follows the version, not the GPU",
+              fsr4build.reaches_fsr4_by([4, 1, 1, 2740]) == "int8"
+              and fsr4build.reaches_fsr4_by([4, 0, 2, 0]) == "upgrade")
+        check("the released upscaler is identified by its bytes",
+              (fsr4build.identify(target / installer.FFX_UPSCALER_DLL) or {}).get("id")
+              == "bundled")
+        check("a build that is not one of ours says so",
+              (fsr4build.identify(source / "amdxc64.dll") or {}).get("known") is False)
+
+        # Install one from a hand-made "download": the same call the service
+        # makes once `fetch` has verified a real one.
+        fake_build = dict(fsr4build.FSR4_BUILDS[0], file_sha256="0" * 64)
+        fake = root / "fake-4.1.1b.dll"
+        fake.write_bytes(b"NOT A REAL FSR4 DLL" * 1024)
+        fake_build["file_sha256"] = hashlib.sha256(fake.read_bytes()).hexdigest()
+        installed = installer.install_fsr4_build(str(target), fake, fake_build, None)
+        check("a build installs over the released one",
+              installed["build"]["id"] == fake_build["id"], installed)
+        check("and the folder now reports an unrecognised build rather than the released one",
+              (installer.fsr4_status(str(target))["build"] or {}).get("known") is False)
+        check("the manifest records which build is in place",
+              (installer.read_manifest(target) or {}).get("fsr4_build", {}).get("id")
+              == fake_build["id"])
+
+        restored = installer.restore_fsr4_build(
+            str(target), str(await service.ensure_payload()), None
+        )
+        check("restoring puts the released build back",
+              restored["restored"] == installer.FFX_UPSCALER_DLL
+              and (restored["build"] or {}).get("id") == "bundled", restored)
+        check("and clears the record of the imported one",
+              not (installer.read_manifest(target) or {}).get("fsr4_build"))
+
         print("\nConfiguration")
         config = await service.read_config(str(target))
         check("ini parsed", config["ok"] and len(config["values"]) == 34, len(config["values"]))
@@ -2499,6 +2551,20 @@ def check_option_validation():
     check("an index that is not one is still refused",
           not valid(ups_index, "-1") and not valid(ups_index, "fsr4"))
 
+    # FSR4Preset is a closed set of six, and the reference ini writes it as one
+    # comma-separated list rather than the "0 = A / 1 = B" form the generator was
+    # built around. It read that as two entries with the other four buried in the
+    # labels, which made "1", "3", "4" and "5" unwritable — the Quality and
+    # Performance models among them. OptiScaler clamps the same range, so six is
+    # the truth rather than one build's snapshot.
+    fsr4_preset = SCHEMA[("FSR", "Fsr4Preset")]
+    check("the FSR4 preset names all six presets",
+          fsr4_preset["options"] == ["0", "1", "2", "3", "4", "5"],
+          fsr4_preset["options"])
+    check("so Quality and Performance can be picked",
+          valid(fsr4_preset, "1") and valid(fsr4_preset, "3"))
+    check("and one OptiScaler does not have is refused", not valid(fsr4_preset, "6"))
+
     # Everything else keeps the closed-set treatment: these lists are the
     # backends OptiScaler has, not a snapshot of one runtime's answer.
     dx12 = SCHEMA[("Upscalers", "Dx12Upscaler")]
@@ -2511,10 +2577,15 @@ def check_option_validation():
     presets = {
         "fsr4": [("Upscalers", "Dx12Upscaler", "fsr31"), ("Upscalers", "Dx11Upscaler", "fsr31_12"),
                  ("Upscalers", "VulkanUpscaler", "fsr31_12"), ("FSR", "Fsr4Update", "true"),
-                 ("FSR", "UpscalerIndex", "0")],
+                 ("FSR", "UpscalerIndex", "0"), ("FSR", "Fsr4ForceEnableInt8", "false")],
+        "fsr4-int8": [("Upscalers", "Dx12Upscaler", "fsr31"),
+                      ("Upscalers", "Dx11Upscaler", "fsr31_12"),
+                      ("Upscalers", "VulkanUpscaler", "fsr31_12"),
+                      ("FSR", "Fsr4Update", "auto"), ("FSR", "Fsr4ForceEnableInt8", "true"),
+                      ("FSR", "UpscalerIndex", "0")],
         "fsr31": [("Upscalers", "Dx12Upscaler", "fsr31"), ("Upscalers", "Dx11Upscaler", "fsr31"),
                   ("Upscalers", "VulkanUpscaler", "fsr31"), ("FSR", "Fsr4Update", "false"),
-                  ("FSR", "UpscalerIndex", "1")],
+                  ("FSR", "UpscalerIndex", "1"), ("FSR", "Fsr4ForceEnableInt8", "false")],
         "xess": [("Upscalers", "Dx12Upscaler", "xess"), ("Upscalers", "Dx11Upscaler", "xess_12"),
                  ("Upscalers", "VulkanUpscaler", "xess")],
     }

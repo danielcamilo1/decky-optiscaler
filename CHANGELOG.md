@@ -3,6 +3,23 @@
 Newest first. Each release ships `Decky OptiScaler.zip` for Decky Loader's
 *Install from URL* (Developer mode), and bundles **OptiScaler 0.9.4**.
 
+## [Unreleased]
+
+### Added
+
+- **FSR 4.1.1b — Steam Deck** in the Basic upscaler dropdown. Downloads the pinned
+  community RDNA2 upscaler and applies INT8 settings together while the game is
+  stopped. Frame generation is unchanged. Setup identifies the installed build
+  and offers restoration of the bundled SDK.
+
+### Fixed
+
+- Verification recognizes the selected community DLL by hash; reinstall preserves it.
+- DLL replacements use atomic file replacement with rollback on errors and reject
+  unmanaged installs or games detected running.
+- The schema offers all six FSR4 quality presets from the reference INI.
+- Selecting an FSR version on RDNA2 no longer forces the incompatible upgrade path.
+
 ## [0.0.6] - 2026-08-28
 
 Everything from the `0.0.5.x-testing` prereleases, as one release.

@@ -61,6 +61,14 @@ export const importFsr4Files = callable<
   [targetDir: string, sourceDir: string],
   ActionResult
 >("import_fsr4_files");
+/** Download a pinned FSR 4 upscaler build and put it in the game folder. */
+export const setFsr4Build = callable<[targetDir: string, buildId: string], ActionResult>(
+  "set_fsr4_build"
+);
+/** Put the build that ships inside the OptiScaler release back. */
+export const restoreFsr4Build = callable<[targetDir: string], ActionResult>(
+  "restore_fsr4_build"
+);
 export const setGameTarget = callable<[gamePath: string, targetDir: string], ActionResult>(
   "set_game_target"
 );

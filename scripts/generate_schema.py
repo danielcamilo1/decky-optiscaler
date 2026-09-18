@@ -32,6 +32,14 @@ BETWEEN_RE = re.compile(
 )
 # "0 = Trace / 1 = Debug"  or  "0 = FSR 4.0.2 | 1 = FSR 3.1.5"
 NUM_CHOICE_RE = re.compile(r"(-?\d+)\s*=\s*([^/|]+?)(?=\s*(?:[/|]|$))")
+# ...and "0 = A, 1 = B, 2 = C", which puts no "/" or "|" between its entries at
+# all. FSR.Fsr4Preset is written that way, and the pattern above stops after the
+# first entry and swallows the other five into its label — a closed set of two
+# values, "1", "3", "4" and "5" rejected by schema.valid(), and the Advanced
+# dropdown offering a preset that breaks FSR 4 on a game that is upscaling.
+# Turning the comma into the separator the pattern already knows keeps one code
+# path for both forms and leaves every other line byte-identical.
+COMMA_ENTRY_RE = re.compile(r",\s*(?=-?\d+\s*=)")
 ENUM_TOKEN_RE = re.compile(r"^[A-Za-z0-9_.]+$")
 
 
@@ -118,7 +126,7 @@ def find_numeric_choices(comments):
     for line in comments:
         if "=" not in line:
             continue
-        pairs = NUM_CHOICE_RE.findall(line)
+        pairs = NUM_CHOICE_RE.findall(COMMA_ENTRY_RE.sub(" |", line))
         if len(pairs) >= 2:
             opts = [p[0] for p in pairs]
             labels = {p[0]: p[1].strip().rstrip(".,") for p in pairs}

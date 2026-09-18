@@ -60,7 +60,7 @@ export interface GpuInfo {
   gfx: string | null;
   vendor: string | null;
   generation: string | null;
-  fsr4: "native" | "int8" | "unsupported" | "unknown";
+  fsr4: "native" | "int8" | "experimental" | "unsupported" | "unknown";
 }
 
 export interface FfxUpscalerInfo {
@@ -71,11 +71,29 @@ export interface FfxUpscalerInfo {
   fsr4_capable: boolean;
 }
 
+/** Which FSR 4 upscaler build is in the game folder.
+ *
+ * `known` is false for a file that hashes to nothing this plugin pins: it is
+ * still reported — with its hash — rather than being passed off as the one the
+ * release carries. Which build it is cannot be read from a version number,
+ * because the modelled 4.1.1b reports exactly what the released SDK reports. */
+export interface Fsr4Build {
+  known: boolean;
+  id: string | null;
+  label: string;
+  note: string;
+  /** "int8" (the override) or "upgrade" (the FSR 3 → FSR 4 path). */
+  reaches_fsr4_by: string | null;
+  sha256: string | null;
+  bytes: number;
+}
+
 export interface Fsr4Status {
   files: Record<string, boolean>;
   ready: boolean;
   required: string[];
   ffx?: FfxUpscalerInfo;
+  build?: Fsr4Build | null;
 }
 
 export interface Fsr4Source {
@@ -336,6 +354,7 @@ export interface AutoPlanResult {
 export type ConfigValues = Record<string, Record<string, string>>;
 
 export interface ConfigResult {
+  fsr4_build?: string | null;
   ok: boolean;
   error?: string;
   path?: string;

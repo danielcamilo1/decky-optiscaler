@@ -10,9 +10,11 @@ import json
 import os
 import shutil
 import time
+import tempfile
 from pathlib import Path
 
-from . import live
+from . import fsr4build, live, schema
+from .inifile import IniFile
 from .constants import (
     OPTIPATCHER_NAME,
     BACKUP_DIR,
@@ -213,7 +215,12 @@ def ffx_upscaler_info(target_dir):
         "present": dll.is_file(),
         "name": FFX_UPSCALER_DLL,
         "version": ".".join(str(n) for n in version) if version else None,
-        # OptiScaler treats an SDK at or above 4.1.1 as providing FSR 4.
+        # The tuple as well, because callers compare it against the floor FSR 4
+        # starts at and against the 4.1.1 the INT8 override needs — and parsing
+        # the string back into numbers in each of them is a chance for them to
+        # disagree.
+        "version_tuple": list(version) if version else None,
+        # OptiScaler treats an SDK at or above 4.0.2 as providing FSR 4.
         "fsr4_capable": bool(version and version[:3] >= FSR4_MIN_SDK_VERSION[:3]),
     }
 
@@ -222,11 +229,18 @@ def fsr4_status(target_dir):
     """Which FSR4 support DLLs are present next to the game executable."""
     target = Path(target_dir)
     present = {name: (target / name).is_file() for name in FSR4_SUPPORT_FILES}
+    ffx = ffx_upscaler_info(target_dir)
     return {
         "files": present,
         "ready": present.get("amdxcffx64.dll", False),
         "required": FSR4_SUPPORT_FILES,
-        "ffx": ffx_upscaler_info(target_dir),
+        "ffx": ffx,
+        # Which upscaler build this actually is. Read out of the bytes rather
+        # than the manifest, so a game that had a build dropped into it by hand
+        # — or by another tool — is reported the same way one installed from
+        # here is, and reported as *unknown* rather than as the released one when
+        # the hash matches nothing (see fsr4build.identify).
+        "build": fsr4build.identify(target / FFX_UPSCALER_DLL),
     }
 
 
@@ -278,6 +292,108 @@ def import_fsr4_files(target_dir, source_dir, logger=None):
         (target / MANIFEST_NAME).write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
     return {"path": str(target), "imported": names, "source": str(source)}
+
+
+def require_stopped_install(target_dir):
+    """Require a managed install and reject DLL replacement while it is in use."""
+    target = Path(target_dir).resolve()
+    manifest = read_manifest(target)
+    if not manifest or manifest.get("plugin") != "decky-optiscaler":
+        raise ValueError("Install OptiScaler with this plugin first.")
+    if live.status(target).get("attached"):
+        raise RuntimeError("Close the game before changing the FSR 4 build.")
+    # A game can be running without our ASI. Wine maps the DLL/executable into
+    # its process; check mappings too, including paths containing spaces.
+    for maps in Path("/proc").glob("[0-9]*/maps"):
+        try:
+            for line in maps.read_text(errors="replace").splitlines():
+                fields = line.split(maxsplit=5)
+                if len(fields) == 6 and fields[5].startswith(str(target) + "/"):
+                    raise RuntimeError("Close the game before changing the FSR 4 build.")
+        except (FileNotFoundError, PermissionError, ProcessLookupError):
+            continue
+    return manifest
+
+
+def atomic_copy(source, destination):
+    """Stage beside the destination so replacement is atomic on its filesystem."""
+    destination = Path(destination)
+    fd, name = tempfile.mkstemp(prefix=".decky-fsr4-", dir=destination.parent)
+    os.close(fd)
+    try:
+        shutil.copy2(source, name)
+        os.replace(name, destination)
+    finally:
+        Path(name).unlink(missing_ok=True)
+
+
+def _replace_fsr4(target, source, recorded, enable_int8=False):
+    manifest = require_stopped_install(target)
+    target = Path(target)
+    if FFX_UPSCALER_DLL not in manifest.get("files", []):
+        raise ValueError("Reinstall OptiScaler before changing its upscaler build.")
+    # Roll back both settings and DLL if any part of the operation fails.
+    names = [FFX_UPSCALER_DLL, MANIFEST_NAME, INI_NAME]
+    with tempfile.TemporaryDirectory(prefix=".decky-fsr4-", dir=target) as staging:
+        staging = Path(staging)
+        existed = {name: (target / name).is_file() for name in names}
+        for name in names:
+            if existed[name]:
+                shutil.copy2(target / name, staging / name)
+        try:
+            atomic_copy(source, target / FFX_UPSCALER_DLL)
+            if enable_int8:
+                if not existed[INI_NAME]:
+                    raise FileNotFoundError("OptiScaler.ini not found")
+                ini = IniFile(staging / INI_NAME)
+                changes = {
+                    "Upscalers": {"Dx12Upscaler": "fsr31", "Dx11Upscaler": "fsr31_12",
+                                  "VulkanUpscaler": "fsr31_12"},
+                    "FSR": {"Fsr4Update": "auto", "Fsr4ForceEnableInt8": "true",
+                            "UpscalerIndex": "0", "Fsr4Preset": "auto"},
+                }
+                for section, values in changes.items():
+                    for key, value in values.items():
+                        meta = schema.option(section, key)
+                        if meta is None or not schema.valid(meta, value):
+                            raise ValueError(f"Invalid FSR 4 preset setting: {section}.{key}={value}")
+                ini.update(changes)
+                # Keep the rollback copy separate from the edited settings.
+                ini.path = staging / "new.ini"
+                ini.save()
+                atomic_copy(ini.path, target / INI_NAME)
+            manifest["fsr4_build"] = recorded
+            staged_manifest = staging / "new.json"
+            staged_manifest.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+            atomic_copy(staged_manifest, target / MANIFEST_NAME)
+        except Exception:
+            for name in names:
+                if existed[name]:
+                    atomic_copy(staging / name, target / name)
+                else:
+                    (target / name).unlink(missing_ok=True)
+            raise
+
+
+def install_fsr4_build(target_dir, dll_path, build, logger=None, enable_int8=False):
+    """Install a verified community DLL, optionally enabling the Deck preset."""
+    if fsr4build.digest(dll_path) != build["file_sha256"]:
+        raise ValueError("FSR 4 DLL checksum mismatch")
+    recorded = {"id": build["id"], "label": build["label"],
+                "file": FFX_UPSCALER_DLL, "sha256": build["file_sha256"],
+                "reaches_fsr4_by": build["reaches_fsr4_by"]}
+    _replace_fsr4(target_dir, dll_path, recorded, enable_int8)
+    return {"path": str(target_dir), "file": FFX_UPSCALER_DLL, "build": recorded}
+
+
+def restore_fsr4_build(target_dir, payload_root, logger=None):
+    """Restore the bundled DLL; upscaler and frame-generation settings stay intact."""
+    source = Path(payload_root) / FFX_UPSCALER_DLL
+    if fsr4build.digest(source) != fsr4build.BUNDLED_BUILD["file_sha256"]:
+        raise ValueError("Bundled FSR 4 DLL checksum mismatch")
+    _replace_fsr4(target_dir, source, {})
+    return {"path": str(target_dir), "restored": FFX_UPSCALER_DLL,
+            "build": fsr4build.identify(Path(target_dir) / FFX_UPSCALER_DLL)}
 
 
 def add_files(target_dir, sources, logger=None, reframework_revision=None):
@@ -426,6 +542,12 @@ def install(target_dir, payload_root, filename=DEFAULT_PROXY, preserve_ini=True,
 
     previous = detect(target)
     old_manifest = read_manifest(target) or {}
+    selected_build = old_manifest.get("fsr4_build") or {}
+    if selected_build:
+        build = fsr4build.find(selected_build.get("id"))
+        if not build or not (target / FFX_UPSCALER_DLL).is_file() or fsr4build.digest(
+                target / FFX_UPSCALER_DLL) != build["file_sha256"]:
+            raise ValueError("Selected FSR 4 build is missing or changed. Enable it again or restore the bundled build first.")
     old_files = set(old_manifest.get("files") or [])
     old_dirs = set(old_manifest.get("dirs") or [])
     backups = dict(old_manifest.get("backups") or {})
@@ -471,6 +593,9 @@ def install(target_dir, payload_root, filename=DEFAULT_PROXY, preserve_ini=True,
         created.append(INI_NAME)
 
     for name in PAYLOAD_FILES:
+        if name == FFX_UPSCALER_DLL and selected_build:
+            created.append(name)
+            continue
         src = payload / name
         if src.is_file():
             place(src, name)
@@ -532,6 +657,7 @@ def install(target_dir, payload_root, filename=DEFAULT_PROXY, preserve_ini=True,
         "optipatcher": patcher_result["installed"],
         "reframework": ref_result["installed"],
         "reframework_revision": ref_result["revision"],
+        "fsr4_build": selected_build,
         "optiscaler_version": OPTISCALER_VERSION,
         "filename": filename,
         "installed_at": time.time(),
@@ -732,6 +858,14 @@ def verify_install(target_dir, payload_root):
         }
         if record["present"] and source.is_file():
             record["matches_payload"] = record["size"] == record["expected_size"]
+        if name == FFX_UPSCALER_DLL:
+            selected = (manifest or {}).get("fsr4_build") or {}
+            build = fsr4build.find(selected.get("id", "bundled"))
+            record["matches_payload"] = bool(
+                record["present"] and build
+                and fsr4build.digest(destination) == build["file_sha256"])
+            if build and build.get("file_bytes"):
+                record["expected_size"] = build["file_bytes"]
         entries.append(record)
 
     for name in PAYLOAD_DIRS:
