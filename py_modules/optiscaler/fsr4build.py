@@ -11,9 +11,9 @@ from . import payload, wiki
 from .constants import (
     FFX_UPSCALER_DLL,
     FSR4_BUILDS,
-    FSR4_BUILD_MIRROR,
     FSR4_BUNDLED_BUILD_ID,
     FSR4_BUNDLED_FILE_SHA256,
+    FSR4_BUNDLED_FILE_BYTES,
     FSR4_INT8_MIN_SDK_VERSION,
 )
 
@@ -26,6 +26,7 @@ BUNDLED_BUILD = {
             "INT8 override on RDNA 2.",
     "file": FFX_UPSCALER_DLL,
     "file_sha256": FSR4_BUNDLED_FILE_SHA256,
+    "file_bytes": FSR4_BUNDLED_FILE_BYTES,
     "reaches_fsr4_by": "int8",
 }
 
@@ -50,14 +51,8 @@ def cached_path(cache_dir, build):
     return Path(cache_dir) / build["id"] / "unpacked" / build["file"]
 
 
-def release_page(build):
-    repo = build.get("repo") or FSR4_BUILD_MIRROR
-    return f"https://github.com/{repo}/releases/tag/{build['tag']}"
-
-
-def url_for(build):
-    repo = build.get("repo") or FSR4_BUILD_MIRROR
-    return f"https://github.com/{repo}/releases/download/{build['tag']}/{build['asset']}"
+def url_for(source):
+    return f"https://github.com/{source['repo']}/releases/download/{source['tag']}/{source['asset']}"
 
 
 def digest(path):
@@ -71,7 +66,8 @@ def digest(path):
     found = _digests.get(key)
     if found is None:
         found = payload.sha256(path)
-        _digests.clear()
+        if len(_digests) >= 8:
+            _digests.pop(next(iter(_digests)))
         _digests[key] = found
     return found
 
@@ -80,8 +76,8 @@ def identify(path):
     """Which known FSR 4 build the file at `path` is.
 
     None when there is no file there. Otherwise a dict that always carries the
-    file's own hash and byte count, with the build's identity only when the hash
-    matched one — a build that is not in the table has to be reportable as *a*
+    byte count and, for a known size, its hash. The build's identity is included
+    only when the hash matched one — a build that is not in the table has to be reportable as *a*
     build rather than passing as the released one by default. The digest is
     remembered by size and mtime, so a panel that re-reads costs a stat.
     """
@@ -93,15 +89,17 @@ def identify(path):
     except OSError:
         return None
 
-    found = {b["file_sha256"]: b for b in builds()}.get(digest(path))
+    candidates = [b for b in builds() if b["file_bytes"] == size]
+    actual = digest(path) if candidates else None
+    found = next((b for b in candidates if b["file_sha256"] == actual), None)
     if found is None:
         return {
             "known": False, "id": None, "label": "Unrecognised FSR 4 build",
             "note": "Not a build this plugin ships or pins. There is nothing here "
-                    "to say what it is beyond its hash and the version it reports.",
-            "reaches_fsr4_by": None, "sha256": digest(path), "bytes": size,
+                    "to say what it is beyond its size and the version it reports.",
+            "reaches_fsr4_by": None, "sha256": actual, "bytes": size,
         }
-    return {"known": True, "sha256": digest(path), "bytes": size, **found}
+    return {"known": True, "sha256": actual, "bytes": size, **found}
 
 
 def _matches(path, build):
@@ -113,23 +111,6 @@ def _matches(path, build):
     except OSError:
         return False
     return digest(path) == build["file_sha256"]
-
-
-def catalog(cache_dir):
-    """The downloadable builds, with what each costs and whether it is here yet."""
-    items = []
-    for build in FSR4_BUILDS:
-        items.append({
-            "id": build["id"],
-            "label": build["label"],
-            "note": build["note"],
-            "reaches_fsr4_by": build["reaches_fsr4_by"],
-            "mb": round(build["archive_bytes"] / 1e6, 1),
-            "cached": _matches(cached_path(cache_dir, build), build),
-            "source": build.get("repo") or FSR4_BUILD_MIRROR,
-            "page": release_page(build),
-        })
-    return items
 
 
 def fetch(build, cache_dir, logger=None):
@@ -153,40 +134,41 @@ def fetch(build, cache_dir, logger=None):
         return unpacked
 
     cache = Path(cache_dir) / build["id"]
-    archive = cache / build["asset"]
-    if not (archive.is_file() and digest(archive) == build["archive_sha256"]):
-        archive.unlink(missing_ok=True)
-        url = url_for(build)
-        if logger:
-            logger.info("downloading FSR 4 %s from %s", build["id"], url)
-        wiki.download(url, archive, timeout=300)
-        actual = digest(archive)
-        if actual != build["archive_sha256"]:
-            archive.unlink(missing_ok=True)
-            raise ValueError(
-                f"{build['asset']} did not match the hash this build pins "
-                f"(got {actual})"
-            )
+    errors = []
+    for source in build["sources"]:
+        archive = cache / source["asset"]
+        try:
+            if not (archive.is_file() and digest(archive) == source["archive_sha256"]):
+                archive.unlink(missing_ok=True)
+                url = url_for(source)
+                if logger:
+                    logger.info("downloading FSR 4 %s from %s", build["id"], url)
+                wiki.download(url, archive, timeout=300)
+                if digest(archive) != source["archive_sha256"]:
+                    archive.unlink(missing_ok=True)
+                    raise ValueError(f"{source['asset']} archive checksum mismatch")
 
-    target = unpacked.parent
-    payload.extract_archive(archive, target, logger)
-    produced = next((p for p in target.rglob(build["file"]) if p.is_file()), None)
-    if produced is None:
-        raise ValueError(f"{build['asset']} did not contain {build['file']}")
-    if produced != unpacked:
-        target.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(produced), str(unpacked))
-
-    actual = digest(unpacked)
-    if actual != build["file_sha256"]:
-        unpacked.unlink(missing_ok=True)
-        raise ValueError(
-            f"{build['file']} from {build['asset']} did not match the hash this "
-            f"build pins (got {actual})"
-        )
-    if logger:
-        logger.info("FSR 4 %s ready at %s", build["id"], unpacked)
-    return unpacked
+            # Never let files from an earlier extraction satisfy this attempt.
+            target = unpacked.parent
+            if target.exists():
+                shutil.rmtree(target)
+            payload.extract_archive(archive, target, logger)
+            produced = next((p for p in target.rglob(build["file"]) if p.is_file()), None)
+            if produced is None:
+                raise ValueError(f"{source['asset']} did not contain {build['file']}")
+            if not _matches(produced, build):
+                raise ValueError(f"{build['file']} DLL checksum mismatch")
+            if produced != unpacked:
+                shutil.move(str(produced), str(unpacked))
+            if logger:
+                logger.info("FSR 4 %s ready at %s", build["id"], unpacked)
+            return unpacked
+        except Exception as exc:
+            unpacked.unlink(missing_ok=True)
+            errors.append(f"{source['repo']}: {exc}")
+            if logger:
+                logger.warning("FSR 4 source failed: %s", errors[-1])
+    raise RuntimeError("Could not fetch verified FSR 4 build: " + "; ".join(errors))
 
 
 def reaches_fsr4_by(ffx_version):

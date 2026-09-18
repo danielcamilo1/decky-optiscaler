@@ -226,7 +226,7 @@ export function BasicPanel({
   // when there is something to switch to.
   const [installingFsr4, setInstallingFsr4] = useState(false);
   const [fsr4Error, setFsr4Error] = useState<string | null>(null);
-  disabled = disabled || installingFsr4;
+  const busy = disabled || installingFsr4;
   const [picked, setPicked] = useState<string | null>(null);
   const [methodChanged, setMethodChanged] = useState(false);
   const [ffxFgChanged, setFfxFgChanged] = useState(false);
@@ -401,7 +401,7 @@ export function BasicPanel({
         <ValueDropdown
           label="Method"
           description={hint(fgPreset?.description ?? "Choose which frame generator to use.")}
-          disabled={disabled || !fgOn}
+          disabled={busy || !fgOn}
           bottomSeparator={automatic && plannedFg ? "none" : "standard"}
           options={FG_PRESETS.map((preset) => ({ data: preset.id, label: preset.label }))}
           // A wiki plan writes the pair the entry names, which is a stronger
@@ -462,7 +462,7 @@ export function BasicPanel({
                     "and how it runs, the multiplier and the upscaler."
               )}
               checked={automatic}
-              disabled={disabled || !onAutoChange}
+              disabled={busy || !onAutoChange}
               bottomSeparator={automatic ? "none" : "standard"}
               onChange={(checked) => onAutoChange?.(checked)}
             />
@@ -514,7 +514,7 @@ export function BasicPanel({
                 : "Inserts generated frames between rendered ones."
             )}
             checked={fgOn}
-            disabled={disabled || fgUnavailable}
+            disabled={busy || fgUnavailable}
             bottomSeparator={liveFg === null ? "standard" : "none"}
             onChange={(checked) =>
               checked ? turnFrameGenOn() : onApply(disableFrameGenChanges())
@@ -554,7 +554,7 @@ export function BasicPanel({
                     ? "The frame generators this game's FidelityFX runtime reports."
                     : "Which FidelityFX frame generator the FSR FG output runs."
               )}
-              disabled={disabled || !fgOn || ffxFixed}
+              disabled={busy || !fgOn || ffxFixed}
               bottomSeparator={ffxNotLive ? "none" : "standard"}
               options={ffxChoices.options}
               selected={ffxSelected}
@@ -591,7 +591,7 @@ export function BasicPanel({
                   ? hint("How many frames to present per rendered frame.")
                   : "Only XeSS Frame Generation can do more than 2X."
               }
-              disabled={disabled || !fgOn || !multiplierUsable}
+              disabled={busy || !fgOn || !multiplierUsable}
               bottomSeparator="standard"
               options={(multiplierOption.options ?? []).map((value) => ({
                 data: value,
@@ -628,7 +628,7 @@ export function BasicPanel({
             description={hint(
               upscalerPreset?.description ?? "Replaces whichever upscaler the game asks for."
             )}
-            disabled={disabled}
+            disabled={busy}
             bottomSeparator="standard"
             options={upscalerChoices.map((preset) => ({
               data: preset.id,
@@ -658,6 +658,15 @@ export function BasicPanel({
           />
         </PanelSectionRow>
 
+        {upscalerChoices.some((preset) => preset.id === "fsr4-int8") ? (
+          <PanelSectionRow>
+            <div style={{ fontSize: "12px", color: "#b8bcbf", padding: "4px 0" }}>
+              The Steam Deck preset downloads a modified game DLL redistributed
+              by the community. Avoid using it in games with anti-cheat.
+            </div>
+          </PanelSectionRow>
+        ) : null}
+
         {/* The second half of the same question. "fsr31" is every FSR from
             2.3.4 to 4.1.1 and OptiScaler names it "FSR 3.X/4" for exactly that
             reason; which one it actually runs is this index, which the overlay
@@ -675,7 +684,7 @@ export function BasicPanel({
                     ? "The FSR versions this game's FidelityFX runtime reports."
                     : "Which version of FSR the FidelityFX backend runs."
               )}
-              disabled={disabled || ffxUpsFixed}
+              disabled={busy || ffxUpsFixed}
               bottomSeparator={ffxUpsNotLive ? "none" : "standard"}
               options={ffxUpsChoices.options}
               selected={ffxUpsSelected}

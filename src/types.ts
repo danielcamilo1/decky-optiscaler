@@ -88,29 +88,12 @@ export interface Fsr4Build {
   bytes: number;
 }
 
-/** One build the panel can download, with what it costs and where it comes from. */
-export interface Fsr4BuildOption {
-  id: string;
-  label: string;
-  note: string;
-  reaches_fsr4_by: string;
-  mb: number;
-  cached: boolean;
-  /** The GitHub repo the package is fetched from. */
-  source: string;
-  page: string;
-}
-
 export interface Fsr4Status {
   files: Record<string, boolean>;
   ready: boolean;
   required: string[];
   ffx?: FfxUpscalerInfo;
   build?: Fsr4Build | null;
-  /** What the manifest says this plugin installed, when it installed one. */
-  recorded_build?: Record<string, string> | null;
-  /** Which setting reaches FSR 4 with the upscaler that is in the folder. */
-  reaches_fsr4_by?: "int8" | "upgrade" | null;
 }
 
 export interface Fsr4Source {

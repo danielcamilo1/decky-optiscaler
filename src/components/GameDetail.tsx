@@ -377,7 +377,7 @@ export function GameDetail({
                     launch. */}
                 <BasicPanel
                   values={config.values}
-                  disabled={config.loading || config.saving}
+                  disabled={config.loading}
                   gpu={detail.gpu}
                   live={liveStatus}
                   ffx={detail.install.fsr4?.ffx}

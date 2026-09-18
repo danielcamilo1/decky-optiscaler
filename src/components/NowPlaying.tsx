@@ -129,7 +129,6 @@ export function NowPlaying({
         <Centered>Reading config…</Centered>
       ) : (
         <BasicPanel
-          disabled={config.saving}
           values={config.values}
           gpu={detail!.gpu}
           live={live}

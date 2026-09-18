@@ -13,7 +13,7 @@ import time
 import tempfile
 from pathlib import Path
 
-from . import fsr4build, live
+from . import fsr4build, live, schema
 from .inifile import IniFile
 from .constants import (
     OPTIPATCHER_NAME,
@@ -229,7 +229,6 @@ def fsr4_status(target_dir):
     """Which FSR4 support DLLs are present next to the game executable."""
     target = Path(target_dir)
     present = {name: (target / name).is_file() for name in FSR4_SUPPORT_FILES}
-    manifest = read_manifest(target) or {}
     ffx = ffx_upscaler_info(target_dir)
     return {
         "files": present,
@@ -242,12 +241,6 @@ def fsr4_status(target_dir):
         # here is, and reported as *unknown* rather than as the released one when
         # the hash matches nothing (see fsr4build.identify).
         "build": fsr4build.identify(target / FFX_UPSCALER_DLL),
-        "recorded_build": manifest.get("fsr4_build") or None,
-        # Which setting has to be set for FSR 4 to be reachable with the
-        # upscaler that is in the folder, since that follows the build's version
-        # and not the GPU: 4.0.2 needs the FSR upgrade path, 4.1.1 the INT8
-        # override (menu_common.cpp).
-        "reaches_fsr4_by": fsr4build.reaches_fsr4_by(ffx.get("version_tuple")),
     }
 
 
@@ -353,12 +346,18 @@ def _replace_fsr4(target, source, recorded, enable_int8=False):
                 if not existed[INI_NAME]:
                     raise FileNotFoundError("OptiScaler.ini not found")
                 ini = IniFile(staging / INI_NAME)
-                ini.update({
+                changes = {
                     "Upscalers": {"Dx12Upscaler": "fsr31", "Dx11Upscaler": "fsr31_12",
                                   "VulkanUpscaler": "fsr31_12"},
                     "FSR": {"Fsr4Update": "auto", "Fsr4ForceEnableInt8": "true",
                             "UpscalerIndex": "0", "Fsr4Preset": "auto"},
-                })
+                }
+                for section, values in changes.items():
+                    for key, value in values.items():
+                        meta = schema.option(section, key)
+                        if meta is None or not schema.valid(meta, value):
+                            raise ValueError(f"Invalid FSR 4 preset setting: {section}.{key}={value}")
+                ini.update(changes)
                 # Keep the rollback copy separate from the edited settings.
                 ini.path = staging / "new.ini"
                 ini.save()

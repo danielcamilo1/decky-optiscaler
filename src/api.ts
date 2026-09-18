@@ -2,7 +2,6 @@ import { callable } from "@decky/api";
 import type {
   AutoPlanResult,
   ConfigResult,
-  Fsr4BuildOption,
   Fsr4Source,
   Fsr4Status,
   GpuInfo,
@@ -56,7 +55,7 @@ export const findRunningGame = callable<
 >("find_running_game");
 export const getFsr4Info = callable<
   [targetDir: string],
-  { status: Fsr4Status; sources: Fsr4Source[]; gpu: GpuInfo; builds: Fsr4BuildOption[] }
+  { status: Fsr4Status; sources: Fsr4Source[]; gpu: GpuInfo }
 >("get_fsr4_info");
 export const importFsr4Files = callable<
   [targetDir: string, sourceDir: string],

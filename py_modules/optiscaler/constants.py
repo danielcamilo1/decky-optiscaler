@@ -219,16 +219,26 @@ FSR4_BUNDLED_BUILD_ID = "bundled"
 FSR4_BUNDLED_FILE_SHA256 = (
     "d0dcccc74a43c44ba435b7a369b456e0970d8a4464e4bd683119b374f2c9fb46"
 )
+FSR4_BUNDLED_FILE_BYTES = 28761864
 FSR4_BUILDS = [
     {
         "id": "4.1.1b",
         "label": "4.1.1b (INT8, RDNA 2 ghosting fix)",
         "note": "Community INT8 build with the RDNA2 ghosting fix.",
-        "repo": FSR4_BUILD_PRIMARY,
-        "tag": "4.1.1b",
-        "asset": "FSR_4.1.1b_INT8_with_RDNA2_fix.7z",
-        "archive_sha256": "66e9a818e0c914def7712c8dac06b08e64a64dbcfe77f3162d43ea6de93869ff",
-        "archive_bytes": 3456158,
+        "sources": [
+            {
+                "repo": FSR4_BUILD_PRIMARY,
+                "tag": "4.1.1b",
+                "asset": "FSR_4.1.1b_INT8_with_RDNA2_fix.7z",
+                "archive_sha256": "66e9a818e0c914def7712c8dac06b08e64a64dbcfe77f3162d43ea6de93869ff",
+            },
+            {
+                "repo": FSR4_BUILD_MIRROR,
+                "tag": "FSR_4.1.1b",
+                "asset": "FSR4_INT8_4.1.1b.7z",
+                "archive_sha256": "ddedf6fd452904c4598719feac33f098644de7e1f0ed53c54274aedb0a586be1",
+            },
+        ],
         "file": "amd_fidelityfx_upscaler_dx12.dll",
         "file_sha256": "0dd77d9c78d1ef9bc330cf4697ab3ffe24bc1aa7850e4130263dc922107fbd75",
         "file_bytes": 34013696,

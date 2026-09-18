@@ -17,7 +17,7 @@ OUT_DIR = ROOT / "out"
 
 # Files and directories that make up the installed plugin.
 INCLUDE_FILES = ["plugin.json", "package.json", "main.py", "README.md", "LICENSE"]
-INCLUDE_DIRS = ["dist", "py_modules", "bin", "defaults", "docs"]
+INCLUDE_DIRS = ["dist", "py_modules", "bin", "defaults"]
 
 EXCLUDE_NAMES = {"__pycache__", ".DS_Store", "node_modules", ".git"}
 EXCLUDE_SUFFIXES = {".pyc", ".pyo", ".map", ".tmp"}

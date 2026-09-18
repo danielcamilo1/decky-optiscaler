@@ -294,12 +294,13 @@ async def run():
         check("every build pins a 64-character hash for the file it installs",
               all(len(b["file_sha256"]) == 64 for b in fsr4build.builds()))
         check("and one for the archive it arrives in",
-              all(len(b["archive_sha256"]) == 64 for b in fsr4build.FSR4_BUILDS))
+              all(len(source["archive_sha256"]) == 64
+                  for b in fsr4build.FSR4_BUILDS for source in b["sources"]))
         check("every build names the one file these packages hold",
               all(b["file"] == installer.FFX_UPSCALER_DLL for b in fsr4build.builds()))
         check("every build names the release to fetch it from",
-              all(b.get("repo") and b.get("tag") and b.get("asset")
-                  for b in fsr4build.FSR4_BUILDS))
+              all(source.get("repo") and source.get("tag") and source.get("asset")
+                  for b in fsr4build.FSR4_BUILDS for source in b["sources"]))
         check("and no two builds install the same file",
               len({b["file_sha256"] for b in fsr4build.FSR4_BUILDS})
               == len(fsr4build.FSR4_BUILDS))
@@ -311,13 +312,6 @@ async def run():
               == "bundled")
         check("a build that is not one of ours says so",
               (fsr4build.identify(source / "amdxc64.dll") or {}).get("known") is False)
-
-        catalogue = fsr4build.catalog(root / "cache")
-        check("the panel is offered the pinned builds with their sizes",
-              len(catalogue) == len(fsr4build.FSR4_BUILDS)
-              and all(item["mb"] > 0 for item in catalogue), catalogue)
-        check("and none of them is offered as already downloaded",
-              not any(item["cached"] for item in catalogue))
 
         # Install one from a hand-made "download": the same call the service
         # makes once `fetch` has verified a real one.

@@ -18,6 +18,107 @@ from optiscaler.service import OptiScalerService
 ROOT = Path(__file__).resolve().parents[1]
 
 
+class BuildFetchTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        fsr4build._digests.clear()
+        self.dll_bytes = b'verified community DLL'
+        self.build = dict(fsr4build.find('4.1.1b'),
+                          file_bytes=len(self.dll_bytes),
+                          file_sha256=hashlib.sha256(self.dll_bytes).hexdigest())
+        self.build['sources'] = [dict(source, archive_sha256=hashlib.sha256(
+            source['repo'].encode()).hexdigest()) for source in self.build['sources']]
+
+    def download(self, url, archive, **kwargs):
+        source = next(s for s in self.build['sources'] if fsr4build.url_for(s) == url)
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        archive.write_bytes(source['repo'].encode())
+
+    def extract(self, archive, target, logger=None):
+        target.mkdir(parents=True, exist_ok=True)
+        (target / self.build['file']).write_bytes(self.dll_bytes)
+
+    def test_two_files_remain_cached_and_changes_are_rehashed(self):
+        paths = [self.root / name for name in ('game.dll', 'cached.dll')]
+        for path in paths:
+            path.write_bytes(self.dll_bytes)
+        with patch.object(fsr4build.payload, 'sha256', wraps=fsr4build.payload.sha256) as sha:
+            for _ in range(3):
+                for path in paths:
+                    fsr4build.digest(path)
+            self.assertEqual(sha.call_count, 2)
+            paths[0].write_bytes(b'changed DLL')
+            self.assertNotEqual(fsr4build.digest(paths[0]), self.build['file_sha256'])
+            self.assertEqual(sha.call_count, 3)
+            for i in range(10):
+                path = self.root / str(i)
+                path.write_bytes(b'other DLL')
+                fsr4build.digest(path)
+            self.assertLessEqual(len(fsr4build._digests), 8)
+
+    def test_identification_skips_unknown_sizes_but_checks_known_sizes(self):
+        path = self.root / 'game.dll'
+        path.write_bytes(b'unknown size')
+        with patch.object(fsr4build, 'FSR4_BUILDS', [self.build]), \
+                patch.object(fsr4build.payload, 'sha256', wraps=fsr4build.payload.sha256) as sha:
+            self.assertFalse(fsr4build.identify(path)['known'])
+            sha.assert_not_called()
+            path.write_bytes(self.dll_bytes)
+            self.assertEqual(fsr4build.identify(path)['id'], self.build['id'])
+            path.write_bytes(b'x' * len(self.dll_bytes))
+            self.assertFalse(fsr4build.identify(path)['known'])
+
+    def test_primary_failure_uses_mirror_and_reuses_verified_cache(self):
+        def download(url, archive, **kwargs):
+            if url == fsr4build.url_for(self.build['sources'][0]):
+                raise OSError('release deleted')
+            self.download(url, archive, **kwargs)
+        with patch.object(fsr4build.wiki, 'download', side_effect=download) as get, \
+                patch.object(fsr4build.payload, 'extract_archive', side_effect=self.extract):
+            path = fsr4build.fetch(self.build, self.root)
+            self.assertEqual(path.read_bytes(), self.dll_bytes)
+            self.assertEqual(get.call_count, 2)
+            self.assertEqual(fsr4build.fetch(self.build, self.root), path)
+            self.assertEqual(get.call_count, 2)
+
+    def test_corrupt_primary_archive_falls_back(self):
+        def download(url, archive, **kwargs):
+            self.download(url, archive, **kwargs)
+            if url == fsr4build.url_for(self.build['sources'][0]):
+                archive.write_bytes(b'corrupt archive')
+        with patch.object(fsr4build.wiki, 'download', side_effect=download), \
+                patch.object(fsr4build.payload, 'extract_archive', side_effect=self.extract) as extract:
+            self.assertEqual(fsr4build.fetch(self.build, self.root).read_bytes(), self.dll_bytes)
+            self.assertEqual(extract.call_count, 1)
+
+    def test_wrong_dll_from_either_source_is_rejected(self):
+        def extract(archive, target, logger=None):
+            self.extract(archive, target, logger)
+            (target / self.build['file']).write_bytes(b'x' * len(self.dll_bytes))
+        with patch.object(fsr4build.wiki, 'download', side_effect=self.download) as get, \
+                patch.object(fsr4build.payload, 'extract_archive', side_effect=extract):
+            with self.assertRaisesRegex(RuntimeError, 'DLL checksum mismatch'):
+                fsr4build.fetch(self.build, self.root)
+            self.assertEqual(get.call_count, 2)
+            self.assertFalse(fsr4build.cached_path(self.root, self.build).exists())
+
+    def test_failed_extraction_cannot_leave_a_dll_for_the_mirror(self):
+        attempts = 0
+        def extract(archive, target, logger=None):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                self.extract(archive, target, logger)
+                raise RuntimeError('incomplete extraction')
+            target.mkdir(parents=True, exist_ok=True)
+        with patch.object(fsr4build.wiki, 'download', side_effect=self.download), \
+                patch.object(fsr4build.payload, 'extract_archive', side_effect=extract):
+            with self.assertRaisesRegex(RuntimeError, 'did not contain'):
+                fsr4build.fetch(self.build, self.root)
+
+
 class DeckFsr4Tests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -68,6 +169,22 @@ class DeckFsr4Tests(unittest.TestCase):
         self.assertTrue(self.enable()['ok'])
         installer.uninstall(self.target)
         self.assertEqual((self.target/FFX_UPSCALER_DLL).read_bytes(), b'original game DLL')
+
+    def test_other_registered_build_is_accepted_and_unknown_is_rejected(self):
+        self.build['id'] = 'future-build'
+        with patch.object(fsr4build, 'fetch', return_value=self.dll) as fetch:
+            result = asyncio.run(self.service.set_fsr4_build(str(self.target), 'future-build'))
+            self.assertTrue(result['ok'])
+            fetch.reset_mock()
+            result = asyncio.run(self.service.set_fsr4_build(str(self.target), 'unknown'))
+            self.assertFalse(result['ok'])
+            fetch.assert_not_called()
+
+    def test_invalid_preset_rolls_back_settings_and_dll(self):
+        before = self.snapshot()
+        with patch.object(installer.schema, 'valid', return_value=False):
+            self.assertFalse(self.enable()['ok'])
+        self.assertEqual(before, self.snapshot())
 
     def test_download_failure_preserves_settings_and_dll(self):
         before = self.snapshot()

@@ -3,7 +3,7 @@
 Newest first. Each release ships `Decky OptiScaler.zip` for Decky Loader's
 *Install from URL* (Developer mode), and bundles **OptiScaler 0.9.4**.
 
-## [0.0.7-steamdeck.1] - 2026-09-17
+## [Unreleased]
 
 ### Added
 

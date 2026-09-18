@@ -95,6 +95,8 @@ export const UPSCALER_PRESETS: Preset[] = [
     matches: (values) => isAuto(get(values, "Upscalers", "Dx12Upscaler")),
   },
   {
+    // installer._replace_fsr4 owns the atomic DLL/settings write. This list
+    // documents the preset for matching/validation; onEnableFsr4 applies it.
     id: "fsr4-int8",
     label: "FSR 4.1.1b — Steam Deck",
     description: "Downloads the community RDNA2 ghosting fix and enables INT8 upscaling. Close the game first.",

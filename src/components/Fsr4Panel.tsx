@@ -2,7 +2,7 @@ import { ButtonItem, PanelSection, PanelSectionRow } from "@decky/ui";
 import { toaster } from "@decky/api";
 import { useCallback, useEffect, useState } from "react";
 import { getFsr4Info, restoreFsr4Build, importFsr4Files, verifyInstall } from "../api";
-import type { Fsr4Source, GpuInfo, VerifyResult } from "../types";
+import type { Fsr4Build, Fsr4Source, GpuInfo, VerifyResult } from "../types";
 import { KeyValue, Mono, Notice, Pill } from "./Common";
 
 interface Props {
@@ -30,7 +30,7 @@ const GPU_NOTE: Record<string, string> = {
  */
 export function Fsr4Panel({ targetDir, sources, gpu, onChanged }: Props) {
   const [report, setReport] = useState<VerifyResult | null>(null);
-  const [build, setBuild] = useState<{ id?: string | null; label: string } | null>(null);
+  const [build, setBuild] = useState<Fsr4Build | null>(null);
   const [busy, setBusy] = useState(false);
 
   const verify = useCallback(async () => {
@@ -103,7 +103,7 @@ export function Fsr4Panel({ targetDir, sources, gpu, onChanged }: Props) {
         </PanelSectionRow>
       ) : null}
 
-      {build?.id !== "bundled" ? (
+      {build?.known && build.id !== "bundled" ? (
         <PanelSectionRow>
           <ButtonItem layout="below" disabled={Boolean(busy)}
             description="Close the game first. Keeps your upscaler and frame generation settings."
