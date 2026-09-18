@@ -209,41 +209,8 @@ FSR4_SOURCE_HINTS = [
     "decky-optiscaler",
 ]
 
-# ---------------------------------------------------------------- FSR 4 builds
-#
-# The upscaler the game loads, as the community builds it. OptiScaler's own
-# release carries AMD's 4.1.1 SDK build; these are the INT8 builds for parts AMD
-# does not cover, mirrored in the OptiScaler-Extras repository that the
-# OptiScaler Client picks its FSR 4 Swap versions from.
-#
-# Every package holds exactly one file, `amd_fidelityfx_upscaler_dx12.dll` —
-# the same name the release's SDK carries — so installing one replaces that file
-# inside the game folder, and uninstalling OptiScaler takes it with it.
-#
-# **A version number cannot say which of them is installed.** The modelled 4.1.1b
-# reports 4.1.1.2740, exactly what the released SDK reports; only the bytes
-# differ. So each entry pins the SHA-256 of the file it unpacks (and of the
-# archive it comes in, which is GitHub's own digest for the asset), and what the
-# panel reports about the installed build is that hash and the release it came
-# from — never a version string that two different builds share.
-#
-# `reaches_fsr4_by` records which setting actually gets FSR 4 running with that
-# build in place, because it changes with the build rather than the device:
-# OptiScaler offers the FSR 3.X/4 entry off `Fsr4ForceEnableInt8` only when the
-# local upscaler is 4.1.1 or newer, so a 4.0.2 build is reached through
-# `Fsr4Update` (the upgrade path) instead — which is what the OptiScaler Client
-# sets for RDNA 2, both flags at once, for exactly this reason.
-# Two hosts carry these packages. The primary releases are the mod's own — the
-# ones the news coverage links and the community testing used — and the
-# OptiScaler-Extras mirror repackages two of them in larger archives. Both were
-# downloaded and compared file for file: the DLL that comes out of each is
-# byte-identical, which is why what this table pins for the *file* is the same
-# either way and only the download differs (3.5 MB against 20 MB for 4.1.1b).
-#
-# These are modified game DLLs, redistributed by hand: the release pages and the
-# article about them both say to keep them away from online games, since a
-# modified DLL can trip anti-cheat. Nothing here makes that decision for anyone,
-# and the panel says so where the builds are offered.
+# Community RDNA2 upscaler, pinned independently of the bundled runtime.
+# Version resources are identical to stock 4.1.1; identify by SHA-256.
 FSR4_BUILD_PRIMARY = "the3rdparty1917/fsr4xyz"
 FSR4_BUILD_MIRROR = "Optiscaler-Client/OptiScaler-Extras"
 FSR4_BUNDLED_BUILD_ID = "bundled"
@@ -256,10 +223,7 @@ FSR4_BUILDS = [
     {
         "id": "4.1.1b",
         "label": "4.1.1b (INT8, RDNA 2 ghosting fix)",
-        "note": "The newest build, and the one the RDNA 2 coverage is about: "
-                "\"modified for fixing RDNA2 ghosting issues\", in its release's own "
-                "words, and no longer needing an old driver swapped in. Reports the "
-                "same version as the bundled SDK, so it is identified by hash.",
+        "note": "Community INT8 build with the RDNA2 ghosting fix.",
         "repo": FSR4_BUILD_PRIMARY,
         "tag": "4.1.1b",
         "asset": "FSR_4.1.1b_INT8_with_RDNA2_fix.7z",
@@ -270,40 +234,7 @@ FSR4_BUILDS = [
         "file_bytes": 34013696,
         "reaches_fsr4_by": "int8",
     },
-    {
-        "id": "4.0.2d",
-        "label": "4.0.2d (INT8)",
-        "note": "The 4.0.2 line one step on from 4.0.2c: \"slightly faster versus "
-                "previous versions, 4.1.1-like IQ improvements\". Reaches FSR 4 "
-                "through the FSR upgrade path rather than the INT8 override, which "
-                "needs 4.1.1 or newer.",
-        "repo": FSR4_BUILD_PRIMARY,
-        "tag": "4.0.2d",
-        "asset": "FSR_4.0.2d_INT8_with_RDNA2_fix.7z",
-        "archive_sha256": "5d06481c00c85e1ddaa89eedf585bba75f3b3a99795c31db20a06a96dd55e9f7",
-        "archive_bytes": 3199350,
-        "file": "amd_fidelityfx_upscaler_dx12.dll",
-        "file_sha256": "0e60f2ff9130b08440bbdbc47c3775e818601bd534cf5eec2d0937a3458f34cc",
-        "file_bytes": 40664064,
-        "reaches_fsr4_by": "upgrade",
-    },
-    {
-        "id": "4.0.2c",
-        "label": "4.0.2c (INT8, RDNA 2 fix)",
-        "note": "The older RDNA 2 fix, and the one the OptiScaler Client points "
-                "those users at: \"improved Quality model selection\" for the "
-                "one-pixel ghosting. Reaches FSR 4 through the FSR upgrade path "
-                "rather than the INT8 override, which needs 4.1.1 or newer.",
-        "repo": FSR4_BUILD_PRIMARY,
-        "tag": "4.0.2c",
-        "asset": "FSR_4.0.2c_INT8_with_RDNA2_fix.7z",
-        "archive_sha256": "1a0f669ed24fecb4f6bbb5c0fb93ef0595b2c12451133c04f7f7b4051cb1d46d",
-        "archive_bytes": 3240356,
-        "file": "amd_fidelityfx_upscaler_dx12.dll",
-        "file_sha256": "c7720bc16bede334f59a1a32cd22edbcbbb159685ed5240e61350a5fb0bc8a94",
-        "file_bytes": 41036800,
-        "reaches_fsr4_by": "upgrade",
-    },
+
 ]
 
 

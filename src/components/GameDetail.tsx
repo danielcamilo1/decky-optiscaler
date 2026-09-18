@@ -377,13 +377,15 @@ export function GameDetail({
                     launch. */}
                 <BasicPanel
                   values={config.values}
-                  disabled={config.loading}
+                  disabled={config.loading || config.saving}
                   gpu={detail.gpu}
                   live={liveStatus}
                   ffx={detail.install.fsr4?.ffx}
                   plan={plan}
                   auto={auto}
                   onAutoChange={(enabled) => void changeAuto(enabled)}
+                  fsr4Build={config.fsr4Build}
+                  onEnableFsr4={config.enableFsr4}
                   onApply={config.setOptions}
                 />
                 <PanelSection>
@@ -418,7 +420,7 @@ export function GameDetail({
                 sections={tab.sections}
                 blurb={tab.blurb}
                 values={config.values}
-                disabled={config.loading}
+                disabled={config.loading || config.saving}
                 onChange={config.setOption}
                 onResetSection={config.resetSection}
               />

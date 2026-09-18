@@ -3,62 +3,22 @@
 Newest first. Each release ships `Decky OptiScaler.zip` for Decky Loader's
 *Install from URL* (Developer mode), and bundles **OptiScaler 0.9.4**.
 
-## [Unreleased]
+## [0.0.7-steamdeck.1] - 2026-09-17
 
 ### Added
 
-- **The FSR 4 upscaler build can be swapped without leaving the plugin.** The
-  release carries AMD's 4.1.1 SDK build; the Setup tab now offers the community
-  INT8 builds for RDNA 2 — 4.1.1b, whose release describes itself as "modified
-  for fixing RDNA2 ghosting issues", plus 4.0.2d and 4.0.2c, the last being the
-  one the OptiScaler Client points those users at. They come from the mod's own
-  releases (`the3rdparty1917/fsr4xyz`; the OptiScaler-Extras mirror carries the
-  same DLLs in larger packages — both were downloaded and compared, byte for
-  byte). A build is downloaded only when it is picked, the archive is checked
-  against the hash GitHub publishes for it and the DLL inside it against a hash
-  this plugin pins, and the panel names the release it came from. "Restore the
-  bundled build" puts the released one back, as do a reinstall and an uninstall.
-- The panel says what these are: modified game DLLs, redistributed by hand, so
-  best kept away from anything with anti-cheat, and not AMD's implementation —
-  FSR 4 on RDNA 2 is unofficial until AMD ships it.
-- The build is identified by its **hash rather than its version**: the modelled
-  4.1.1b reports 4.1.1.2740, exactly what the released SDK reports, so a version
-  string cannot tell them apart. A file that matches nothing this plugin pins is
-  reported as an unrecognised build — with its hash — instead of passing as the
-  released one.
-- Which setting reaches FSR 4 follows the build as well as the GPU. OptiScaler's
-  menu offers FSR 4 off the INT8 override only when the local upscaler is 4.1.1
-  or newer, so with a 4.0.2 build in place the INT8 preset is not offered and
-  asking for an FSR 4 version writes the FSR upgrade path instead.
-- FSR 4 on RDNA 2 (Steam Deck / Van Gogh). OptiScaler 0.9.4 reaches it through
-  `Fsr4ForceEnableInt8`, the override its release notes describe as being for
-  "FSR4 incompatible GPUs", so Basic mode offers an **FSR 4 INT8 (experimental)**
-  preset instead of refusing the upscaler on that hardware. It writes the
-  override and the FSR 4 version, and deliberately leaves `Fsr4Update` alone:
-  those same notes say setting it on an unsupported GPU forces FP8 and
-  OptiScaler answers with its internal FSR 3 fallback. The override is read
-  while the upscaler is created, so the panel says it takes effect on the next
-  launch rather than offering the live switch it cannot honour, and the Setup
-  tab says to confirm it with the overlay's FSR watermark (FSR4-I8, not FSR3).
+- **FSR 4.1.1b — Steam Deck** in the Basic upscaler dropdown. Downloads the pinned
+  community RDNA2 upscaler and applies INT8 settings together while the game is
+  stopped. Frame generation is unchanged. Setup identifies the installed build
+  and offers restoration of the bundled SDK.
 
 ### Fixed
 
-- The FSR4 preset only offered 0 and 2. The reference ini writes those six
-  entries as a single comma-separated list, which the schema generator read as
-  two entries with the rest buried inside their labels, so "1", "3", "4" and
-  "5" — the Quality and Performance models among them — were refused by the
-  config writer and never reached the file.
-- Asking for an FSR 4 version from the FSR 3.X backend wrote `Fsr4Update=true`
-  even on a device whose FSR 4 runs through the INT8 override. The version is
-  recorded, the upgrade path is left where it was, and the panel points at the
-  preset that actually makes FSR 4 reachable.
-- Choosing XeSS, DLSS or FSR 2.2.1 no longer clears the INT8 override on the way
-  past. Only the presets that make a claim about FSR 4 touch it.
-
-### Changed
-
-- RDNA 2 reads as `experimental` rather than `unsupported` in the GPU verdict,
-  and the notice that called FSR 4 impossible there is gone.
+- Verification recognizes the selected community DLL by hash; reinstall preserves it.
+- DLL replacements use atomic file replacement with rollback on errors and reject
+  unmanaged installs or games detected running.
+- The schema offers all six FSR4 quality presets from the reference INI.
+- Selecting an FSR version on RDNA2 no longer forces the incompatible upgrade path.
 
 ## [0.0.6] - 2026-08-28
 

@@ -524,7 +524,7 @@ async function render(name: string, element: React.ReactElement) {
   // The Deck's own row: FSR 4 here is the INT8 override, so the panel has to
   // offer it rather than hide the upscaler entirely. What choosing it does is
   // asserted in live-fields.tsx, which can drive the control.
-  console.log(`  RDNA 2 is offered the INT8 preset: ${gd.host.textContent!.includes("FSR 4 INT8 (experimental)")}`);
+  console.log(`  RDNA 2 is offered the INT8 preset: ${gd.host.textContent!.includes("FSR 4.1.1b — Steam Deck")}`);
   // Driving the running game is the Quick Access panel's job; this page is for
   // setting a game up, so it must not offer the live switch at all.
   console.log(`  settings tab has no live upscaler switch: ${!gd.host.textContent!.includes("Switch now")}`);
@@ -606,12 +606,8 @@ async function render(name: string, element: React.ReactElement) {
   // version the released SDK reports.
   console.log(`  the FSR 4 build in the folder is named: ${
     manualText.includes("Bundled (FidelityFX SDK 4.1.1)")}`);
-  console.log(`  and identified by its hash: ${manualText.includes("Its hash")}`);
-  console.log(`  the pinned builds are offered to download: ${
-    ["4.1.1b (INT8, RDNA 2 ghosting fix)", "4.0.2c (INT8, RDNA 2 fix)"].every((n) => manualText.includes(n))}`);
-  console.log(`  and the source and the anti-cheat warning are on the panel: ${
-    manualText.includes("the3rdparty1917/fsr4xyz") &&
-    manualText.includes("anti-cheat")}`);
+  console.log(`  Setup directs users to the combined Deck preset: ${manualText.includes("FSR 4.1.1b — Steam Deck")}`);
+  console.log(`  older community builds are not offered: ${!manualText.includes("Use 4.0.2")}`);
   console.log(`  the launch options are spelled out there: ${
     manualText.includes("WINEDLLOVERRIDES")}`);
   // "The plugin cannot read them" and "they are empty" look identical from the
@@ -624,7 +620,7 @@ async function render(name: string, element: React.ReactElement) {
   console.log(`  legacy ini warning shown: ${manualText.includes("FGType")}`);
   console.log(`  backup folder mentioned: ${
     manualText.includes("decky_optiscaler_backup_files")}`);
-  console.log(`  RDNA2 warning present: ${manualText.includes("RDNA 2")}`);
+  console.log(`  Deck setup guidance present: ${manualText.includes("Steam Deck")}`);
   // The manual panel is several screens long, so the way out is at both ends.
   console.log(`  the way back is at both ends of it: ${
     findAll(gd.host, '[data-back="setup"]').length === 2}`);

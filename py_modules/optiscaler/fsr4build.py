@@ -1,40 +1,7 @@
-"""The FSR 4 upscaler builds that are not the one OptiScaler ships.
+"""Fetch and identify the pinned community RDNA2 upscaler.
 
-The FidelityFX library inside the OptiScaler release is AMD's own 4.1.1 SDK
-build, and on a Deck it is enough: OptiScaler reaches RDNA 2 through the forced
-INT8 model, which that build supports. What it is not is *modelled* for those
-parts. The community builds that are come from ``the3rdparty1917/fsr4xyz`` —
-"FSR4 INT8 fixes for RDNA2", whose 4.1.1b release describes itself as
-"modified for fixing RDNA2 ghosting issues" — and the OptiScaler-Extras mirror
-carries the same files for the OptiScaler Client's FSR 4 Swap. Both were
-downloaded here and compared: the DLL is byte-identical from either host, so the
-table pins the *file* and only the download differs (3.5 MB against 20 MB).
-
-Three things about these packages shape this module.
-
-Each one holds exactly one file, ``amd_fidelityfx_upscaler_dx12.dll`` — the name
-the release's own SDK carries — so installing a build *replaces* that file
-inside the game folder rather than adding to it. The mod's own instruction is
-the same sentence: "just drop inside the game folder and replace existing
-``amd_fidelityfx_upscaler_dx12.dll``".
-
-**A version number cannot say which build is installed.** The modelled 4.1.1b
-reports 4.1.1.2740, exactly what the released SDK reports; reading the version
-would call the two the same. `identify()` hashes the file instead, and what the
-UI reports is that hash and the release it came from — never a version string
-two builds share.
-
-The version does decide something else: which setting gets FSR 4 running.
-OptiScaler offers its FSR 3.X/4 entry on the back of `Fsr4ForceEnableInt8` only
-when the local upscaler is 4.1.1 or newer (menu_common.cpp), so a 4.0.2 build is
-reached through `Fsr4Update` — the FSR 3 → FSR 4 upgrade path. Each entry carries
-the one that applies to it, because guessing wrong here means a game that offers
-neither.
-
-Nothing in here downloads anything on its own. The plugin works offline, and a
-build is fetched only when somebody picks one — which is also the point at which
-the panel says what these are: modified game DLLs, redistributed by hand, best
-kept away from anything with anti-cheat.
+Both archive and DLL hashes are verified. The DLL's version resource alone
+cannot distinguish community 4.1.1b from the bundled SDK.
 """
 
 import shutil

@@ -96,11 +96,21 @@ let liveBaseFps: number | null = 20.2;
 let liveTotalFps: number | null = 40.4;
 let liveCountedFps = 40.4;
 
+let installedFsr4Build = "bundled";
+let fsr4SetupFails = true;
 Object.assign(fixtures, {
   find_running_game: () => ({ found: true, appid: "1091500", detail }),
   get_auto_plan: { recommendation: { matched: false }, plan: { available: false } },
   get_pref: { key: "auto", value: null },
+  set_fsr4_build: () => {
+    if (fsr4SetupFails) return { ok: false, error: "Close the game before changing the FSR 4 build." };
+    installedFsr4Build = "4.1.1b";
+    setIni({ Upscalers: { Dx12Upscaler: "fsr31" },
+      FSR: { Fsr4ForceEnableInt8: "true", Fsr4Update: "auto", UpscalerIndex: "0" } });
+    return { ok: true };
+  },
   read_config: () => ({
+    fsr4_build: installedFsr4Build,
     ok: true, path: "/x/OptiScaler.ini",
     values: JSON.parse(JSON.stringify(ini)), modified: 1,
   }),
@@ -330,9 +340,9 @@ const tile = (host: Element, label: string) => {
   });
   await settle();
   check("the INT8 preset is the one recognised",
-    selected(host5, "Override upscaler with"), "fsr4-int8");
+    selected(host5, "Override upscaler with"), "manual-int8");
   check("and the panel says the override waits for a launch",
-    host5.textContent!.includes("takes effect on the next launch"), true);
+    host5.textContent!.includes("Manual INT8 settings"), true);
   await act(async () => {
     (all(control(host5, "Override upscaler with"),
       '[data-opt-value="fsr4-int8"]')[0] as HTMLElement).click();
@@ -340,6 +350,18 @@ const tile = (host: Element, label: string) => {
   await settle(200);
   check("picking it offers no switch that cannot apply it",
     host5.textContent!.includes("Switch now"), false);
+  check("a rejected setup reports the reason", host5.textContent!.includes("Close the game"), true);
+  check("a rejected setup does not claim the patched build", selected(host5, "Override upscaler with"), "manual-int8");
+  const fgBeforeSetup = JSON.stringify(ini.FrameGen);
+  fsr4SetupFails = false;
+  await act(async () => {
+    (all(control(host5, "Override upscaler with"), '[data-opt-value="fsr4-int8"]')[0] as HTMLElement).click();
+  });
+  await settle(200);
+  check("successful setup selects the patched preset", selected(host5, "Override upscaler with"), "fsr4-int8");
+  check("setup leaves frame generation alone", JSON.stringify(ini.FrameGen), fgBeforeSetup);
+  check("setup says next launch", host5.textContent!.includes("ready for the next launch"), true);
+
   await act(async () => root5.unmount());
   liveBackend = "fsr31";
   setIni({ FSR: { Fsr4ForceEnableInt8: "false", Fsr4Update: "false" } });
@@ -351,6 +373,7 @@ const tile = (host: Element, label: string) => {
   // before it will offer FSR 4 off the override, so on the same Deck the upgrade
   // path is what reaches it — the opposite of what the same click does with the
   // released 4.1.1 SDK in the folder.
+  installedFsr4Build = "bundled";
   detail.install.fsr4.ffx.version = "4.0.2.0";
   setIni({
     Upscalers: { Dx12Upscaler: "fsr31" },
@@ -368,8 +391,8 @@ const tile = (host: Element, label: string) => {
     );
   });
   await settle();
-  check("the INT8 preset is not offered with a build that cannot use it",
-    all(control(host6, "Override upscaler with"), '[data-opt-value="fsr4-int8"]').length, 0);
+  check("the Deck preset can replace an older DLL",
+    all(control(host6, "Override upscaler with"), '[data-opt-value="fsr4-int8"]').length, 1);
   await act(async () => {
     (all(control(host6, "FSR version"), '[data-opt-value="0"]')[0] as HTMLElement).click();
   });

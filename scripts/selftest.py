@@ -324,6 +324,7 @@ async def run():
         fake_build = dict(fsr4build.FSR4_BUILDS[0], file_sha256="0" * 64)
         fake = root / "fake-4.1.1b.dll"
         fake.write_bytes(b"NOT A REAL FSR4 DLL" * 1024)
+        fake_build["file_sha256"] = hashlib.sha256(fake.read_bytes()).hexdigest()
         installed = installer.install_fsr4_build(str(target), fake, fake_build, None)
         check("a build installs over the released one",
               installed["build"]["id"] == fake_build["id"], installed)

@@ -96,8 +96,8 @@ export const UPSCALER_PRESETS: Preset[] = [
   },
   {
     id: "fsr4-int8",
-    label: "FSR 4 INT8 (experimental)",
-    description: "Force the bundled FSR 4 INT8 upscaler on Steam Deck / RDNA 2. Restart the game to apply. Frame generation is configured separately.",
+    label: "FSR 4.1.1b — Steam Deck",
+    description: "Downloads the community RDNA2 ghosting fix and enables INT8 upscaling. Close the game first.",
     changes: [
       change("Upscalers", "Dx12Upscaler", "fsr31"),
       change("Upscalers", "Dx11Upscaler", "fsr31_12"),
@@ -110,6 +110,7 @@ export const UPSCALER_PRESETS: Preset[] = [
       change("FSR", "Fsr4Update", AUTO),
       change("FSR", "Fsr4ForceEnableInt8", "true"),
       change("FSR", "UpscalerIndex", "0"),
+      change("FSR", "Fsr4Preset", AUTO),
     ],
     matches: (values) =>
       get(values, "Upscalers", "Dx12Upscaler") === "fsr31" &&

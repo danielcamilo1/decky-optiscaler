@@ -129,6 +129,7 @@ export function NowPlaying({
         <Centered>Reading config…</Centered>
       ) : (
         <BasicPanel
+          disabled={config.saving}
           values={config.values}
           gpu={detail!.gpu}
           live={live}
@@ -136,6 +137,8 @@ export function NowPlaying({
           plan={plan}
           auto={auto}
           onLiveChanged={() => void refresh()}
+          fsr4Build={config.fsr4Build}
+          onEnableFsr4={config.enableFsr4}
           onApply={config.setOptions}
         />
       )}

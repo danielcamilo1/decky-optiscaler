@@ -211,6 +211,7 @@ function NowPlayingTab({
             <Centered>Reading config…</Centered>
           ) : (
             <BasicPanel
+              disabled={config.saving}
               values={config.values}
               gpu={detail.gpu}
               live={live}
@@ -220,6 +221,8 @@ function NowPlayingTab({
               auto={auto}
               compact
               onLiveChanged={() => void refreshLive()}
+              fsr4Build={config.fsr4Build}
+              onEnableFsr4={config.enableFsr4}
               onApply={config.setOptions}
             />
           )}

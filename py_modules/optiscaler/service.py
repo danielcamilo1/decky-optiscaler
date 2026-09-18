@@ -43,6 +43,7 @@ class OptiScalerService:
             self.plugin_dir / "defaults" / "compat-list.json",
         )
         self._payload_lock = asyncio.Lock()
+        self._mutation_lock = asyncio.Lock()
         # Background wiki refreshes in flight, by key. Answers come from cache
         # and the network never sits in front of one; this is what keeps the
         # cache current behind them, single-flight so a page opened three times
@@ -454,35 +455,33 @@ class OptiScalerService:
         return await self._run(work)
 
     async def set_fsr4_build(self, target_dir, build_id):
-        """Download a pinned FSR 4 build and put it in the game folder.
-
-        Both hashes are checked on the way — the archive against GitHub's own
-        digest for the asset, and the DLL that comes out of it against this
-        plugin's — so a mirror that has been tampered with, or a download that
-        was cut short, is refused rather than installed.
-        """
+        """Enable the pinned community upscaler and INT8 settings together."""
         try:
-            build = fsr4build.find(build_id)
-            if not build:
-                return {"ok": False, "error": f"unknown FSR 4 build: {build_id}"}
-            dll = await self._run(fsr4build.fetch, build, self.fsr4_build_cache(), self.log)
-            result = await self._run(
-                installer.install_fsr4_build, target_dir, dll, build, self.log
-            )
+            if build_id != "4.1.1b":
+                raise ValueError("Unsupported Steam Deck FSR 4 build")
+            async with self._mutation_lock:
+                await self._run(installer.require_stopped_install, target_dir)
+                build = fsr4build.find(build_id)
+                dll = await self._run(fsr4build.fetch, build, self.fsr4_build_cache(), self.log)
+                # Installer checks again: the game may have started during download.
+                result = await self._run(
+                    installer.install_fsr4_build, target_dir, dll, build, self.log, True
+                )
             return {"ok": True, **result}
         except Exception as exc:
-            self.log.exception("FSR 4 build install failed for %s", target_dir)
+            self.log.exception("FSR 4 setup failed for %s", target_dir)
             return {"ok": False, "error": str(exc)}
 
     async def restore_fsr4_build(self, target_dir):
-        """Put the build that ships with OptiScaler back."""
         try:
             payload_root = await self.ensure_payload()
-            return {"ok": True, **await self._run(
-                installer.restore_fsr4_build, target_dir, payload_root, self.log
-            )}
+            async with self._mutation_lock:
+                result = await self._run(
+                    installer.restore_fsr4_build, target_dir, payload_root, self.log
+                )
+            return {"ok": True, **result}
         except Exception as exc:
-            self.log.exception("FSR 4 build restore failed for %s", target_dir)
+            self.log.exception("FSR 4 restore failed for %s", target_dir)
             return {"ok": False, "error": str(exc)}
 
     async def import_fsr4_files(self, target_dir, source_dir):
@@ -693,12 +692,13 @@ class OptiScalerService:
                 ref_result["error"] = str(exc)
         try:
             payload_root = await self.ensure_payload()
-            result = await self._run(
-                installer.install, target_dir, payload_root, filename, preserve_ini,
-                self.log, self.live_asi_path(),
-                self.optipatcher_path() if optipatcher else None,
-                ref_files, ref_revision,
-            )
+            async with self._mutation_lock:
+                result = await self._run(
+                    installer.install, target_dir, payload_root, filename, preserve_ini,
+                    self.log, self.live_asi_path(),
+                    self.optipatcher_path() if optipatcher else None,
+                    ref_files, ref_revision,
+                )
             if ref_result["required"]:
                 installed = result.get("reframework", {})
                 ref_result["installed"] = bool(installed.get("installed"))
@@ -724,7 +724,8 @@ class OptiScalerService:
 
     async def uninstall(self, target_dir, remove_ini=True):
         try:
-            result = await self._run(installer.uninstall, target_dir, remove_ini, self.log)
+            async with self._mutation_lock:
+                result = await self._run(installer.uninstall, target_dir, remove_ini, self.log)
             return {"ok": True, **result}
         except Exception as exc:
             self.log.exception("uninstall failed for %s", target_dir)
@@ -741,6 +742,7 @@ class OptiScalerService:
                 "path": str(path),
                 "values": IniFile(path).to_dict(),
                 "modified": path.stat().st_mtime,
+                "fsr4_build": (fsr4build.identify(path.parent / installer.FFX_UPSCALER_DLL) or {}).get("id"),
             }
 
         return await self._run(work)
@@ -777,7 +779,8 @@ class OptiScalerService:
             return {"ok": True, "applied": applied, "rejected": rejected,
                     "written_at": time.time()}
 
-        result = await self._run(work)
+        async with self._mutation_lock:
+            result = await self._run(work)
 
         # The INI is the record of intent, but OptiScaler only reads it at
         # startup. If the live-control plugin is attached, push the same change
@@ -810,7 +813,8 @@ class OptiScalerService:
                 shutil.copy2(payload_root / INI_NAME, destination)
                 return {"ok": True, "path": str(destination)}
 
-            return await self._run(work)
+            async with self._mutation_lock:
+                return await self._run(work)
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
