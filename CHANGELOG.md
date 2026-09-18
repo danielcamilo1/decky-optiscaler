@@ -5,20 +5,51 @@ Newest first. Each release ships `Decky OptiScaler.zip` for Decky Loader's
 
 ## [Unreleased]
 
+## [0.0.7] - 2026-09-18
+
+FSR 4 on the Steam Deck, and the compatibility list is whole again.
+
 ### Added
 
-- **FSR 4.1.1b — Steam Deck** in the Basic upscaler dropdown. Downloads the pinned
-  community RDNA2 upscaler and applies INT8 settings together while the game is
-  stopped. Frame generation is unchanged. Setup identifies the installed build
-  and offers restoration of the bundled SDK.
+- **FSR 4.1.1b — Steam Deck**, in the Basic upscaler dropdown. One choice
+  downloads the community RDNA 2 build of the FidelityFX upscaler, checks it
+  against a hash pinned in the plugin, puts it next to the game and switches on
+  the INT8 override that reaches FSR 4 on RDNA 2. Close the game first; it
+  applies on the next launch. Frame generation is left exactly as it was.
+  Thanks to [@drewboardman](https://github.com/drewboardman), who built this and
+  tested it on a Deck.
+- Setup names which upscaler build is in the game folder, identified by its bytes
+  rather than its version — the community build reports the same 4.1.1 the
+  released SDK does — and will put the bundled one back.
 
 ### Fixed
 
-- Verification recognizes the selected community DLL by hash; reinstall preserves it.
-- DLL replacements use atomic file replacement with rollback on errors and reject
-  unmanaged installs or games detected running.
-- The schema offers all six FSR4 quality presets from the reference INI.
-- Selecting an FSR version on RDNA2 no longer forces the incompatible upgrade path.
+- **297 of the 695 games on the compatibility list were answering "no wiki entry
+  matched".** One row on the wiki was saved without its leading `|`, which the
+  parser read as the end of the table, so everything after Metro Exodus was
+  invisible: Monster Hunter Wilds, the Resident Evil entries, Stalker 2, The
+  Witcher 3 and 293 others. A row that lost its first character is now read as
+  the row it is. Bundled list regenerated — 698 entries.
+- Games listed under *Upscaler mods support* and *Luma Unreal Engine* no longer
+  claim OptiPatcher support they do not have, and their notes are their notes
+  rather than the images column. Those two tables have one column fewer than the
+  main one, and were being read as though they did not.
+- The refreshed list adds Onimusha: Way of the Sword to the games that need
+  REFramework in place before OptiScaler can do anything.
+- All six FSR 4 quality presets are offered. The reference INI writes them as one
+  comma-separated line, of which two were being read, so Quality, Performance,
+  DRS and Ultra Performance were rejected by the settings writer and never
+  reached the file.
+- Choosing an FSR version on RDNA 2 no longer turns on the FSR 4 upgrade path.
+  That path forces the FP8 model, which such a GPU does not have, and OptiScaler
+  answers with a silent FSR 3 fallback.
+- Verification recognises a community upscaler by hash, and reinstalling keeps it
+  instead of overwriting it with the bundled build.
+- Replacing the upscaler is atomic and rolls back the DLL, the INI and the
+  manifest together if any part of it fails. It refuses while the game is
+  running, and on an install this plugin did not make.
+
+[0.0.7]: https://github.com/danielcamilo1/decky-optiscaler/releases/tag/v0.0.7
 
 ## [0.0.6] - 2026-08-28
 
