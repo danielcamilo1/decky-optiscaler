@@ -277,20 +277,94 @@ def normalize(name):
 
 
 def _split_row(line):
-    m = ROW_RE.match(line.strip())
-    if not m:
+    line = line.strip()
+    match = ROW_RE.match(line)
+    if not match and _lost_its_leading_pipe(line):
+        match = ROW_RE.match("|" + line)
+    if not match:
         return None
-    return [c.strip() for c in m.group(1).split("|")]
+    return [c.strip() for c in match.group(1).split("|")]
+
+
+def _lost_its_leading_pipe(line):
+    """Whether a line is a table row that was saved without its first pipe.
+
+    The compatibility list is edited by hand through GitHub's wiki, and on
+    16 September 2026 one entry — Metro Exodus: Enhanced Edition — went in
+    without it. Markdown renders that one line as prose and closes the table
+    over the gap, so there is nothing on the page to notice. A parser that
+    reads the missing character as the end of the table drops every row after
+    it instead: 297 of the 695 games, reported to the user one at a time as
+    "no wiki entry matched", and the same 297 baked into the next bundled seed.
+
+    Deliberately narrow. The line still has to end the way a row ends and carry
+    enough separators to be one, because prose is allowed to contain a pipe.
+    """
+    return (
+        bool(line)
+        and not line.startswith("|")
+        and line.endswith("|")
+        and line.count("|") >= 3
+    )
+
+
+#: What a compatibility table's header calls each column, lowercased and
+#: matched by substring. The page holds three tables and they do not share a
+#: shape: the main one has an OptiPatcher column, and the two mod tables —
+#: "Upscaler mods support" and "Luma Unreal Engine" — do not. Reading position
+#: three as OptiPatcher there marked every game carrying a note as
+#: OptiPatcher-supported, and printed the images cell as its notes.
+COLUMN_ALIASES = (
+    ("name", ("game",)),
+    ("compatibility", ("compatibility",)),
+    ("inputs", ("input",)),
+    ("optipatcher", ("optipatcher",)),
+    ("notes", ("note",)),
+)
+
+#: Where each column sits when the header named none of them — the main
+#: table's own order, which is what every row was read as before.
+DEFAULT_COLUMNS = {
+    "name": 0, "compatibility": 1, "inputs": 2, "optipatcher": 3, "notes": 4,
+}
+
+
+def _columns(header_cells):
+    """Which column holds what, read from the table's own header row.
+
+    A header that named anything is trusted for everything: a column it did not
+    name is a column that table does not have, which is the whole point — the
+    mod tables have no OptiPatcher column and must not be read as though the
+    fourth cell were one.
+    """
+    found = {}
+    for position, cell in enumerate(header_cells):
+        label = re.sub(r"<[^>]+>", " ", cell).strip().lower()
+        for field, aliases in COLUMN_ALIASES:
+            if field not in found and any(alias in label for alias in aliases):
+                found[field] = position
+                break
+    return found or dict(DEFAULT_COLUMNS)
+
+
+def _cell(cells, columns, field):
+    """One named column of a row, or "" when this table has no such column."""
+    position = columns.get(field)
+    if position is None or position >= len(cells):
+        return ""
+    return cells[position]
 
 
 def parse_compat_list(markdown):
     """Parse the compatibility table into structured entries."""
     entries = []
     in_table = False
+    columns = dict(DEFAULT_COLUMNS)
     for raw in markdown.splitlines():
         line = raw.strip()
         if line.startswith("|") and "Game" in line and "Compatibility" in line:
             in_table = True
+            columns = _columns(_split_row(line) or [])
             continue
         if not in_table:
             continue
@@ -302,7 +376,7 @@ def parse_compat_list(markdown):
                 in_table = False
             continue
 
-        name_cell = cells[0]
+        name_cell = _cell(cells, columns, "name") or cells[0]
         page = None
         link = LINK_RE.search(name_cell)
         if link:
@@ -320,10 +394,10 @@ def parse_compat_list(markdown):
                 "name": name,
                 "key": normalize(name),
                 "page": page,
-                "compatibility": cells[1] if len(cells) > 1 else "",
-                "inputs": cells[2] if len(cells) > 2 else "",
-                "optipatcher": bool(cells[3].strip()) if len(cells) > 3 else False,
-                "notes": cells[4] if len(cells) > 4 else "",
+                "compatibility": _cell(cells, columns, "compatibility"),
+                "inputs": _cell(cells, columns, "inputs"),
+                "optipatcher": bool(_cell(cells, columns, "optipatcher").strip()),
+                "notes": _cell(cells, columns, "notes"),
             }
         )
     return entries

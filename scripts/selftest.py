@@ -127,7 +127,15 @@ async def run():
 
         print("\nWiki name matching")
         from optiscaler.wiki import WikiClient  # noqa: E402
-        wiki = WikiClient(root / "runtime" / "wiki-cache")
+        # Against the bundled seed rather than whatever the wiki serves today.
+        # With no seed this fell through to a synchronous download, so the
+        # matcher was being graded on a page a few hundred people can edit:
+        # when one row lost its leading pipe upstream, two of these probes
+        # started failing and the build went red on a commit that had not
+        # touched the matcher. What the live page does to the *parser* is
+        # check_compat_list_shapes()'s business, from a fixture.
+        wiki = WikiClient(root / "runtime" / "wiki-cache",
+                          ROOT / "defaults" / "compat-list.json")
         wiki_entries, wiki_meta = wiki.load_entries()
         if not wiki_entries:
             print("  (offline — skipped)")
@@ -2286,15 +2294,17 @@ def check_reframework():
             found[entry["name"]] = ref["variant"]
     check("the whole bundled list yields exactly the entries that ask for it",
           sorted(found) == [
-              "Devil May Cry 5", "Monster Hunter Wilds", "PRAGMATA",
+              "Devil May Cry 5", "Monster Hunter Wilds",
+              "Onimusha: Way of the Sword", "PRAGMATA",
               "Resident Evil 2 (2019)", "Resident Evil 3 (2020)",
               "Resident Evil 4 (2023)", "Resident Evil 7 Biohazard",
               "Resident Evil 8 Village", "Resident Evil 9 Requiem",
           ], sorted(found))
     check("with the right build for each",
           [found[name] for name in sorted(found)] ==
-          ["pd-upscaler", "nightly", "nightly", "pd-upscaler", "pd-upscaler",
-           "pd-upscaler", "pd-upscaler", "pd-upscaler", "nightly"], found)
+          ["pd-upscaler", "nightly", "nightly", "nightly", "pd-upscaler",
+           "pd-upscaler", "pd-upscaler", "pd-upscaler", "pd-upscaler",
+           "nightly"], found)
     # The asset is what the checklist names when it sends somebody to fetch
     # the file, so it has to resolve whether or not the download is on.
     check("and every one of them resolves to a named build",
@@ -2449,6 +2459,71 @@ def check_parenthesised_pages():
                  if e["page"] and e["page"].count("(") != e["page"].count(")")]
     check("the bundled seed has no half-a-bracket page names left",
           not truncated, truncated)
+
+
+def check_compat_list_shapes():
+    """The compatibility list is hand-edited prose, and its shape moves.
+
+    Two things went wrong on the same page, and neither is visible in a browser:
+
+    A row saved without its leading pipe ended the table for the parser, which
+    dropped every row after it — 297 of 695 games, each reported to the user as
+    "no wiki entry matched". GitHub renders that line as prose and closes the
+    table over the gap, so the page looks right and the plugin quietly forgets
+    40% of the list.
+
+    And the page holds three tables, not one: the main table has an OptiPatcher
+    column, while "Upscaler mods support" and "Luma Unreal Engine" do not. Read
+    by position, their notes column was taken for OptiPatcher support — every
+    such game claimed the patcher — and their images column was served to the
+    user, and to the plan builder, as the entry's notes.
+    """
+    from optiscaler import wiki as wiki_mod
+
+    print("\nCompatibility list shapes")
+    markdown = (
+        "| Game | Compatibility | Upscaler <br>Inputs | OptiPatcher <br>Support"
+        " | Notes | Images |\n"
+        "| ---- | :---: | :---: | :---: | ---- | :---: |\n"
+        "| [Alpha](Alpha) | \u2705 | DLSS | \u2728 | Needs -dx12 | [1](u) |\n"
+        "[Bravo](Bravo) | \u2705 | DLSS |  | Saved without its first pipe | [1](u) |\n"
+        "| [Charlie](Charlie) | \u2705 | XeSS |  | After the broken row | [1](u) |\n"
+        "\n"
+        "## Upscaler mods support\n"
+        "\n"
+        "| Game | Compatibility | Upscaler <br>Inputs | Notes  | Images |\n"
+        "| ---- | :---: | :---: | ---- | :---: |\n"
+        "| [Delta](Delta) | \u2705 | DLSS | Requires a mod | [1](u) |\n"
+    )
+    entries = {e["name"]: e for e in wiki_mod.parse_compat_list(markdown)}
+
+    check("a row that lost its leading pipe is still read", "Bravo" in entries)
+    check("and it does not take the rest of the table with it", "Charlie" in entries)
+    check("the recovered row keeps its own columns",
+          entries.get("Bravo", {}).get("notes") == "Saved without its first pipe",
+          entries.get("Bravo", {}).get("notes"))
+    check("a table with no OptiPatcher column claims none",
+          entries["Delta"]["optipatcher"] is False)
+    check("and its notes are its notes, not its images",
+          entries["Delta"]["notes"] == "Requires a mod", entries["Delta"]["notes"])
+    check("while the main table still reads the patcher column",
+          entries["Alpha"]["optipatcher"] is True and entries["Bravo"]["optipatcher"] is False)
+
+    # Prose is allowed to contain a pipe; only something shaped like a row is
+    # recovered as one.
+    prose = (
+        "| Game | Compatibility |\n|---|---|\n| [Echo](Echo) | \u2705 |\n"
+        "See the table above | it explains the columns\n"
+        "| [Foxtrot](Foxtrot) | \u2705 |\n"
+    )
+    names = [e["name"] for e in wiki_mod.parse_compat_list(prose)]
+    check("a sentence carrying a pipe is not read as a row", names == ["Echo"], names)
+
+    seed = json.loads((ROOT / "defaults" / "compat-list.json").read_text())
+    # The seed is regenerated per release, and a truncated one is how this
+    # reaches a Deck that is offline: the list it falls back to is this file.
+    check("the bundled seed is the whole list, not a truncated one",
+          len(seed["entries"]) > 600, len(seed["entries"]))
 
 
 def check_library_labels():
@@ -2621,6 +2696,7 @@ def main():
     check_reframework()
     check_prose_is_not_a_specification()
     check_parenthesised_pages()
+    check_compat_list_shapes()
     check_option_validation()
     check_library_labels()
     print(f"\n{len(PASSED)} passed, {len(FAILED)} failed")

@@ -515,7 +515,10 @@ async function render(name: string, element: React.ReactElement) {
   // Driving the running game is the Quick Access panel's job; this page is for
   // setting a game up, so it must not offer the live switch at all.
   console.log(`  settings tab has no live upscaler switch: ${!gd.host.textContent!.includes("Switch now")}`);
-  console.log(`  settings tab drops the hotkey advice: ${!gd.host.textContent!.includes("in game")}`);
+  // "not Insert" rather than "in game": the hotkey notice is the only thing on
+  // the page that names the key it moved away from, and the looser phrase
+  // matched any copy that happened to mention doing something "in games".
+  console.log(`  settings tab drops the hotkey advice: ${!gd.host.textContent!.includes("not Insert")}`);
   console.log(`  basic FG methods named as OptiScaler names them: ${["FSR FG", "XeFG", "DLSSG via Streamline"].every((n) => gd.host.textContent!.includes(n))}`);
   console.log(`  no invented FG name for DLSSG: ${!gd.host.textContent!.includes("DLSS Frame Generation")}`);
   {
@@ -953,7 +956,7 @@ async function render(name: string, element: React.ReactElement) {
   console.log(`  FidelityFX version surfaced: ${gd.host.textContent!.includes("4.1.1.2740")}`);
   // Nothing to say about live control when it is not connected and the game is
   // not being driven from here: the failure notice above is the whole message.
-  console.log(`  no hotkey advice when disconnected: ${!offlineText.includes("in game")}`);
+  console.log(`  no hotkey advice when disconnected: ${!offlineText.includes("not Insert")}`);
 
   // The Basic/Advanced switch: reachable with the D-pad means it has to be one
   // of Steam's own buttons, and it names both modes so the other one is on
