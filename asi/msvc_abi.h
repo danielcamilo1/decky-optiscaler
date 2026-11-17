@@ -98,6 +98,11 @@ template <class T> struct CustomOptional {
         base.engaged = true;
         isVolatile = false;
     }
+
+    // OptiScaler's CustomOptional::reset() clears only the base optional's
+    // engaged flag. The saved value/default and volatile/configIni members
+    // remain untouched.
+    void reset() { base.engaged = false; }
 };
 
 // std::vector<T> on MSVC: three pointers.
@@ -112,6 +117,7 @@ struct msvc_vector_raw {
 // two deques in State are only skipped over to reach the frame times declared
 // after them -- so the block layout does not matter, only the size.
 struct msvc_deque_raw {
+    void* container_proxy; // PDB: _Deque_val prefix; iterator debugging storage.
     void* map;
     size_t mapsize;
     size_t offset;

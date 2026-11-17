@@ -9,12 +9,18 @@ import { TABS, UNGROUPED_SECTIONS, optionsInSection } from "../src/config/tabs";
 import type { ConfigValues } from "../src/types";
 
 const errors: string[] = [];
+const failedChecks: string[] = [];
 const original = console.error;
 console.error = (...a: any[]) => {
   const text = a.map(String).join(" ");
   if (!text.includes("not wrapped in act") && !text.includes("ReactDOMTestUtils.act")) errors.push(text);
   original(...a);
 };
+
+function check(label: string, ok: boolean) {
+  if (!ok) failedChecks.push(label);
+  console.log(`  ${ok ? "[ok]" : "[FAIL]"} ${label}`);
+}
 
 // Every option unset ("auto") plus a second pass with explicit values.
 const autoValues: ConfigValues = {};
@@ -38,10 +44,16 @@ for (const o of GENERATED_OPTIONS) {
   const missing = [...all].filter((s) => !covered.has(s));
   console.log(`sections: ${all.size} total, ${covered.size} on tabs`);
   console.log(`ungrouped (not shown anywhere): ${missing.length ? missing.join(", ") : "none"}`);
-  console.log(`UNGROUPED_SECTIONS export agrees: ${JSON.stringify(UNGROUPED_SECTIONS) === JSON.stringify(missing)}`);
-  let optionsOnTabs = 0;
-  for (const t of TABS) for (const s of t.sections) optionsOnTabs += optionsInSection(s).length;
+  check("every generated section is reachable through a tab", missing.length === 0);
+  check("UNGROUPED_SECTIONS export agrees with actual tab coverage",
+    JSON.stringify(UNGROUPED_SECTIONS) === JSON.stringify(missing));
+  const tabOptionIds = TABS.flatMap((t) => t.sections.flatMap((s) =>
+    optionsInSection(s).map((o) => `${o.section}.${o.key}`)));
+  const optionsOnTabs = tabOptionIds.length;
   console.log(`options reachable through tabs: ${optionsOnTabs} / ${GENERATED_OPTIONS.length}`);
+  check("every generated option is reachable exactly once",
+    optionsOnTabs === GENERATED_OPTIONS.length &&
+      new Set(tabOptionIds).size === GENERATED_OPTIONS.length);
 
   // 2. Render every control, in both states
   for (const [name, values] of [["auto", autoValues], ["explicit", setValues]] as const) {
@@ -65,6 +77,8 @@ for (const o of GENERATED_OPTIONS) {
     });
     const rendered = host.querySelectorAll("[data-mock]").length;
     console.log(`  [${name}] rendered ${rendered} controls for ${GENERATED_OPTIONS.length} options`);
+    check(`[${name}] renders one control for every generated option`,
+      rendered === GENERATED_OPTIONS.length);
     root.unmount();
   }
 
@@ -78,14 +92,19 @@ for (const o of GENERATED_OPTIONS) {
     }
   }
   console.log(`enum sanity: ${badEnum} broken`);
+  check("every enum has at least one selectable value", badEnum === 0);
 
   // 4. Sliders need a sane range
   const badRange = GENERATED_OPTIONS.filter(
     (o) => (o.type === "int" || o.type === "float") && o.min !== undefined && o.max !== undefined && o.min >= o.max
   );
   console.log(`numeric ranges inverted: ${badRange.length}`);
+  check("numeric options have increasing ranges", badRange.length === 0);
 
   console.log(`\nreal React errors: ${errors.length}`);
   errors.slice(0, 10).forEach((e) => console.log("  ! " + e.slice(0, 250)));
-  process.exit(errors.length ? 1 : 0);
+  if (failedChecks.length) {
+    console.log(`\n${failedChecks.length} behavior check(s) failed: ${failedChecks.join("; ")}`);
+  }
+  process.exit(errors.length || failedChecks.length ? 1 : 0);
 })();

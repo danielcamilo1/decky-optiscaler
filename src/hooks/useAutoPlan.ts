@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getAutoPlan, getWikiStatus, setAutoMode } from "../api";
+import { getAutoPlan, getWikiStatus } from "../api";
 import type { AutoPlan, Recommendation } from "../types";
 
 /** How long to keep watching for a background refresh, and how often. */
@@ -64,15 +64,26 @@ export function useAutoPlan(
   const reloadedFor = useRef(new Set<string>());
   /** Which target the current answers belong to, so a refresh is not a load. */
   const loadedTarget = useRef<string | null>(null);
+  const activePath = useRef(gamePath);
+  activePath.current = gamePath;
+  const requestSequence = useRef(0);
+  const answerIdentity = `${gamePath ?? ""}\u0000${gameName ?? ""}\u0000${enabled}`;
+  const activeIdentity = useRef(answerIdentity);
+  activeIdentity.current = answerIdentity;
+  const previousIdentity = useRef(answerIdentity);
 
   const load = useCallback(
     async (force = false) => {
       if (!gamePath || !enabled) {
+        requestSequence.current += 1;
         setPlan(null);
         setRecommendation(null);
         loadedTarget.current = null;
         return;
       }
+      const request = ++requestSequence.current;
+      const requestPath = gamePath;
+      const requestIdentity = answerIdentity;
       if (loadedTarget.current !== gamePath) reloadedFor.current.clear();
       // Only the first answer for a game is a wait worth showing. A refresh
       // behind an answer already on screen is not: raising `loading` for one
@@ -90,6 +101,8 @@ export function useAutoPlan(
         // Setup tab has always used.
         const folder = gamePath.split("/").filter(Boolean).pop() ?? gameName ?? "";
         const result = await getAutoPlan(gameName ?? folder, [folder], force, gamePath);
+        if (activePath.current !== requestPath || activeIdentity.current !== requestIdentity ||
+          requestSequence.current !== request) return;
         setPlan(result.plan);
         setRecommendation(result.recommendation);
         setAuto(Boolean(result.plan.enabled));
@@ -103,6 +116,8 @@ export function useAutoPlan(
           Boolean(meta?.stale) || Boolean(result.recommendation?.detail_pending)
         );
       } catch {
+        if (activePath.current !== requestPath || activeIdentity.current !== requestIdentity ||
+          requestSequence.current !== request) return;
         // A wiki lookup that fails is not an error the user can act on here;
         // the Setup tab reports it in full, and everything else simply carries
         // on without an automatic option.
@@ -111,15 +126,31 @@ export function useAutoPlan(
         setWatching(false);
       } finally {
         window.clearTimeout(giveUp);
-        setLoading(false);
+        if (activePath.current === requestPath && activeIdentity.current === requestIdentity &&
+          requestSequence.current === request) {
+          setLoading(false);
+        }
       }
     },
-    [gamePath, gameName, enabled]
+    [gamePath, gameName, enabled, answerIdentity]
   );
 
   useEffect(() => {
     reload.current = load;
   }, [load]);
+
+  // A new target has no right to display the previous game's answer while its
+  // own cached lookup is pending.
+  useEffect(() => {
+    if (previousIdentity.current === answerIdentity) return;
+    previousIdentity.current = answerIdentity;
+    setPlan(null);
+    setRecommendation(null);
+    setAuto(false);
+    setRevision(null);
+    setWatching(false);
+    loadedTarget.current = null;
+  }, [answerIdentity]);
 
   useEffect(() => {
     void load(false);
@@ -168,20 +199,11 @@ export function useAutoPlan(
     };
   }, [watching, revision]);
 
-  const changeAuto = useCallback(
-    async (value: boolean) => {
-      setAuto(value);
-      if (gamePath) await setAutoMode(gamePath, value);
-    },
-    [gamePath]
-  );
-
   return {
     plan,
     recommendation,
     loading,
     auto,
-    setAuto: changeAuto,
     reload: load,
     /** True while a background refresh could still change this answer. */
     refreshing: watching,

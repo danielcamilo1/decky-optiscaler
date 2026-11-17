@@ -1,0 +1,117 @@
+{
+  "version": "0.9.5",
+  "experimental": false,
+  "runtime": {
+    "repository": "optiscaler/OptiScaler",
+    "tag": "v0.9.5",
+    "commit": "90d9568d576d93ebb2d6c1c207596d21e9900651",
+    "release_url": "https://github.com/optiscaler/OptiScaler/releases/tag/v0.9.5",
+    "asset": "Optiscaler_0.9.5-final.20261116.7z",
+    "dll_sha256": "e2300905b2b7e6e14c8c4b02c0c555c4582fafc92a2e36e117ce027b7e259d59",
+    "pe_version": "0.9.5.5"
+  },
+  "archive_sha256": "77e3ed76bed04e1fb32bacb5a72799ff172f3da22ed5231c0cf3e84fe6761662",
+  "files": {
+    "!! README_EXTRACT ALL FILES TO GAME FOLDER !!.txt": {
+      "sha256": "09051e971a9a1bf7a1500a041b2a4652414a13d23266709cdb41e4ec12208ade",
+      "bytes": 400
+    },
+    "D3D12_Optiscaler/D3D12Core.dll": {
+      "sha256": "07d286c306f8117321422affd9e6388c12d0fb4be1c7fc689d9e899324feeb24",
+      "bytes": 3351064
+    },
+    "Licenses/DirectX_LICENSE.txt": {
+      "sha256": "5239850894610071566f7ecee0b751fde43c862032d92b99d7d0f596b3433ebd",
+      "bytes": 13147
+    },
+    "Licenses/FidelityFX_v1_LICENSE.md": {
+      "sha256": "a335c2bb2bd28184b9a30b6e35b0c7e4aa7826abd1c388fc2aa02405e9d04f03",
+      "bytes": 1142
+    },
+    "Licenses/FidelityFX_v2_LICENSE.md": {
+      "sha256": "f0da09d71ad5c82759a179e774535d4a829e5c96c49294167c1152402b2cb400",
+      "bytes": 61784
+    },
+    "Licenses/XeSS_LICENSE.txt": {
+      "sha256": "784be42c39a4a4d03cf85d88e15e59d75828fca773ce45b8dbfffbd7eaf208df",
+      "bytes": 4194
+    },
+    "OptiScaler.dll": {
+      "sha256": "e2300905b2b7e6e14c8c4b02c0c555c4582fafc92a2e36e117ce027b7e259d59",
+      "bytes": 26052912
+    },
+    "OptiScaler.ini": {
+      "sha256": "4f3314dc1fc4ecad800b2ce99c2adf972eda3954504dc3a273487ddaab75924d",
+      "bytes": 47713
+    },
+    "amd_fidelityfx_dx12.dll": {
+      "sha256": "e2191d3c0828be45eb8affd4e3ec0378f2293adc345b772a7170edcf3b021ecb",
+      "bytes": 39184
+    },
+    "amd_fidelityfx_framegeneration_dx12.dll": {
+      "sha256": "e6843252f58b0341a0d80f6a20bc0d840643ee95bc48c22cac08745344577bb6",
+      "bytes": 29679376
+    },
+    "amd_fidelityfx_framegeneration_vk.dll": {
+      "sha256": "d002dabff8c5e71eaa715fc99438cd4dc81230262a7897b16bc402efec3498b4",
+      "bytes": 36806928
+    },
+    "amd_fidelityfx_upscaler_dx12.dll": {
+      "sha256": "aad4fccccb29084a655f9a4f9f613bd22c8c03fb4a0f8840148cc6543b4ccace",
+      "bytes": 57664272
+    },
+    "amd_fidelityfx_upscaler_vk.dll": {
+      "sha256": "4a7e895af6e0b615d40a84d59eb8c2b1054ad91cdd0c739567940270d51bdab7",
+      "bytes": 36135696
+    },
+    "amd_fidelityfx_vk.dll": {
+      "sha256": "38a56a01fb3565c0757d9f5c1e4e69de4b65e5f2e5769b323b200dc1f142bab9",
+      "bytes": 39184
+    },
+    "dlssg_to_fsr3_amd_is_better.dll": {
+      "sha256": "806020c0444f7841a3a9f661295c16fc482e981e0666d0b9624bf6ccd19c4b5e",
+      "bytes": 3038208
+    },
+    "fakenvapi.dll": {
+      "sha256": "373e73dc06e2d66e90083fde3bc99ef5c1ed0bef98d1f7eda56c8b073269c3f1",
+      "bytes": 415232
+    },
+    "fakenvapi.ini": {
+      "sha256": "a4bfa3ec7b4badd93ae5e1ad74a582238082d871f54f38f68e7d9fb6384ce772",
+      "bytes": 466
+    },
+    "libxell.dll": {
+      "sha256": "d2030dcd694fda8f2ec7e044b13e6db8f0b56d4ba9113a5efad334e3f3ded8c7",
+      "bytes": 415368
+    },
+    "libxess.dll": {
+      "sha256": "251659dd84a3e84de67c886a4186e01f3eca49b00641906fe38bb6b807e5d5b7",
+      "bytes": 77795704
+    },
+    "libxess_dx11.dll": {
+      "sha256": "c7cfe86f0c9d94e4fb3696d3cd5035e2bbb6a8b1b0572f8b7395a4cdfd0c625e",
+      "bytes": 156016
+    },
+    "libxess_fg.dll": {
+      "sha256": "ec5e0c65e075570c6ede72618bb666d0be0c2e10b2ea9762c0fe8cb8e375ab27",
+      "bytes": 22957432
+    },
+    "setup_linux.sh": {
+      "sha256": "0571b0ae077d985616acf9f4101e8338fc225b1b22aa7b339100c7ea3f3022be",
+      "bytes": 12328
+    },
+    "setup_windows.bat": {
+      "sha256": "cf731a2d308df4b48db968b911b0ea1fc490fdf79d6c2ed168363312c95d2f4e",
+      "bytes": 16947
+    }
+  },
+  "symbols": {
+    "repository": "optiscaler/OptiScaler",
+    "run_id": 43931922272,
+    "artifact_id": 14259062093,
+    "pdb_sha256": "73edcdda3e1bbd35f593f84f92d7d7b8a39f71f6802266ff3c98e25511fd214f",
+    "pdb_guid": "0d15e219-e646-4c8a-a03a-f682cbeff6e6",
+    "pdb_age": 1,
+    "note": "Actions artifact DLL is byte-identical to the official release DLL; PDB GUID and age match its PE debug identity."
+  }
+}

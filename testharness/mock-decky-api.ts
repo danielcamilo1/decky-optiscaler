@@ -1,9 +1,11 @@
 export const fixtures: Record<string, any> = {};
 export const calls: string[] = [];
+export const invocations: { name: string; args: any[] }[] = [];
 
 export function callable<A extends any[], R>(name: string) {
   return (async (...args: A): Promise<R> => {
     calls.push(name);
+    invocations.push({ name, args });
     const value = fixtures[name];
     return (typeof value === "function" ? value(...args) : value) as R;
   }) as (...args: A) => Promise<R>;

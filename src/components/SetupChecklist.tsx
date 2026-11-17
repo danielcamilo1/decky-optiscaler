@@ -1,3 +1,4 @@
+import { canonicalPbzTarget, hasPbzIdentity, pbzTargetMismatch } from "../gameTarget";
 import {
   DialogButton,
   Field,
@@ -8,7 +9,7 @@ import {
   showModal,
 } from "@decky/ui";
 import { toaster } from "@decky/api";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { FaCheck } from "react-icons/fa";
 import {
   autoInstall,
@@ -18,19 +19,21 @@ import {
   refreshWiki,
   removeReframework,
   resetConfig,
-  setAutoMode,
-  setGameTarget,
   uninstall,
 } from "../api";
 import { setLaunchOptions } from "../hooks/useRunningGame";
+import { liveStatusMessage } from "../liveControl";
 import {
   currentLaunchOptions,
   hasOverride,
   launchChoices,
   launchOptionFor,
+  mergeLaunchOptions,
+  preserveExistingInstall,
   recordPreviousLaunchOptions,
   recordedValue,
   resolveChoice,
+  stripLaunchOptions,
 } from "../launchOptions";
 import type { LaunchAction, LaunchState } from "../launchOptions";
 import { PREF_REMOVE_LAUNCH, isRemembering, recallLaunchAction, remember } from "../prefs";
@@ -71,6 +74,7 @@ interface Props {
   /** True while a background wiki refresh could still change the plan below. */
   refreshing?: boolean;
   auto: boolean;
+  autoBusy?: boolean;
   live: LiveStatus | null;
   /** Whether this game is the one running right now. */
   running: boolean;
@@ -78,8 +82,20 @@ interface Props {
   onManual: () => void;
   onLogs: () => void;
   onChanged: () => Promise<void> | void;
+  onRemoved?: () => void;
   onReloadPlan: () => Promise<void> | void;
   onResetConfig: () => Promise<void> | void;
+  onBeforeMutation?: () => Promise<void> | void;
+  onRestore?: () => Promise<void> | void;
+  restoreBusy?: boolean;
+  restoreError?: string | null;
+  onRetryRestoreLaunchOptions?: () => void;
+}
+
+interface RemoveRetry {
+  action: LaunchAction;
+  value: string;
+  previous: string | null;
 }
 
 /** The numbered circle before a step, or a tick once it is done. */
@@ -125,25 +141,16 @@ function shorten(path: string, keep = 3) {
   return parts.length <= keep ? path : `…/${parts.slice(-keep).join("/")}`;
 }
 
+
+
 /**
  * Why live control is not answering, in the same four cases the live panel
  * separates — each has a different fix, and "not connected" on its own sends
  * nobody anywhere.
  */
 function liveReason(live: LiveStatus | null) {
-  if (!live) return "Live control has not reported in yet.";
-  if (!live.asi_installed) {
-    return "The in-game plugin is not installed for this game. Add it under “Manual setup”.";
-  }
-  if (live.load_enabled === false) {
-    return "OptiScaler is not set to load .asi plugins, so the in-game plugin never ran.";
-  }
-  if (live.loaded_by_optiscaler === false) {
-    return "OptiScaler did not load the in-game plugin.";
-  }
-  return `OptiScaler loaded the in-game plugin, but it could not attach${
-    live.error ? `: ${live.error}` : "."
-  }`;
+  const state = liveStatusMessage(live);
+  return `${state.title}. ${state.detail}`;
 }
 
 /**
@@ -202,12 +209,98 @@ function WikiTrouble({
 
 /** What the wiki asks to be written, as one readable line. */
 function settingsSummary(plan: AutoPlan) {
-  const pairs = plan.settings.map((item) => `${item.key}=${item.value}`);
-  const fg =
-    plan.framegen && plan.framegen.input !== "nofg"
-      ? `frame generation through ${plan.framegen.input_label} → ${plan.framegen.output_label}`
-      : null;
-  return [pairs.join(", "), fg].filter(Boolean).join(", plus ");
+  return plan.settings.map((item) => `${item.key}=${item.value}`).join(", ");
+}
+
+const PBZ_PLAN_NAMES = new Set(["pbz", "phantom blade zero", "影之刃零"]);
+
+function isPbzPlan(plan: AutoPlan | null | undefined) {
+  return Boolean(plan?.required_target && plan.game && PBZ_PLAN_NAMES.has(plan.game.trim().toLocaleLowerCase()));
+}
+
+function plainWikiText(value: string) {
+  return value
+    .replace(/<[^>]*>/g, "")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\*\*(.*?)\*\*/g, "$1")
+    .replace(/__(.*?)__/g, "$1")
+    .replace(/\*(.*?)\*/g, "$1")
+    .replace(/_(.*?)_/g, "$1")
+    .trim();
+}
+
+function PlanRequirements({
+  plan,
+  recommendation,
+}: Readonly<{ plan: AutoPlan; recommendation: Recommendation | null }>) {
+  const knownIssues = recommendation?.detail?.["Known Issues"];
+  const warnings = plan.warnings ?? [];
+  const unresolved = plan.unresolved ?? [];
+  const steps = plan.manual_steps ?? [];
+  const hasNotes = Boolean(recommendation?.notes);
+  const wikiDetailNotes = recommendation?.detail?.Notes;
+  const hasWikiDetailNotes = Boolean(wikiDetailNotes && wikiDetailNotes !== "-");
+  const hasKnownIssues = Boolean(knownIssues && knownIssues !== "-");
+  if (
+    !hasNotes && !hasWikiDetailNotes && !hasKnownIssues && warnings.length === 0 && unresolved.length === 0 &&
+    steps.length === 0 && !plan.blocked_reason && plan.runtime_supported !== false &&
+    !plan.required_version && !plan.required_target
+  ) return null;
+
+  return (
+    <PanelSection title="Requirements and notes">
+      {plan.required_version || plan.required_target ? (
+        <PanelSectionRow>
+          <Notice tone="info" title="Runtime requirement">
+            {plan.required_version ? `OptiScaler ${plan.required_version} or newer` : "A supported OptiScaler runtime"}
+            {plan.required_target ? ` · required game folder: ${plan.required_target}` : ""}
+          </Notice>
+        </PanelSectionRow>
+      ) : null}
+      {plan.runtime_supported === false || plan.blocked_reason ? (
+        <PanelSectionRow>
+          <Notice tone="error" title="Automatic setup is blocked">
+            {plan.blocked_reason ?? "The bundled runtime does not meet this game's requirement."}
+          </Notice>
+        </PanelSectionRow>
+      ) : null}
+      {steps.map((step, index) => (
+        <PanelSectionRow key={`manual-${index}`}>
+          <Notice tone="warn" title={index === 0 ? "Required manual steps" : undefined}>
+            {plainWikiText(step)}
+          </Notice>
+        </PanelSectionRow>
+      ))}
+      {hasNotes ? (
+        <PanelSectionRow>
+          <Notice tone="info" title="Wiki notes">{plainWikiText(recommendation!.notes!)}</Notice>
+        </PanelSectionRow>
+      ) : null}
+      {hasWikiDetailNotes ? (
+        <PanelSectionRow>
+          <Notice tone="info" title="Wiki notes">{plainWikiText(wikiDetailNotes!)}</Notice>
+        </PanelSectionRow>
+      ) : null}
+      {hasKnownIssues ? (
+        <PanelSectionRow>
+          <Notice tone="warn" title="Known issues">{plainWikiText(knownIssues!)}</Notice>
+        </PanelSectionRow>
+      ) : null}
+      {warnings.map((warning, index) => (
+        <PanelSectionRow key={`warning-${index}`}>
+          <Notice tone="warn" title="Setup warning">{plainWikiText(warning)}</Notice>
+        </PanelSectionRow>
+      ))}
+      {unresolved.map((item, index) => (
+        <PanelSectionRow key={`unresolved-${index}`}>
+          <Notice tone="warn" title="Manual setting needed">
+            {plainWikiText(item.text)}{item.source ? ` · ${plainWikiText(item.source)}` : ""}
+          </Notice>
+        </PanelSectionRow>
+      ))}
+    </PanelSection>
+  );
 }
 
 /**
@@ -337,8 +430,15 @@ export function SetupChecklist({
   onManual,
   onLogs,
   onChanged,
+  onRemoved,
   onReloadPlan,
   onResetConfig,
+  onBeforeMutation,
+  autoBusy = false,
+  onRestore,
+  restoreBusy = false,
+  restoreError,
+  onRetryRestoreLaunchOptions,
 }: Readonly<Props>) {
   const installed = Boolean(detail.install.installed);
   const planned = plan?.available ? plan : null;
@@ -351,19 +451,39 @@ export function SetupChecklist({
   const [withLaunch, setWithLaunch] = useState(true);
   const [withSettings, setWithSettings] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [removeRetry, setRemoveRetry] = useState<RemoveRetry | null>(null);
+  const [removeError, setRemoveError] = useState<string | null>(null);
   /** Steam's current launch options, or null when the client will not say. */
   const [launchNow, setLaunchNow] = useState<string | null>(null);
   const [launchReadable, setLaunchReadable] = useState(false);
+  const [launchLoaded, setLaunchLoaded] = useState(false);
   const [report, setReport] = useState<MonitorReport | null>(null);
+  const launchRequest = useRef(0);
+  const activeAppid = useRef(appid);
+  activeAppid.current = appid;
 
   const refreshLaunch = useCallback(async () => {
+    const request = ++launchRequest.current;
     if (!appid) {
+      setLaunchNow(null);
       setLaunchReadable(false);
+      setLaunchLoaded(true);
       return;
     }
-    const value = await currentLaunchOptions(appid);
-    setLaunchNow(value);
-    setLaunchReadable(value !== null);
+    setLaunchLoaded(false);
+    try {
+      const value = await currentLaunchOptions(appid);
+      if (activeAppid.current !== appid || launchRequest.current !== request) return;
+      setLaunchNow(value);
+      setLaunchReadable(value !== null);
+      setLaunchLoaded(true);
+    } catch {
+      if (activeAppid.current === appid && launchRequest.current === request) {
+        setLaunchNow(null);
+        setLaunchReadable(false);
+        setLaunchLoaded(true);
+      }
+    }
   }, [appid]);
 
   useEffect(() => {
@@ -391,6 +511,27 @@ export function SetupChecklist({
    * re-installing over it would be a worse answer than leaving it alone.
    */
   const ref = planned?.reframework ?? null;
+  const launchFlags = planned?.launch_flags ?? [];
+  const extraOverrides = ref?.override ? [ref.override] : [];
+  const mergedLaunchOptions = launchNow === null
+    ? null
+    : mergeLaunchOptions(launchNow, filename, launchFlags, extraOverrides);
+  const launchPreview = mergedLaunchOptions ?? (launchNow !== null
+    ? `Manual merge required. Add this override to your existing launch options: ${launchWanted}`
+    : launchWanted);
+  const runtimeBlocked = Boolean(
+    plan && (plan.runtime_supported === false || plan.blocked_reason),
+  );
+  // A missing or unknown runtime identity is read-only too. The backend only
+  // enables schema-specific writes after matching the installed proxy hash.
+  const runtimeCurrent = detail.install.managed && detail.install.runtime_current === true;
+  const isPbzGame = isPbzPlan(planned) || hasPbzIdentity(detail);
+  const requiredTarget = planned?.required_target ?? (isPbzGame ? "PBZ/platform/steam" : null);
+  const expectedPbzTarget = canonicalPbzTarget(detail);
+  const actualTarget = detail.install.installed ? detail.install.path : detail.target;
+  const requiredTargetMismatch = pbzTargetMismatch(detail, Boolean(requiredTarget), actualTarget);
+  const rollbackLaunchOptions = detail.install.rollback?.metadata?.launch_options;
+  const canRetryRestoreLaunchOptions = typeof rollbackLaunchOptions === "string";
   const refPresent = detail.reframework?.installed ?? detail.install.reframework?.installed
     ?? false;
   const pluginPresent = detail.reframework?.plugin_installed ?? false;
@@ -421,48 +562,107 @@ export function SetupChecklist({
    */
   const settling = Boolean(recommendation?.detail_pending) && Boolean(refreshing);
 
-  const applyLaunchOptions = async (value: string) => {
-    if (!appid) return;
-    // Before writing our own override, keep whatever Steam is passing now: this
-    // is the last moment it is still the game's own answer rather than ours.
-    // Write-once in the backend, so the install's record wins if there is one.
-    if (value && installed) await recordPreviousLaunchOptions(appid, detail.install.path);
+  const beforeManagedMutation = async () => {
+    await onBeforeMutation?.();
+    if (!installed) return;
+    const preserved = await preserveExistingInstall(detail.install.path, detail.path, appid);
+    if (!preserved.ok) {
+      throw new Error(preserved.error ?? "Could not preserve the current install.");
+    }
+  };
+
+  const applyLaunchOptions = async (enabled: boolean): Promise<boolean> => {
+    if (!appid) return false;
+    let latest = await currentLaunchOptions(appid);
+    if (latest === null) {
+      toaster.toast({ title: "Could not read Steam launch options", body: "The current value is unknown, so it was left unchanged." });
+      return false;
+    }
+    if (enabled && installed) {
+      const recorded = await recordPreviousLaunchOptions(appid, detail.install.path);
+      if (!recorded) {
+        toaster.toast({ title: "Could not preserve launch options", body: "Steam was not changed." });
+        return false;
+      }
+      latest = await currentLaunchOptions(appid);
+      if (latest === null) {
+        toaster.toast({ title: "Could not read Steam launch options", body: "Steam was not changed." });
+        return false;
+      }
+    }
+    const value = enabled
+      ? mergeLaunchOptions(latest, filename, launchFlags, extraOverrides)
+      : stripLaunchOptions(
+          latest,
+          filename,
+          launchFlags,
+          extraOverrides,
+          recordedValue(detail.install.launch_record),
+        );
+    if (value === null) {
+      toaster.toast({ title: "Merge launch options manually", body: `Steam was left unchanged because its shell syntax cannot be merged safely. Required override: ${launchWanted}` });
+      return false;
+    }
     if (setLaunchOptions(Number(appid), value)) {
-      // Shown from what was written rather than read back: Steam flushes its
-      // config file on its own schedule, so a read landing in that window
-      // reports the old value and the row appears not to have taken.
+      // A launch-options read can still be in flight from before this write.
+      // Do not let its older disk snapshot replace the value Steam just took.
+      launchRequest.current += 1;
       setLaunchNow(value);
       setLaunchReadable(true);
-      void refreshLaunch();
+      setLaunchLoaded(true);
       toaster.toast({
-        title: value ? "Launch options set" : "Launch options cleared",
+        title: enabled ? "Launch options updated" : "OptiScaler launch options removed",
         body: value || detail.name,
       });
-    } else {
-      toaster.toast({
-        title: "Could not reach Steam",
-        body: "Set the launch options manually.",
-      });
+      return true;
     }
+    toaster.toast({
+      title: "Could not reach Steam",
+      body: "Set the launch options manually.",
+    });
+    return false;
   };
 
   /** Step 1, plus whichever of steps 2 and 3 are switched on. */
   const run = async () => {
-    if (!planned) return;
+    if (!planned || runtimeBlocked) return;
+    if (requiredTargetMismatch) {
+      toaster.toast({ title: "Choose the required game folder first", body: `PBZ needs the folder at ${requiredTarget ?? "PBZ/platform/steam"}.` });
+      return;
+    }
     setBusy(true);
     try {
+      await beforeManagedMutation();
+      const launchAtInstall = appid ? await currentLaunchOptions(appid) : null;
+      if (withLaunch && appid && needsOverride && launchAtInstall === null) {
+        throw new Error("Steam did not report the current launch options. Read them before setup so existing settings are preserved.");
+      }
+      if (withLaunch && appid && needsOverride && launchAtInstall !== null &&
+          mergeLaunchOptions(launchAtInstall, filename, launchFlags, extraOverrides) === null) {
+        throw new Error(`Steam uses shell syntax that cannot be merged safely. Set the launch options manually, or uncheck that step. Required override: ${launchWanted}`);
+      }
+      if (appid && launchAtInstall !== null) {
+        setLaunchNow(launchAtInstall);
+        setLaunchReadable(true);
+      }
       const folder = detail.path.split("/").filter(Boolean).pop() ?? detail.name;
       if (withSettings) {
-        const result = await autoInstall(detail.target, detail.path, detail.name, [folder]);
+        const result = await autoInstall(detail.target, detail.path, detail.name, [folder], launchAtInstall);
         if (!result.ok) {
-          toaster.toast({ title: "Setup failed", body: String(result.error) });
-          return;
+          throw new Error(String(result.error ?? "Automatic setup failed."));
         }
       } else {
-        const result = await install(detail.target, planned.filename, false, planned.optipatcher);
+        const result = await install(
+          detail.target,
+          planned.filename,
+          true,
+          planned.optipatcher,
+          detail.path,
+          launchAtInstall,
+          false,
+        );
         if (!result.ok) {
-          toaster.toast({ title: "Install failed", body: String(result.error) });
-          return;
+          throw new Error(String(result.error ?? "Install failed."));
         }
         // REFramework is not one of the wiki's *settings*, so switching those
         // off must not switch it off with them: it is the reason OptiScaler
@@ -473,27 +673,25 @@ export function SetupChecklist({
         if (ref?.automatic) {
           const added = await installReframework(detail.target, detail.path, detail.name, [folder]);
           if (!added.ok) {
-            toaster.toast({
-              title: "OptiScaler installed, REFramework did not",
-              body: String(added.error),
-            });
+            throw new Error(`OptiScaler was installed, but REFramework was not: ${String(added.error ?? "install failed")}`);
           }
         }
-        await setGameTarget(detail.path, detail.target);
-        // Nothing is following the wiki, so every option stays the user's.
-        await setAutoMode(detail.path, false);
       }
       if (withLaunch && appid && needsOverride) {
-        await recordPreviousLaunchOptions(appid, detail.target);
-        setLaunchOptions(Number(appid), planned.launch_options);
+        const launchApplied = await applyLaunchOptions(true);
+        if (!launchApplied) {
+          await onChanged();
+          await refreshLaunch();
+          return;
+        }
       }
       toaster.toast({
         title: `${detail.name} is set up`,
         body: `Installed as ${planned.filename}.`,
       });
       await onChanged();
-      await onReloadPlan();
-      await refreshLaunch();
+    } catch (exc) {
+      toaster.toast({ title: "Setup failed", body: String(exc) });
     } finally {
       setBusy(false);
     }
@@ -511,6 +709,7 @@ export function SetupChecklist({
   const addReframework = async () => {
     setBusy(true);
     try {
+      await beforeManagedMutation();
       const folder = detail.path.split("/").filter(Boolean).pop() ?? detail.name;
       const result = await installReframework(detail.target, detail.path, detail.name, [folder]);
       if (result.ok) {
@@ -519,6 +718,8 @@ export function SetupChecklist({
       } else {
         toaster.toast({ title: "Could not install REFramework", body: String(result.error) });
       }
+    } catch (exc) {
+      toaster.toast({ title: "Could not install REFramework", body: String(exc) });
     } finally {
       setBusy(false);
     }
@@ -536,6 +737,7 @@ export function SetupChecklist({
   const dropReframework = async () => {
     setBusy(true);
     try {
+      await beforeManagedMutation();
       const result = await removeReframework(detail.install.path);
       if (result.ok) {
         toaster.toast({
@@ -546,6 +748,8 @@ export function SetupChecklist({
       } else {
         toaster.toast({ title: "Could not remove REFramework", body: String(result.error) });
       }
+    } catch (exc) {
+      toaster.toast({ title: "Could not remove REFramework", body: String(exc) });
     } finally {
       setBusy(false);
     }
@@ -572,10 +776,17 @@ export function SetupChecklist({
 
   const reapply = async () => {
     if (!planned) return;
+    if (requiredTargetMismatch) {
+      toaster.toast({ title: "Choose the required game folder first", body: `PBZ needs the folder at ${requiredTarget ?? "PBZ/platform/steam"}.` });
+      return;
+    }
     setBusy(true);
     try {
+      if (runtimeBlocked) throw new Error(plan?.blocked_reason ?? "This runtime cannot apply the wiki plan.");
+      await beforeManagedMutation();
+      const launchAtInstall = appid ? await currentLaunchOptions(appid) : null;
       const folder = detail.path.split("/").filter(Boolean).pop() ?? detail.name;
-      const result = await autoInstall(detail.target, detail.path, detail.name, [folder]);
+      const result = await autoInstall(detail.target, detail.path, detail.name, [folder], launchAtInstall);
       if (result.ok) {
         toaster.toast({ title: "Set up again from the wiki", body: planned.game ?? detail.name });
         await onChanged();
@@ -583,6 +794,8 @@ export function SetupChecklist({
       } else {
         toaster.toast({ title: "Could not re-apply", body: String(result.error) });
       }
+    } catch (exc) {
+      toaster.toast({ title: "Could not re-apply", body: String(exc) });
     } finally {
       setBusy(false);
     }
@@ -601,37 +814,122 @@ export function SetupChecklist({
     filename: detail.install.filename ?? filename,
   };
 
-  const doUninstall = async (action: LaunchAction, rememberIt: boolean) => {
+  const doUninstall = async (
+    action: LaunchAction,
+    rememberIt: boolean,
+    retry: RemoveRetry | null = null,
+  ) => {
     setBusy(true);
+    let previousValue: string | null = null;
+    let desiredValue: string | null = null;
+    let steamChanged = false;
+    let filesRemoved = false;
     try {
-      if (rememberIt) await remember(PREF_REMOVE_LAUNCH, action);
+      await onBeforeMutation?.();
+      const current = appid ? await currentLaunchOptions(appid) : null;
+      const chosen = retry
+        ? retry.action === "clear" && launchState.recorded !== "" && current !== null
+          ? { action: "clear" as const, value: hasOverride(current, launchState.filename)
+              ? stripLaunchOptions(current, launchState.filename, [], [], launchState.recorded)
+              : current }
+          : { action: retry.action, value: retry.value }
+        : appid
+          ? launchChoices({ ...launchState, current }).find((choice) => choice.action === action)
+          : undefined;
+      if (appid && !chosen) {
+        throw new Error("Steam launch options changed. Open Remove again and choose from the current value.");
+      }
+      const desired = chosen?.value ?? null;
+      const previous = current;
+      desiredValue = desired;
+      previousValue = previous;
+      if (appid && desired !== null) {
+        if (current === null) {
+          const pending = { action, value: desired, previous: null };
+          setRemoveRetry(pending);
+          setRemoveError("Steam's current value is unknown, so files were kept in place. Read it again, then retry removal.");
+          toaster.toast({ title: "OptiScaler was not removed", body: "Steam's current launch options could not be read." });
+          return;
+        }
+        if (current !== desired && !setLaunchOptions(Number(appid), desired)) {
+          const pending = { action, value: desired, previous: current };
+          setRemoveRetry(pending);
+          setRemoveError("Steam rejected the launch-options change. OptiScaler is still installed and its original launch record is intact.");
+          toaster.toast({ title: "OptiScaler was not removed", body: "Steam rejected the launch-options change. Retry from Setup." });
+          return;
+        }
+        if (current !== desired) {
+          steamChanged = true;
+          launchRequest.current += 1;
+          setLaunchNow(desired);
+          setLaunchReadable(true);
+        }
+      }
+
       const result = await uninstall(detail.install.path, true);
-      if (result.ok) {
-        toaster.toast({ title: "OptiScaler removed", body: detail.name });
-        const chosen = launchChoices(launchState).find((choice) => choice.action === action);
-        if (appid && chosen && chosen.value !== null) {
-          const wrote = setLaunchOptions(Number(appid), chosen.value);
-          toaster.toast({
-            title: wrote
-              ? chosen.value === ""
-                ? "Launch options cleared"
-                : "Launch options restored"
-              : "Could not reach Steam",
-            body: wrote ? chosen.value || detail.name : "Change the launch options manually.",
-          });
-          if (wrote) {
-            setLaunchNow(chosen.value);
+      if (!result.ok) {
+        let rollbackFailed = false;
+        if (appid && desired !== null && previous !== null && desired !== previous) {
+          rollbackFailed = !setLaunchOptions(Number(appid), previous);
+          if (!rollbackFailed) {
+            launchRequest.current += 1;
+            setLaunchNow(previous);
             setLaunchReadable(true);
           }
+        } else if (appid && desired !== null && previous === null) {
+          rollbackFailed = true;
         }
-        await onChanged();
-        await refreshLaunch();
-      } else {
-        toaster.toast({ title: "Uninstall failed", body: String(result.error) });
+        if (rollbackFailed && desired !== null) {
+          const pending = { action, value: desired, previous };
+          setRemoveRetry(pending);
+          setRemoveError("File removal failed and Steam could not be restored to its previous value. Retry removal below; the saved launch record remains available.");
+        } else {
+          setRemoveRetry(null);
+          setRemoveError(null);
+        }
+        toaster.toast({
+          title: "Uninstall failed",
+          body: rollbackFailed
+            ? `${String(result.error)} Steam could not be put back; retry removal in Setup.`
+            : `${String(result.error)} Steam was restored, and OptiScaler remains installed.`,
+        });
+        return;
       }
+
+      filesRemoved = true;
+      onRemoved?.();
+      if (rememberIt) await remember(PREF_REMOVE_LAUNCH, action);
+      setRemoveRetry(null);
+      setRemoveError(null);
+      toaster.toast({ title: "OptiScaler removed", body: detail.name });
+      if (appid && desired !== null) {
+        toaster.toast({
+          title: desired === "" ? "Launch options cleared" : "Launch options restored",
+          body: desired || detail.name,
+        });
+      }
+      await onChanged();
+    } catch (exc) {
+      if (!filesRemoved && steamChanged && appid && desiredValue !== null) {
+        const rollbackFailed = previousValue === null ||
+          !setLaunchOptions(Number(appid), previousValue);
+        if (rollbackFailed) {
+          setRemoveRetry({ action, value: desiredValue, previous: previousValue });
+          setRemoveError("Removal failed and Steam could not be restored to its previous value. Retry removal below; the saved launch record remains available.");
+        } else {
+          launchRequest.current += 1;
+          setLaunchNow(previousValue);
+          setLaunchReadable(true);
+        }
+      }
+      toaster.toast({ title: filesRemoved ? "OptiScaler removed; refresh failed" : "Uninstall failed", body: String(exc) });
     } finally {
       setBusy(false);
     }
+  };
+
+  const retryUninstall = () => {
+    if (removeRetry) void doUninstall(removeRetry.action, false, removeRetry);
   };
 
   const confirmUninstall = async () => {
@@ -642,10 +940,17 @@ export function SetupChecklist({
       recallLaunchAction(PREF_REMOVE_LAUNCH),
       isRemembering(),
     ]);
+    const current = appid ? await currentLaunchOptions(appid) : null;
+    if (appid) {
+      setLaunchNow(current);
+      setLaunchReadable(current !== null);
+      setLaunchLoaded(true);
+    }
+    const freshLaunchState = { ...launchState, current };
     // A remembered answer is only honoured while it still applies to this game:
     // "put back what was there" means nothing for a game with no record, and a
     // game Steam does not own has no choices at all.
-    const choices = appid ? launchChoices(launchState) : [];
+    const choices = appid ? launchChoices(freshLaunchState) : [];
     const applicable =
       resolveChoice(choices, rememberedAction)?.action === rememberedAction
         ? rememberedAction
@@ -655,7 +960,7 @@ export function SetupChecklist({
         gameName={detail.name}
         filename={detail.install.filename}
         backedUp={detail.install.backed_up.length}
-        launch={appid ? launchState : null}
+        launch={appid ? freshLaunchState : null}
         remembered={applicable}
         canRemember={canRemember}
         onConfirm={(action, rememberIt) => void doUninstall(action, rememberIt)}
@@ -664,8 +969,13 @@ export function SetupChecklist({
   };
 
   const doReset = async () => {
+    if (!runtimeCurrent) {
+      toaster.toast({ title: "Settings are read-only", body: "Upgrade the runtime in Setup first." });
+      return;
+    }
     setBusy(true);
     try {
+      await onBeforeMutation?.();
       const result = await resetConfig(detail.install.path);
       if (result.ok) {
         await onResetConfig();
@@ -766,7 +1076,7 @@ export function SetupChecklist({
           <PanelSectionRow>
             {loadingWiki ? (
               <Notice tone="info">Checking the OptiScaler wiki…</Notice>
-            ) : planned ? (
+            ) : planned && !runtimeBlocked ? (
               <Notice tone="success" title="This game can be set up automatically">
                 Matched “{planned.game}” on the OptiScaler wiki
                 {recommendation?.compatibility
@@ -784,6 +1094,11 @@ export function SetupChecklist({
                   ? " Still reading this game's own entry — the steps below may fill in shortly."
                   : ""}
               </Notice>
+            ) : planned ? (
+              <Notice tone="error" title="Automatic setup is unavailable">
+                {plan?.blocked_reason ?? "The bundled runtime does not meet this game's requirements."}
+                {" You can continue with Manual setup."}
+              </Notice>
             ) : (
               <WikiTrouble
                 recommendation={recommendation}
@@ -792,7 +1107,7 @@ export function SetupChecklist({
               />
             )}
           </PanelSectionRow>
-          {!planned && !loadingWiki ? (
+          {(!planned || runtimeBlocked) && !loadingWiki ? (
             <PanelSectionRow>
               <Focusable style={{ display: "flex" }}>
                 <DialogButton
@@ -809,6 +1124,16 @@ export function SetupChecklist({
 
         {planned ? (
           <PanelSection>
+            {requiredTargetMismatch && requiredTarget ? (
+              <PanelSectionRow>
+                <Notice tone="error" title="Choose the required game folder before setup">
+                  {installed
+                    ? <>OptiScaler is currently in <Mono>{shorten(detail.install.path)}</Mono>, but this game needs <Mono>{expectedPbzTarget ? shorten(expectedPbzTarget) : requiredTarget}</Mono>. Remove the current install first, then choose the folder containing the main <Mono>PBZ.exe</Mono> in Manual setup.</>
+                    : <>{detail.target_is_saved ? "The saved folder" : "The selected folder"} is <Mono>{shorten(detail.target)}</Mono>, but this game needs <Mono>{expectedPbzTarget ? shorten(expectedPbzTarget) : requiredTarget}</Mono>. Open Manual setup and choose the folder containing the main <Mono>PBZ.exe</Mono>.</>}
+                  Automatic setup and launch changes are paused until the folder matches.
+                </Notice>
+              </PanelSectionRow>
+            ) : null}
             {ref ? (
               <PanelSectionRow>
                 <Field
@@ -858,12 +1183,12 @@ export function SetupChecklist({
                   label={<StepLabel n={next()}>Set the Steam launch options</StepLabel>}
                   description={
                     ref
-                      ? `${planned.launch_options} — without it Proton loads its own
+                      ? `${launchPreview} — without it Proton loads its own
                          ${planned.filename} and its own ${ref.dll}, and neither mod runs.`
-                      : `${planned.launch_options} — without it Proton loads its own ${planned.filename}.`
+                      : `${launchPreview} — without it Proton loads its own ${planned.filename}.`
                   }
                   checked={withLaunch}
-                  disabled={busy}
+                  disabled={busy || runtimeBlocked || requiredTargetMismatch}
                   bottomSeparator="standard"
                   onChange={setWithLaunch}
                 />
@@ -874,7 +1199,7 @@ export function SetupChecklist({
               <PanelSectionRow>
                 <Notice tone="warn" title="Set the launch options yourself">
                   This game came from a custom folder rather than Steam, so nothing here can set
-                  them. Add <Mono>{planned.launch_options}</Mono> in whichever launcher starts it.
+                  them. Add <Mono>{launchWanted}</Mono> in whichever launcher starts it.
                 </Notice>
               </PanelSectionRow>
             ) : null}
@@ -892,10 +1217,10 @@ export function SetupChecklist({
                 }
                 description={
                   settingsSummary(planned) ||
-                  "This entry needs no special settings, but keeping it on means later wiki changes reach this game."
+                  "This entry needs no special settings. It applies during setup, when enabling Automatic, or when re-applying; changes are not written continuously."
                 }
                 checked={withSettings}
-                disabled={busy}
+                disabled={busy || runtimeBlocked || requiredTargetMismatch}
                 bottomSeparator="standard"
                 onChange={setWithSettings}
               />
@@ -914,7 +1239,9 @@ export function SetupChecklist({
             <PanelSectionRow>
               <Focusable style={{ display: "flex" }}>
                 <DialogButton
-                  disabled={busy || settling || !detail.writable}
+                  disabled={busy || settling || runtimeBlocked || !detail.writable ||
+                    requiredTargetMismatch ||
+                    (withLaunch && Boolean(appid) && needsOverride && !launchReadable)}
                   onClick={() => void run()}
                   onOKActionDescription="Set this game up"
                   style={{ flexGrow: 1 }}
@@ -923,6 +1250,34 @@ export function SetupChecklist({
                 </DialogButton>
               </Focusable>
             </PanelSectionRow>
+          </PanelSection>
+        ) : null}
+
+        {planned ? <PlanRequirements plan={planned} recommendation={recommendation} /> : null}
+
+        {needsOverride && appid && withLaunch && !launchReadable ? (
+          <PanelSection>
+            <PanelSectionRow>
+              <Notice tone={launchLoaded ? "error" : "info"} title="Read Steam launch options before setup">
+                {launchLoaded
+                  ? "Steam did not report this game's current value. Setup will not replace it blindly."
+                  : "Waiting for Steam to report the current value."}
+              </Notice>
+            </PanelSectionRow>
+            {launchLoaded ? (
+              <PanelSectionRow>
+                <Focusable style={{ display: "flex" }}>
+                  <DialogButton
+                    disabled={busy}
+                    onClick={() => void refreshLaunch()}
+                    onOKActionDescription="Read Steam launch options again"
+                    style={{ flexGrow: 1 }}
+                  >
+                    Read again
+                  </DialogButton>
+                </Focusable>
+              </PanelSectionRow>
+            ) : null}
           </PanelSection>
         ) : null}
 
@@ -969,6 +1324,14 @@ export function SetupChecklist({
           </Field>
         </PanelSectionRow>
 
+        {requiredTargetMismatch && requiredTarget ? (
+          <PanelSectionRow>
+            <Notice tone="error" title="This install is in the wrong game folder">
+              OptiScaler is in <Mono>{shorten(detail.install.path)}</Mono>, but Phantom Blade Zero needs <Mono>{expectedPbzTarget ? shorten(expectedPbzTarget) : requiredTarget}</Mono>. Remove this install first, then choose the folder containing the main <Mono>PBZ.exe</Mono> in Manual setup. Automatic settings and launch changes are paused until then.
+            </Notice>
+          </PanelSectionRow>
+        ) : null}
+
         {needsOverride && appid ? (
           launchReadable ? (
             <PanelSectionRow>
@@ -981,29 +1344,31 @@ export function SetupChecklist({
                 description={
                   overrideSet
                     ? launchNow ?? launchWanted
-                    : `Without ${launchWanted} Proton loads its own ${detail.install.filename}.`
+                    : `Without ${launchPreview} Proton loads its own ${detail.install.filename}.`
                 }
                 checked={overrideSet}
-                disabled={busy}
+                disabled={busy || requiredTargetMismatch}
                 bottomSeparator="standard"
-                onChange={(checked) => void applyLaunchOptions(checked ? launchWanted : "")}
+                onChange={(checked) => void applyLaunchOptions(checked)}
               />
             </PanelSectionRow>
           ) : (
             <PanelSectionRow>
-              <Field
-                label={<StepLabel>Steam launch options</StepLabel>}
-                description={`Steam did not report this game's launch options, so they cannot be
-                  checked from here. Setting them again is harmless.`}
-                onClick={() => void applyLaunchOptions(launchWanted)}
-                onActivate={() => void applyLaunchOptions(launchWanted)}
-                focusable
-                bottomSeparator="standard"
-                childrenLayout="inline"
-                childrenContainerWidth="min"
-              >
-                <Pill>set them</Pill>
-              </Field>
+              <Notice tone="error" title="Steam launch options could not be read">
+                The current value is unknown, so it was left unchanged. Retry the read before
+                adding or removing the OptiScaler override.
+                {" "}
+                <Focusable style={{ display: "flex", marginTop: "6px" }}>
+                  <DialogButton
+                    disabled={busy}
+                    onClick={() => void refreshLaunch()}
+                    onOKActionDescription="Read Steam launch options again"
+                    style={{ flexGrow: 1 }}
+                  >
+                    Read again
+                  </DialogButton>
+                </Focusable>
+              </Notice>
             </PanelSectionRow>
           )
         ) : null}
@@ -1107,16 +1472,22 @@ export function SetupChecklist({
             <ToggleField
               label={
                 <StepLabel done={auto}>
-                  {auto ? "Following the wiki entry" : "Not following the wiki entry"}
+                  {autoBusy
+                    ? "Applying wiki settings…"
+                    : auto
+                      ? "Using the wiki entry's settings"
+                      : "Not using the wiki entry's settings"}
                 </StepLabel>
               }
               description={
-                auto
-                  ? `${settingsSummary(planned) || "No special settings"} — kept up to date.`
-                  : "Every option is yours. Turn this on to let the wiki keep the ones this game needs."
+                !runtimeCurrent
+                  ? "Upgrade the runtime in Setup before applying automatic settings."
+                  : auto
+                    ? `${settingsSummary(planned) || "No special settings"} — applied during setup, when enabled, or when re-applied. Wiki changes are not written continuously.`
+                    : "Every option is yours. Turn this on to apply the wiki settings once; re-apply when you want to take a newer entry."
               }
               checked={auto}
-              disabled={busy}
+              disabled={busy || autoBusy || runtimeBlocked || !runtimeCurrent || requiredTargetMismatch}
               bottomSeparator="standard"
               onChange={(checked) => void onSetAuto(checked)}
             />
@@ -1132,12 +1503,14 @@ export function SetupChecklist({
           <PanelSectionRow>
             <Field
               label={
-                <StepLabel done={Boolean(live?.attached)}>
-                  {live?.attached ? "Running now" : "Running, without live control"}
+                <StepLabel done={liveStatusMessage(live).ready}>
+                  {liveStatusMessage(live).ready ? "Running now" : "Running, without live control"}
                 </StepLabel>
               }
               description={
-                live?.attached ? `Live control connected. ${logSummary}` : liveReason(live)
+                liveStatusMessage(live).ready
+                  ? `Live control connected with verified capabilities. ${logSummary}`
+                  : liveReason(live)
               }
               onClick={onLogs}
               onActivate={onLogs}
@@ -1152,7 +1525,98 @@ export function SetupChecklist({
         ) : null}
       </PanelSection>
 
+      {planned ? <PlanRequirements plan={planned} recommendation={recommendation} /> : null}
+
+      {onRestore && detail.install.rollback?.available ? (
+        <PanelSection title="Recovery">
+          <PanelSectionRow>
+            <Notice tone="info" title="Previous install preserved">
+              {detail.install.rollback.version
+                ? `Saved before upgrading from OptiScaler ${detail.install.rollback.version}. `
+                : "Saved before the managed runtime change. "}
+              This restore point remains available until you remove OptiScaler.
+              {!runtimeCurrent
+                ? " The installed runtime is older or unknown; settings stay read-only until you upgrade again."
+                : ""} This can only restore files captured at the upgrade; it cannot recreate an original INI lost before then.
+            </Notice>
+          </PanelSectionRow>
+          {restoreError ? (
+            <PanelSectionRow>
+              <Notice tone="error" title="Steam launch options still need attention">
+                {restoreError}
+                {appid && canRetryRestoreLaunchOptions && onRetryRestoreLaunchOptions ? (
+                  <Focusable style={{ display: "flex", marginTop: "6px" }}>
+                    <DialogButton
+                      disabled={restoreBusy}
+                      onClick={onRetryRestoreLaunchOptions}
+                      onOKActionDescription="Retry restoring Steam launch options"
+                      style={{ flexGrow: 1 }}
+                    >
+                      Retry launch options
+                    </DialogButton>
+                  </Focusable>
+                ) : null}
+              </Notice>
+            </PanelSectionRow>
+          ) : null}
+          {!restoreError && appid && canRetryRestoreLaunchOptions && onRetryRestoreLaunchOptions ? (
+            <PanelSectionRow>
+              <Notice tone="warn" title="The restore point still has saved Steam launch options">
+                If Steam did not accept them after the file restore, you can retry here.
+                <Focusable style={{ display: "flex", marginTop: "6px" }}>
+                  <DialogButton
+                    disabled={restoreBusy}
+                    onClick={onRetryRestoreLaunchOptions}
+                    onOKActionDescription="Apply the launch options saved in the restore point"
+                    style={{ flexGrow: 1 }}
+                  >
+                    Apply saved launch options
+                  </DialogButton>
+                </Focusable>
+              </Notice>
+            </PanelSectionRow>
+          ) : null}
+          <PanelSectionRow>
+            <Focusable style={{ display: "flex" }}>
+              <DialogButton
+                disabled={busy || restoreBusy || running}
+                onClick={() => void onRestore()}
+                onOKActionDescription="Restore the previous OptiScaler install"
+                style={{ flexGrow: 1 }}
+              >
+                {restoreBusy ? "Restoring previous install…" : "Restore previous install"}
+              </DialogButton>
+            </Focusable>
+          </PanelSectionRow>
+          {running ? (
+            <PanelSectionRow>
+              <Notice tone="warn">Close the game before restoring files.</Notice>
+            </PanelSectionRow>
+          ) : null}
+        </PanelSection>
+      ) : null}
+
       {foldRows}
+
+      {removeError && removeRetry ? (
+        <PanelSection title="Removal needs a retry">
+          <PanelSectionRow>
+            <Notice tone="error" title="OptiScaler is still installed">
+              {removeError}
+              <Focusable style={{ display: "flex", marginTop: "6px" }}>
+                <DialogButton
+                  disabled={busy}
+                  onClick={retryUninstall}
+                  onOKActionDescription="Retry the Steam update and remove OptiScaler"
+                  style={{ flexGrow: 1 }}
+                >
+                  Retry Steam update and removal
+                </DialogButton>
+              </Focusable>
+            </Notice>
+          </PanelSectionRow>
+        </PanelSection>
+      ) : null}
 
       <PanelSection>
         <PanelSectionRow>
@@ -1162,16 +1626,18 @@ export function SetupChecklist({
           <Focusable style={{ display: "flex", gap: "8px" }} flow-children="horizontal">
             {planned ? (
               <DialogButton
-                disabled={busy}
+              disabled={busy || runtimeBlocked || requiredTargetMismatch}
                 onClick={() => void reapply()}
-                onOKActionDescription="Set up again from the wiki"
+                onOKActionDescription={runtimeCurrent
+                  ? "Set up again from the wiki"
+                  : "Upgrade the OptiScaler runtime and apply the wiki settings"}
                 style={{ flex: "1 1 0", minWidth: 0, fontSize: "13px", padding: "8px 6px" }}
               >
-                Set up again
+                {runtimeCurrent ? "Set up again" : "Upgrade runtime and re-apply"}
               </DialogButton>
             ) : null}
             <DialogButton
-              disabled={busy}
+              disabled={busy || !runtimeCurrent}
               onClick={() => void doReset()}
               onOKActionDescription="Reset settings to stock"
               style={{ flex: "1 1 0", minWidth: 0, fontSize: "13px", padding: "8px 6px" }}

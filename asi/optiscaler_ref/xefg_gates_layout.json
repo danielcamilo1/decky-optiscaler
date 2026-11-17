@@ -1,0 +1,57 @@
+{
+  "pdb_guid": "0d15e219-e646-4c8a-a03a-f682cbeff6e6",
+  "pdb_sha256": "73edcdda3e1bbd35f593f84f92d7d7b8a39f71f6802266ff3c98e25511fd214f",
+  "ifg_constants_offset": 552,
+  "FG_Constants": {
+    "size": 12,
+    "fields": {
+      "flags": {
+        "offset": 0,
+        "type_index": "0x150c"
+      },
+      "displayWidth": {
+        "offset": 4,
+        "type_index": "0x75"
+      },
+      "displayHeight": {
+        "offset": 8,
+        "type_index": "0x75"
+      }
+    }
+  },
+  "FG_Flags": {
+    "underlying_type": "0x23",
+    "values": {
+      "Async": 0,
+      "DisplayResolutionMVs": 1,
+      "JitteredMVs": 2,
+      "InvertedDepth": 3,
+      "InfiniteDepth": 4,
+      "Hdr": 5,
+      "_": 6
+    }
+  },
+  "GameQuirk_ForceFGRenderSizeMVs": 56,
+  "bitset_storage": {
+    "FG_Flags": {
+      "bitset_count": 6,
+      "sizeof": 4,
+      "_Array_offset": 0,
+      "element_codeview_type": "T_ULONG(0x22)",
+      "element_size": 4
+    },
+    "GameQuirk": {
+      "bitset_count": 59,
+      "sizeof": 8,
+      "_Array_offset": 0,
+      "element_codeview_type": "T_UQUAD(0x23)",
+      "element_size": 8
+    }
+  },
+  "windows_sdk_proof": {
+    "DXGI_SWAP_CHAIN_DESC.BufferDesc": 0,
+    "DXGI_MODE_DESC.Format": 16,
+    "Format_width": 4,
+    "compile_exit": 0
+  }
+}

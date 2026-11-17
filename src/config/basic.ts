@@ -40,7 +40,7 @@ function upscalerPreset(
   dx11: string,
   vulkan: string,
   fsr4Update?: boolean,
-  int8?: boolean
+  int8?: boolean | "auto"
 ): Preset {
   const changes = [
     change("Upscalers", "Dx12Upscaler", dx12),
@@ -58,7 +58,10 @@ function upscalerPreset(
   // clearing a setting on the way past — the one thing that makes FSR 4
   // reachable on a Deck that does not have it natively.
   if (int8 !== undefined) {
-    changes.push(change("FSR", "Fsr4ForceEnableInt8", int8 ? "true" : "false"));
+    // The pinned runtime reads an integer mode: 0 disables forcing, while 1
+    // forces the general INT8 model. Model 2 is RDNA2-specific and is only
+    // written by an explicit profile after its compatibility is verified.
+    changes.push(change("FSR", "Fsr4ForceEnableInt8", int8 === "auto" ? AUTO : int8 ? "1" : "0"));
   }
   return {
     id,
@@ -70,7 +73,10 @@ function upscalerPreset(
       if (fsr4Update === undefined) return true;
       // A preset that writes the override off is not the one in force while it
       // is on: the INT8 route cannot be described by any other preset's flag.
-      if (int8 === false && get(values, "FSR", "Fsr4ForceEnableInt8") === "true") {
+      if (int8 === false && get(values, "FSR", "Fsr4ForceEnableInt8") !== "0") {
+        return false;
+      }
+      if (int8 === "auto" && !isAuto(get(values, "FSR", "Fsr4ForceEnableInt8"))) {
         return false;
       }
       const flag = get(values, "FSR", "Fsr4Update");
@@ -78,6 +84,8 @@ function upscalerPreset(
     },
   };
 }
+
+export const STEAM_DECK_FSR4_BUILD_ID = "4.1.2-lite-exact-20261105";
 
 export const UPSCALER_PRESETS: Preset[] = [
   {
@@ -98,33 +106,30 @@ export const UPSCALER_PRESETS: Preset[] = [
     // installer._replace_fsr4 owns the atomic DLL/settings write. This list
     // documents the preset for matching/validation; onEnableFsr4 applies it.
     id: "fsr4-int8",
-    label: "FSR 4.1.1b — Steam Deck",
-    description: "Downloads the community RDNA2 ghosting fix and enables INT8 upscaling. Close the game first.",
+    label: "FSR 4.1.2 Lite — community",
+    description: "Experimental Lite Exact build for Steam Deck / RDNA2 APUs. Keeps frame generation unchanged. Close the game first.",
     changes: [
       change("Upscalers", "Dx12Upscaler", "fsr31"),
       change("Upscalers", "Dx11Upscaler", "fsr31_12"),
       change("Upscalers", "VulkanUpscaler", "fsr31_12"),
-      // Fsr4Update is left alone rather than turned on: v0.9.4's release notes
-      // and the maintainer both say not to set it on a GPU AMD does not
-      // officially support, because the upgrade path forces FP8 and OptiScaler
-      // answers with its internal FSR 3 fallback. The INT8 override is the
-      // route that keeps FSR 4 on an RDNA 2 part, and it is what this preset is.
-      change("FSR", "Fsr4Update", AUTO),
-      change("FSR", "Fsr4ForceEnableInt8", "true"),
+      // This DLL carries Lite in the old generic INT8 provider slot, not
+      // the SDK 2.4 Lite provider slot. Its pinned build therefore needs 1.
+      change("FSR", "Fsr4Update", "true"),
+      change("FSR", "Fsr4ForceEnableInt8", "1"),
       change("FSR", "UpscalerIndex", "0"),
       change("FSR", "Fsr4Preset", AUTO),
     ],
     matches: (values) =>
       get(values, "Upscalers", "Dx12Upscaler") === "fsr31" &&
-      get(values, "FSR", "Fsr4ForceEnableInt8") === "true" &&
-      get(values, "FSR", "Fsr4Update") !== "true" &&
+      get(values, "FSR", "Fsr4ForceEnableInt8") === "1" &&
+      get(values, "FSR", "Fsr4Update") === "true" &&
       get(values, "FSR", "UpscalerIndex") === "0",
   },
   upscalerPreset(
     "fsr4",
     "FSR 3.X/4",
-    "OptiScaler's FidelityFX backend with FSR 4 turned on. Needs an RDNA 3 or RDNA 4 GPU.",
-    "fsr31", "fsr31_12", "fsr31_12", true, false
+    "Uses the installed FSR 4 library with automatic model selection. Bundled 4.1.2 includes APU INT8 Lite; verify the in-game watermark.",
+    "fsr31", "fsr31_12", "fsr31_12", true, "auto"
   ),
   upscalerPreset(
     "fsr31",
@@ -292,6 +297,22 @@ export function needsForcedInt8(gpu: GpuInfo | null | undefined): boolean {
   return gpu?.fsr4 === "experimental" || gpu?.fsr4 === "unsupported";
 }
 
+/** Whether this SDK includes the official RDNA2/APU INT8 models. */
+export function supportsOfficialInt8(ffx?: { version?: string | null } | null): boolean {
+  const parts = String(ffx?.version ?? "").split(".").slice(0, 3).map(Number);
+  return parts.length === 3 && parts.every(Number.isFinite) &&
+    (parts[0] > 4 || (parts[0] === 4 &&
+      (parts[1] > 1 || (parts[1] === 1 && parts[2] >= 2))));
+}
+
+/** The archive is tuned for RDNA2 integrated GPUs, rather than all RDNA2 cards. */
+export function isRdna2Apu(gpu: GpuInfo | null | undefined): boolean {
+  return gpu?.vendor === "amd" && gpu.generation === "RDNA2" &&
+    /steam\s*deck|van\s*gogh|jupiter|galileo|rembrandt|\b(?:680m|660m|610m)\b/i.test(
+      [gpu.name, ...(gpu.names ?? [])].filter(Boolean).join(" ")
+    );
+}
+
 /**
  * Whether the FidelityFX upscaler in the folder is new enough for that override.
  *
@@ -370,10 +391,14 @@ export function ffxUpscalerChanges(
  * as off until the game selects frame generation in its own options, and the
  * two rates then measure the same frames and come out equal. That is worth
  * saying rather than hiding — equal numbers with nothing to explain them read
- * as a broken readout.
+ * as a broken readout. An interval-only telemetry sample returns no pair at
+ * all; `livePresentPathFps` reports its presented path separately.
  */
 export function liveFrameRates(live: LiveStatus | null | undefined) {
   if (!live?.fg_enabled) return null;
+  // Interval-only samples (notably Wine) support a present-path reading, but
+  // cannot identify an FG multiplier or total generated rate.
+  if (live.telemetry_source === "core_intervals") return null;
   const number = (value: number | null | undefined) =>
     typeof value === "number" && value > 0 ? value : null;
   // The counter alone does not say which of the two rates it counted, so the
@@ -386,20 +411,49 @@ export function liveFrameRates(live: LiveStatus | null | undefined) {
   return { total, base, generating: base !== null && base < total * 0.95 };
 }
 
+/** Present-path FPS from a fresh interval-only sample, never an FG total. */
+export function livePresentPathFps(live: LiveStatus | null | undefined): number | null {
+  if (
+    !live ||
+    live.telemetry_ready !== true ||
+    live.telemetry_source !== "core_intervals" ||
+    typeof live.present_path_fps !== "number" ||
+    !Number.isFinite(live.present_path_fps) ||
+    live.present_path_fps <= 0
+  ) return null;
+  return live.present_path_fps;
+}
+
+/** The runtime FFX FG version, using only the game's observed active index. */
+export function liveFfxFgLabel(live: LiveStatus | null | undefined): string | null {
+  const index = live?.fg_index;
+  const version = typeof index === "number" && index >= 0
+    ? live?.ffx_fg_versions?.[index]
+    : undefined;
+  return version ? `FFX FG ${version}` : null;
+}
+
 /** The backend the running game ended up with, in the order it reports them. */
 export function runningBackend(live: LiveStatus | null | undefined): string | null {
-  return live?.upscaler?.dx12 ?? live?.upscaler?.vulkan ?? live?.upscaler?.dx11 ?? null;
+  if (!live?.upscaler) return null;
+  switch (live.active_api) {
+    case "dx11": return live.upscaler.dx11;
+    case "vulkan": return live.upscaler.vulkan;
+    case "dx12": return live.upscaler.dx12;
+    default: return null;
+  }
 }
 
 /**
  * What to call the upscaler the running game ended up with.
  *
  * The backend id alone cannot be specific — "fsr31" is FSR 2.3.4 through 4.1.1
- * and OptiScaler names it "FSR 3.X/4" for exactly that reason. The version the
- * game actually built is in its own reported list, at the index Config holds,
- * and OptiScaler's overlay prints it the same way: "FSR " and the SDK's own
- * name. Falls back to the backend's name when there is no list to read, which
- * is every non-FidelityFX upscaler and any game that has not queried the SDK.
+ * and OptiScaler names it "FSR 3.X/4" for exactly that reason. The active
+ * version is in the game's reported list, at the index observed from its
+ * running state, and OptiScaler's overlay prints it the same way: "FSR " and
+ * the SDK's own name. Falls back to the backend's name when there is no list to
+ * read, which is every non-FidelityFX upscaler and any game that has not queried
+ * the SDK.
  */
 export function liveUpscalerLabel(live: LiveStatus | null | undefined): string | null {
   const backend = runningBackend(live);

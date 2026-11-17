@@ -41,12 +41,15 @@ jobs:
           python3 scripts/generate_schema.py
           git diff --exit-code -- src/config/generatedSchema.ts py_modules/optiscaler/schema_generated.py
 
-      # The ASI reads OptiScaler's memory at offsets the compiler computes from
-      # this mirror, so a stale one is a silently inert live-control feature.
       - name: Check generated ASI layout is up to date
         run: |
           python3 scripts/generate_asi_layout.py
-          git diff --exit-code -- asi/generated/config_mirror.h py_modules/optiscaler/live_fields.json
+          git diff --exit-code -- asi/generated py_modules/optiscaler/live_fields.json
+
+      - name: Verify native bridge identity
+        run: |
+          python3 scripts/live_metadata.py --check
+          python3 scripts/verify_runtime_profile.py
 
       - name: Typecheck
         run: npx tsc --noEmit
@@ -57,8 +60,14 @@ jobs:
       - name: Steam Deck FSR4 lifecycle
         run: python3 scripts/test_fsr4.py
 
-      # Includes check_version_pin(), which holds asi/optiscaler_ref/ to the
-      # exact OptiScaler tag whose release sits in bin/.
+      - name: Recovery and PBZ regression
+        run: python3 scripts/test_recovery.py
+
+      - name: Live session, acknowledgement and recovery regressions
+        run: |
+          python3 scripts/test_live.py
+          python3 scripts/test_live_rpc.py
+
       - name: Backend selftest
         run: python3 scripts/selftest.py
 
@@ -80,11 +89,61 @@ jobs:
       - name: Live-controls harness
         run: HARNESS=live-fields.tsx node testharness/build-and-run.mjs
 
+      - name: Queue, launch options and recovery UI regressions
+        run: |
+          HARNESS=use-config.tsx node testharness/build-and-run.mjs
+          HARNESS=launch-options.tsx node testharness/build-and-run.mjs
+          HARNESS=recovery-ui.tsx node testharness/build-and-run.mjs
+          HARNESS=auto-upgrade.tsx node testharness/build-and-run.mjs
+
       - name: Package
         run: python3 scripts/package.py
+
+      - name: Final zip offline lifecycle
+        run: python3 scripts/verify_package.py 'out/Decky OptiScaler.zip'
 
       - uses: actions/upload-artifact@v7
         with:
           name: decky-optiscaler-${{ github.sha }}
           path: out/*.zip
           if-no-files-found: error
+
+  native:
+    name: Windows native bridge tests
+    runs-on: windows-latest
+    steps:
+      - name: Preserve source bytes before checkout
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Download pinned temporary Zig toolchain
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'decky-zig-0.15.2.zip'
+          Invoke-WebRequest 'https://ziglang.org/download/0.15.2/zig-x86_64-windows-0.15.2.zip' -OutFile $archive
+          $actual = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne '3a0ed1e8799a2f8ce2a6e6290a9ff22e6906f8227865911fb7ddedc3cc14cb0c') { throw 'Zig checksum mismatch' }
+          Expand-Archive $archive -DestinationPath $env:RUNNER_TEMP
+          (Join-Path $env:RUNNER_TEMP 'zig-x86_64-windows-0.15.2') | Out-File -Append $env:GITHUB_PATH -Encoding utf8
+
+      - name: Compile and run Windows ABI and command behavior tests
+        shell: pwsh
+        run: |
+          zig cc -target x86_64-windows-gnu -std=c++17 -O2 -fno-exceptions -fno-rtti -Wall -Wextra -Iasi asi/tests/live_tests.cpp -o "$env:RUNNER_TEMP/live_tests.exe" -lpsapi -lkernel32
+          if ($LASTEXITCODE -ne 0) { throw 'Native test compilation failed' }
+          & "$env:RUNNER_TEMP/live_tests.exe" "$env:RUNNER_TEMP/native-report.txt"
+          $result = $LASTEXITCODE
+          Get-Content "$env:RUNNER_TEMP/native-report.txt"
+          if ($result -ne 0) { throw 'Native behavior tests failed' }
+
+      - name: Rebuild packaged bridge reproducibly
+        shell: bash
+        run: |
+          cp defaults/live-build.json "$RUNNER_TEMP/live-build.before.json"
+          bash asi/build.sh
+          python -c 'from pathlib import Path; import os; assert Path("defaults/live-build.json").read_bytes() == (Path(os.environ["RUNNER_TEMP"])/"live-build.before.json").read_bytes(), "Native binary/source metadata differs after rebuild"'

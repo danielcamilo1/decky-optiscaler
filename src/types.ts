@@ -52,6 +52,7 @@ export interface ExeCandidate {
   relative: string;
   score: number;
   executables: string[];
+  writable?: boolean;
 }
 
 export interface GpuInfo {
@@ -125,6 +126,17 @@ export interface InstallInfo {
   backup_dir: string;
   backed_up: string[];
   launch_record: LaunchRecord;
+  /** True only when the installed OptiScaler proxy matches this plugin's pinned runtime hash. */
+  runtime_current?: boolean;
+  /** Explicit rollback retains the old install for this bundled runtime. */
+  runtime_upgrade_held?: boolean;
+  runtime_recovery_needed?: boolean;
+  /** A preserved pre-upgrade snapshot that can still be restored. */
+  rollback?: {
+    available: boolean;
+    version?: string;
+    metadata?: Record<string, unknown>;
+  };
   fsr4: Fsr4Status;
   /**
    * Whether REFramework's dll is next to the executable, and whether this
@@ -150,6 +162,9 @@ export interface GameDetail {
   gpu: GpuInfo;
   target: string;
   target_is_saved: boolean;
+  /** Backend-confirmed canonical PBZ.exe folder, null if missing. */
+  pbz_target?: string | null;
+  pbz_identity?: boolean;
   candidates: ExeCandidate[];
   install: InstallInfo;
   launch_option: string;
@@ -344,6 +359,12 @@ export interface AutoPlan {
   /** Things the wiki named that could not be turned into a setting. */
   unresolved: { text: string; source: string }[];
   warnings: string[];
+  /** Whether the bundled runtime can satisfy this game's stated minimum. */
+  runtime_supported?: boolean;
+  required_version?: string | null;
+  required_target?: string | null;
+  manual_steps?: string[];
+  blocked_reason?: string | null;
 }
 
 export interface AutoPlanResult {
@@ -360,6 +381,8 @@ export interface ConfigResult {
   path?: string;
   values: ConfigValues;
   modified?: number;
+  /** Writes are allowed only when true; false or missing capability metadata is read-only. */
+  runtime_current?: boolean;
 }
 
 /** Result of writing config keys, including what the running game adopted. */
@@ -400,6 +423,19 @@ export interface OptionChange {
   section: string;
   key: string;
   value: string;
+  /** Identity captured when a live-capable value was picked. */
+  live_context?: LiveContext;
+}
+
+export type LiveApi = "dx11" | "dx12" | "vulkan";
+
+/** Snapshot identity a dynamic live choice was made against. */
+export interface LiveContext {
+  target: string;
+  session: string;
+  /** Scalar actions can be safe before OptiScaler has identified an API. */
+  active_api: LiveApi | "unknown";
+  capability_generation: string;
 }
 
 export interface RunningGame {
@@ -417,6 +453,13 @@ export interface OptipatcherStatus {
 
 /** What the in-game live-control plugin reports about itself. */
 export interface LiveStatus {
+  /** Explicit false means this runtime is not allowed to use the legacy live ABI. */
+  supported?: boolean;
+  reason?: string | null;
+  /** Whether safe Add/Reinstall is possible for this managed target. */
+  can_install?: boolean;
+  /** The native module is still running, including unsupported legacy builds. */
+  legacy_running?: boolean;
   asi_installed: boolean;
   asi_available: boolean;
   /**
@@ -436,7 +479,30 @@ export interface LiveStatus {
   state: string;
   error: string | null;
   seq: string | null;
+  /** Schema 7 session identity. Missing on legacy status is never permission to write. */
+  session?: string | null;
+  /** Terminal state of the last command mailbox entry, when reported. */
+  ack?: "pending" | "config_request_accepted" | "rejected" | "timeout" | string;
+  /** The graphics API currently used by the running game. */
+  active_api?: LiveApi | "unknown";
+  /** Changes when the selected API or either ordered FFX list changes. */
+  capability_generation?: string | null;
+  /** Identity retained for the last configuration request, independent of current capabilities. */
+  request_session?: string | null;
+  request_api?: LiveApi | "unknown" | null;
+  request_generation?: string | null;
+  /** Keys accepted for the current session/sequence only. */
+  accepted_keys?: string[];
+  /** Keys the native plugin could not apply for the current session/sequence. */
+  failed_keys?: string[];
+  /** Explicit per-target field and action capabilities. */
+  capabilities?: Record<string, boolean>;
+  can_change_opti_fg?: boolean;
+  can_change_hud_fix?: boolean;
+  can_change_fsr_debug_view?: boolean;
   can_switch_upscaler: boolean;
+  switchable_backends?: string[];
+  can_override_sharpness?: boolean;
   age: number | null;
   live_keys: string[];
   /**
@@ -459,6 +525,22 @@ export interface LiveStatus {
    */
   rendered_ms?: number | null;
   presented_ms?: number | null;
+  /** Whether this snapshot contains fresh frame telemetry, independent of command readiness. */
+  telemetry_ready?: boolean;
+  /** How telemetry was measured; core intervals alone do not reveal an FG multiplier. */
+  telemetry_source?: "state_present_counter" | "core_intervals" | "unknown" | string;
+  /** FPS derived from the presented interval. This is a present path rate, not scanout or FG total. */
+  present_path_fps?: number | null;
+  /** Configured setting, separate from runtime FG object activity in `fg_enabled`. */
+  configured_fg_enabled?: boolean | null;
+  /** Configured FidelityFX FG index, separate from the runtime-observed `fg_index`. */
+  configured_fg_index?: number | null;
+  /** Configured FidelityFX upscaler index, separate from the runtime-observed index. */
+  configured_ffx_upscaler_index?: number | null;
+  /** Configured backend IDs, separate from the runtime-observed `upscaler` values. */
+  configured_upscaler?: { dx12: string | null; dx11: string | null; vulkan: string | null } | null;
+  /** Age of the last runtime feature progress sample, in milliseconds. */
+  feature_progress_age_ms?: number | null;
   /** The raw counter value behind that rate, for diagnostics. */
   frames?: number | null;
   /**
@@ -466,6 +548,7 @@ export interface LiveStatus {
    * to act on yet; null means the count could not be read at all.
    */
   backend_entries?: number | null;
+  /** Whether the running game has an active frame-generator object, not its INI setting. */
   fg_enabled: boolean | null;
   /**
    * Whether the in-game plugin located the two State flags that make OptiScaler
@@ -473,7 +556,9 @@ export interface LiveStatus {
    * recorded, but only the next launch will use it.
    */
   can_change_fg?: boolean;
-  /** The FFX FG version the running game is configured for, as an index. */
+  /** Native proved enabling this FG path can succeed without a restart. */
+  can_enable_fg?: boolean;
+  /** The active FFX FG version observed in the running game, as an index. */
   fg_index?: number | null;
   /**
    * The frame generators this game's FidelityFX runtime reported, in the order
@@ -488,7 +573,10 @@ export interface LiveStatus {
    * where the backend id ("fsr31") cannot.
    */
   ffx_upscaler_versions?: string[];
-  /** Which of them the running game is configured for, as an index. */
+  /** Runtime IDs aligned with `ffx_upscaler_versions`, when available. */
+  ffx_upscaler_ids?: string[];
+  /** Exact runtime IDs that cannot be changed until the next game launch. */
+  /** Which FFX upscaler the running game is actually using, as an index. */
   ffx_upscaler_index?: number | null;
   /**
    * Whether the FSR version can be changed without a restart. It needs no flags
@@ -498,11 +586,21 @@ export interface LiveStatus {
   can_change_ffx_upscaler?: boolean;
   /** Which status-file format the installed plugin speaks; older ones say less. */
   schema?: number | null;
+  /** Whether native code verified the live-control directory identity. */
+  dir_verified?: boolean;
+  /** Wine prefix that owns the live-control directory, if reported. */
+  wine_prefix?: string | null;
+  /** Native target-directory generation used to bind commands to an install. */
+  directory_generation?: string | null;
+  /** Runtime FFX FG identities aligned with `ffx_fg_versions`. */
+  ffx_fg_ids?: string[];
   upscaler: { dx12: string | null; dx11: string | null; vulkan: string | null } | null;
   /** A switch handed over but not yet consumed by OptiScaler. */
   pending_backend: string | null;
-  /** Where the in-game plugin decided to put its control files. */
+  /** Verified canonical Linux folder used by RPC contexts. */
   dir?: string | null;
+  /** Original Windows folder reported by the ASI, for diagnostics. */
+  native_dir?: string | null;
   /** Whether that is the folder being managed. false means it is writing where nobody reads. */
   dir_matches?: boolean | null;
 }
@@ -511,10 +609,23 @@ export interface LiveStatus {
 export interface LiveApplyResult {
   ok?: boolean;
   sent: boolean;
+  /** Exact Section.Key IDs included in the native wire command. */
+  sent_keys?: string[];
+  /** Selection-independent identity of the command as it was actually sent. */
+  context?: LiveContext | null;
+  /** Physical directory authorization under which this request was accepted. */
+  directory_generation?: string | null;
+  /** True only when the matching session and decimal sequence reached a terminal ACK. */
+  confirmed?: boolean;
+  ack?: "pending" | "config_request_accepted" | "rejected" | "timeout" | string;
+  session?: string | null;
+  seq?: string | null;
+  /** Exact Section.Key IDs accepted as configuration requests by the native plugin. */
+  accepted_keys?: string[];
   attached?: boolean;
   reason?: string;
-  applied?: string[];
   deferred?: string[];
+  failed_keys?: string[];
   backend_change?: boolean;
   can_switch_upscaler?: boolean;
   error?: string;

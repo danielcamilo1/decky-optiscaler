@@ -1,0 +1,25 @@
+# Native live control
+
+The bridge is calibrated to this package’s exact official OptiScaler 0.9.5 core and PDB. It retains all 14 live controls: frame-generation enable, HUD fix, debug view, depth copy, extended HUD fix, XeFG interpolation count, FFX frame-generation and upscaler versions, DX11/DX12/Vulkan upscalers, sharpness override and value, and FPS display. Each game needs its own matching `plugins/decky_optiscaler_live.asi` and ASI-loading configuration. Close the game and upgrade or add live control in Setup. Recognized managed 0.9.4 and 0.9.5-pre5 installs are upgraded with the matching bridge. Updating Decky does not replace modules already loaded by a game.
+
+## Connection and results
+
+The panel distinguishes no module, waiting for the game, waiting for the current game configuration, waiting for a supported frame callback, ready, outdated, unsupported and disconnected. Loaded is not permission to apply settings. The ASI accepts initialization only from the pinned synchronous `LoadAsiPlugins` callsite, then installs one `RenderMenu` callback on that same thread while the menu is still uninitialized. The callback remains pass-through until a worker verifies the core’s full SHA-256 and the module, core and active INI belong to the same physical game directory. A Windows path is resolved through that process’s Wine prefix; an unverified directory cannot receive commands.
+
+Saving settings writes the INI. An in-game request is sent through a one-entry mailbox and applied at the next `RenderMenu` callback. The result is `config_request_accepted` only after the callback validates the full batch, performs the corresponding OptiScaler configuration and flag writes, and reads those writes back. This confirms that OptiScaler accepted the configuration request; it does not confirm that a backend or frame generator was rebuilt or used by the GPU. A request times out only while it is still waiting for the callback. Pending requests cannot be overwritten. Restarting applies saved startup settings through OptiScaler’s normal loading path.
+
+The original live scope includes FG enable, HUD fix and debug controls, depth-copy and extended HUD fix, XeFG interpolation count, sharpness, FPS display, per-API backends and available FFX upscaler/FG versions. Capabilities depend on the running API, registered upscaler and FG context. A version selection is tied to the list and API shown when selected; changed lists require refreshing the choice. `auto` without a verified live reset remains restart-required. INT8/model/provider, FG input/output, spoofing and loading changes are startup settings.
+
+## Execution and limitations
+
+The worker receives files and publishes bounded command data for the single menu callback. The callback uses the pinned core’s Detours implementation with only the current thread enrolled; it does not enumerate or suspend other threads. No Linux driver, Proton or system package is modified. It follows the upstream menu’s concurrency boundary and does not claim to eliminate upstream rendering races. If the callback is absent, it reports waiting and does not write configuration from the worker as a fallback.
+
+Backend and FFX requests report configuration acceptance independently of runtime observations. The current backend, FG active state and telemetry are read separately from the request result. The actual FFX version is unknown when OptiScaler exposes no stable runtime selection source. When FG input/output are set to nofg, OptiScaler FG controls are unavailable. Unknown telemetry remains unknown. Wine can leave OptiScaler’s global frame counter at zero; that alone is not a hang. The panel separates observed runtime state from saved configuration. When only trustworthy core intervals are available, it labels the result Present path FPS rather than inferring an FG multiplier. CPU evaluation counts do not measure final scanout or LSFG output.
+
+## Restore and remove
+
+The ASI, loading-related INI changes, manifest and command/status/log/temp files participate in the existing backups and ownership. Binary installation, upgrade, rollback and Remove require the game to be closed. INI-only saves use a restricted recovery transaction while the game is running. Pending recovery is completed before reading configuration, so a crashed save cannot reintroduce uncommitted settings. Known old bridges can be upgraded; unknown same-name or renamed legacy bridges block replacement until the conflict is resolved.
+
+**Restore previous install** restores its captured installation snapshot. **Remove** restores the earliest original game files and offers the original launch options. Neither operation should overwrite game progress. Existing unrelated files remain outside plugin ownership. Failed restore or removal stays visible and retryable.
+
+The binary/profile/source checksum record is `defaults/live-build.json`; `scripts/live_metadata.py --check` validates it before packaging. Native Windows tests are separate from synthetic backend/UI tests and physical device evidence. No FPS improvement or long-session stability is promised.

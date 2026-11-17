@@ -5,7 +5,7 @@ cannot distinguish community 4.1.1b from the bundled SDK.
 """
 
 import shutil
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from . import payload, wiki
 from .constants import (
@@ -21,9 +21,9 @@ from .constants import (
 #: builds are so that one code path can report either.
 BUNDLED_BUILD = {
     "id": FSR4_BUNDLED_BUILD_ID,
-    "label": "Bundled (FidelityFX SDK 4.1.1)",
-    "note": "The build the OptiScaler release ships. Reaches FSR 4 through the "
-            "INT8 override on RDNA 2.",
+    "label": "Bundled (FSR 4.1.2 / FidelityFX SDK 2.4)",
+    "note": "Official 4.1.2 upscaler with RDNA2 and APU INT8 models. "
+            "Verify the active model with the in-game watermark.",
     "file": FFX_UPSCALER_DLL,
     "file_sha256": FSR4_BUNDLED_FILE_SHA256,
     "file_bytes": FSR4_BUNDLED_FILE_BYTES,
@@ -153,7 +153,16 @@ def fetch(build, cache_dir, logger=None):
             if target.exists():
                 shutil.rmtree(target)
             payload.extract_archive(archive, target, logger)
-            produced = next((p for p in target.rglob(build["file"]) if p.is_file()), None)
+            selected = build.get("archive_path")
+            if selected:
+                relative = PurePosixPath(selected)
+                if relative.is_absolute() or ".." in relative.parts or "\\" in selected:
+                    raise ValueError("Invalid pinned FSR archive path")
+                produced = target.joinpath(*relative.parts)
+                if produced.is_symlink() or not produced.is_file():
+                    raise ValueError(f"{source['asset']} did not contain the pinned {selected}")
+            else:
+                produced = next((p for p in target.rglob(build["file"]) if p.is_file()), None)
             if produced is None:
                 raise ValueError(f"{source['asset']} did not contain {build['file']}")
             if not _matches(produced, build):

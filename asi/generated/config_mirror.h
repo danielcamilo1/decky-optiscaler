@@ -167,7 +167,7 @@ struct Config
     CustomOptional<float> FsrAccAddPerFrame;
     CustomOptional<float> FsrMinDisOccAcc;
     CustomOptional<bool> Fsr4Update;
-    CustomOptional<bool> Fsr4ForceEnableInt8;
+    CustomOptional<uint32_t> Fsr4ForceEnableInt8;
     CustomOptional<uint32_t> Fsr4Preset;
     CustomOptional<bool> Fsr4EnableDebugView;
     CustomOptional<bool> Fsr4EnableWatermark;
@@ -263,6 +263,7 @@ struct Config
     CustomOptional<bool> FGDebugPacingLines;
     CustomOptional<bool> FGAsync;
     CustomOptional<bool> FGFramePacingTuning;
+    CustomOptional<bool> FSRFGDisableFlipMetering;
     CustomOptional<float> FGFPTSafetyMarginInMs;
     CustomOptional<float> FGFPTVarianceFactor;
     CustomOptional<bool> FGFPTAllowHybridSpin;
@@ -470,7 +471,7 @@ struct Config
     X(FsrAccAddPerFrame, float, OPTI_FLOAT) \
     X(FsrMinDisOccAcc, float, OPTI_FLOAT) \
     X(Fsr4Update, bool, OPTI_BOOL) \
-    X(Fsr4ForceEnableInt8, bool, OPTI_BOOL) \
+    X(Fsr4ForceEnableInt8, uint32_t, OPTI_U32) \
     X(Fsr4Preset, uint32_t, OPTI_U32) \
     X(Fsr4EnableDebugView, bool, OPTI_BOOL) \
     X(Fsr4EnableWatermark, bool, OPTI_BOOL) \
@@ -566,6 +567,7 @@ struct Config
     X(FGDebugPacingLines, bool, OPTI_BOOL) \
     X(FGAsync, bool, OPTI_BOOL) \
     X(FGFramePacingTuning, bool, OPTI_BOOL) \
+    X(FSRFGDisableFlipMetering, bool, OPTI_BOOL) \
     X(FGFPTSafetyMarginInMs, float, OPTI_FLOAT) \
     X(FGFPTVarianceFactor, float, OPTI_FLOAT) \
     X(FGFPTAllowHybridSpin, bool, OPTI_BOOL) \

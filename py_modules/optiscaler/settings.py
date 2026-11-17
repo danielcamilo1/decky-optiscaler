@@ -1,5 +1,6 @@
 """Persistent plugin settings (custom libraries, per-game install targets)."""
 
+import copy
 import json
 import threading
 from pathlib import Path
@@ -20,6 +21,7 @@ class Settings:
         self._lock = threading.Lock()
         self._data = dict(self.DEFAULTS)
         self.load()
+        self._saved_data = copy.deepcopy(self._data)
 
     def load(self):
         if not self.path.is_file():
@@ -34,10 +36,15 @@ class Settings:
             self._data = merged
 
     def save(self):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self._data, indent=2), encoding="utf-8")
-        tmp.replace(self.path)
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(self._data, indent=2), encoding="utf-8")
+            tmp.replace(self.path)
+        except Exception:
+            self._data = copy.deepcopy(self._saved_data)
+            raise
+        self._saved_data = copy.deepcopy(self._data)
 
     def get(self, key, default=None):
         with self._lock:
@@ -116,3 +123,57 @@ class Settings:
                 targets.pop(str(game_path), None)
             self._data["game_targets"] = targets
             self.save()
+
+    def configure_game(self, game_path, target_dir, auto_mode):
+        """Commit an install's target and automatic mode in one settings save."""
+        with self._lock:
+            targets = dict(self._data.get("game_targets", {}))
+            prefs = dict(self._data.get("prefs", {}))
+            targets[str(game_path)] = str(target_dir)
+            prefs.pop(f"runtime-upgrade-hold:{Path(target_dir).resolve()}", None)
+            key = f"auto_mode:{game_path}"
+            if auto_mode:
+                prefs[key] = True
+            else:
+                prefs.pop(key, None)
+            self._data["game_targets"] = targets
+            self._data["prefs"] = prefs
+            self.save()
+
+    def snapshot_game(self, game_path):
+        """Only the keys an experiment owns; never snapshot another game's settings."""
+        with self._lock:
+            prefs = self._data.get("prefs", {})
+            return {
+                "target": self._data.get("game_targets", {}).get(str(game_path)),
+                "auto": prefs.get(f"auto_mode:{game_path}"),
+                "experiment": prefs.get(f"deck-experiment:{game_path}"),
+            }
+
+    def restore_game(self, game_path, snapshot, *, runtime_hold=None):
+        with self._lock:
+            before = self._data
+            targets = dict(before.get("game_targets", {}))
+            prefs = dict(before.get("prefs", {}))
+            if runtime_hold is not None:
+                key, value = runtime_hold
+                if value is None:
+                    prefs.pop(key, None)
+                else:
+                    prefs[key] = value
+            if snapshot.get("target") is None:
+                targets.pop(str(game_path), None)
+            else:
+                targets[str(game_path)] = snapshot["target"]
+            for field, key in (("auto", f"auto_mode:{game_path}"),
+                               ("experiment", f"deck-experiment:{game_path}")):
+                if snapshot.get(field) is None:
+                    prefs.pop(key, None)
+                else:
+                    prefs[key] = snapshot[field]
+            self._data = {**before, "game_targets": targets, "prefs": prefs}
+            try:
+                self.save()
+            except Exception:
+                self._data = before
+                raise

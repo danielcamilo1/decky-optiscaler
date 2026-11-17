@@ -1,19 +1,19 @@
 {
  "fields": {
-  "Anisotropy.AFModifyComparison": {
-   "kind": "bool",
-   "member": "AnisotropyModifyComp",
-   "read": "Bool"
-  },
-  "Anisotropy.AFModifyMinMax": {
-   "kind": "bool",
-   "member": "AnisotropyModifyMinMax",
-   "read": "Bool"
-  },
   "Anisotropy.AnisotropyOverride": {
    "kind": "int",
    "member": "AnisotropyOverride",
    "read": "Int"
+  },
+  "Anisotropy.ModifyComparison": {
+   "kind": "bool",
+   "member": "AnisotropyModifyComp",
+   "read": "Bool"
+  },
+  "Anisotropy.ModifyMinMax": {
+   "kind": "bool",
+   "member": "AnisotropyModifyMinMax",
+   "read": "Bool"
   },
   "Anisotropy.SkipPointFilter": {
    "kind": "bool",
@@ -198,7 +198,7 @@
   "Dx11withDx12.UseDelayedInit": {
    "kind": "bool",
    "member": "Dx11DelayedInit",
-   "read": "Int"
+   "read": "Bool"
   },
   "FSR.AccAddPerFrame": {
    "kind": "float",
@@ -246,9 +246,9 @@
    "read": "Bool"
   },
   "FSR.Fsr4ForceEnableInt8": {
-   "kind": "bool",
+   "kind": "uint32_t",
    "member": "Fsr4ForceEnableInt8",
-   "read": "Bool"
+   "read": "Int"
   },
   "FSR.Fsr4Preset": {
    "kind": "uint32_t",
@@ -343,6 +343,11 @@
   "FSRFG.DebugTearLines": {
    "kind": "bool",
    "member": "FGDebugTearLines",
+   "read": "Bool"
+  },
+  "FSRFG.DisableFlipMetering": {
+   "kind": "bool",
+   "member": "FSRFGDisableFlipMetering",
    "read": "Bool"
   },
   "FSRFG.EnableWatermark": {
@@ -440,7 +445,7 @@
    "member": "FGOutput",
    "read": "String"
   },
-  "FrameGen.FTSource": {
+  "FrameGen.FTInput": {
    "kind": "enum:FrameTimeSource",
    "member": "FTInput",
    "read": "Int"
@@ -792,12 +797,12 @@
   },
   "Libraries.XeFGPath": {
    "kind": "std::wstring",
-   "member": "XeSSLibrary",
+   "member": "XeFGLibrary",
    "read": "WString"
   },
   "Libraries.XeLLPath": {
    "kind": "std::wstring",
-   "member": "XeSSLibrary",
+   "member": "XeLLLibrary",
    "read": "WString"
   },
   "Libraries.XeSSDx11Path": {

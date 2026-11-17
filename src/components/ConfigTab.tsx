@@ -2,9 +2,15 @@ import { ButtonItem, PanelSection, PanelSectionRow } from "@decky/ui";
 import { useState } from "react";
 import { FEATURED, optionById, optionsInSection, sectionTitle } from "../config/tabs";
 import { countOverrides, optionId } from "../config/values";
-import type { ConfigValues, OptionMeta } from "../types";
+import type { ConfigValues, LiveContext, OptionMeta } from "../types";
 import { Notice } from "./Common";
 import { OptionControl } from "./OptionControl";
+
+export interface RuntimeEnumChoice {
+  value: string;
+  label: string;
+  context: LiveContext | null;
+}
 
 interface Props {
   tabId: string;
@@ -12,8 +18,10 @@ interface Props {
   blurb?: string;
   values: ConfigValues;
   disabled?: boolean;
-  onChange: (option: OptionMeta, value: string) => void;
+  onChange: (option: OptionMeta, value: string, context?: LiveContext | null) => void;
   onResetSection: (section: string) => void;
+  runtimeChoices?: Record<string, RuntimeEnumChoice[]>;
+  runtimeGeneration?: string | null;
 }
 
 export function ConfigTab({
@@ -24,6 +32,8 @@ export function ConfigTab({
   disabled,
   onChange,
   onResetSection,
+  runtimeChoices,
+  runtimeGeneration,
 }: Props) {
   const featuredIds = FEATURED[tabId] ?? [];
   const featured = featuredIds
@@ -42,11 +52,13 @@ export function ConfigTab({
       {featured.length > 0 ? (
         <PanelSection title="Main Settings">
           {featured.map((option) => (
-            <PanelSectionRow key={optionId(option)}>
+            <PanelSectionRow key={`${optionId(option)}:${runtimeGeneration ?? "static"}`}>
               <OptionControl
+                key={`${optionId(option)}:${runtimeGeneration ?? "static"}`}
                 option={option}
                 values={values}
                 onChange={onChange}
+                runtimeChoices={runtimeChoices?.[optionId(option)]}
                 disabled={disabled}
               />
             </PanelSectionRow>
@@ -63,6 +75,8 @@ export function ConfigTab({
           skip={featuredSet}
           onChange={onChange}
           onResetSection={onResetSection}
+          runtimeChoices={runtimeChoices}
+          runtimeGeneration={runtimeGeneration}
           startOpen={featured.length === 0 && sections.length === 1}
         />
       ))}
@@ -77,14 +91,18 @@ function CollapsibleSection({
   skip,
   onChange,
   onResetSection,
+  runtimeChoices,
+  runtimeGeneration,
   startOpen,
 }: {
   section: string;
   values: ConfigValues;
   disabled?: boolean;
   skip: Set<string>;
-  onChange: (option: OptionMeta, value: string) => void;
+  onChange: (option: OptionMeta, value: string, context?: LiveContext | null) => void;
   onResetSection: (section: string) => void;
+  runtimeChoices?: Record<string, RuntimeEnumChoice[]>;
+  runtimeGeneration?: string | null;
   startOpen?: boolean;
 }) {
   const all = optionsInSection(section);
@@ -110,9 +128,11 @@ function CollapsibleSection({
           {options.map((option) => (
             <PanelSectionRow key={optionId(option)}>
               <OptionControl
+                key={`${optionId(option)}:${runtimeGeneration ?? "static"}`}
                 option={option}
                 values={values}
                 onChange={onChange}
+                runtimeChoices={runtimeChoices?.[optionId(option)]}
                 disabled={disabled}
               />
             </PanelSectionRow>

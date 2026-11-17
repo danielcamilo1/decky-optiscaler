@@ -118,6 +118,32 @@ class BuildFetchTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'did not contain'):
                 fsr4build.fetch(self.build, self.root)
 
+    def test_exact_variant_is_selected_when_archive_has_multiple_same_name_dlls(self):
+        self.build['archive_path'] = '4.1.2l-exact/' + self.build['file']
+        def extract(archive, target, logger=None):
+            for directory, data in [('lossy', b'wrong lossy DLL'), ('exact', b'wrong full model'),
+                                    ('4.1.2l-exact', self.dll_bytes)]:
+                folder = target / directory
+                folder.mkdir(parents=True, exist_ok=True)
+                (folder / self.build['file']).write_bytes(data)
+        with patch.object(fsr4build.wiki, 'download', side_effect=self.download), \
+                patch.object(fsr4build.payload, 'extract_archive', side_effect=extract):
+            selected = fsr4build.fetch(self.build, self.root)
+        self.assertEqual(selected.read_bytes(), self.dll_bytes)
+
+    def test_missing_exact_variant_never_falls_back_to_another_same_name_dll(self):
+        self.build['archive_path'] = '4.1.2l-exact/' + self.build['file']
+        def extract(archive, target, logger=None):
+            folder = target / 'lossy'
+            folder.mkdir(parents=True, exist_ok=True)
+            # Even matching bytes under another path do not satisfy this pin.
+            (folder / self.build['file']).write_bytes(self.dll_bytes)
+        with patch.object(fsr4build.wiki, 'download', side_effect=self.download), \
+                patch.object(fsr4build.payload, 'extract_archive', side_effect=extract):
+            with self.assertRaisesRegex(RuntimeError, 'pinned'):
+                fsr4build.fetch(self.build, self.root)
+        self.assertFalse(fsr4build.cached_path(self.root, self.build).exists())
+
 
 class DeckFsr4Tests(unittest.TestCase):
     def setUp(self):
@@ -134,6 +160,8 @@ class DeckFsr4Tests(unittest.TestCase):
         ini = IniFile(self.target/INI_NAME)
         ini.set('FrameGen', 'FGOutput', 'fsr3')
         ini.save()
+        point = asyncio.run(self.service.create_restore_point(str(self.target), str(self.target), ''))
+        self.assertTrue(point['ok'], point)
         self.dll = self.root/'community.dll'
         self.dll.write_bytes(b'test community DLL')
         self.build = dict(fsr4build.find('4.1.1b'),
@@ -151,11 +179,18 @@ class DeckFsr4Tests(unittest.TestCase):
         return {name: (self.target/name).read_bytes()
                 for name in [FFX_UPSCALER_DLL, INI_NAME, MANIFEST_NAME]}
 
+    def test_unowned_license_file_does_not_mark_healthy_runtime_corrupt(self):
+        user = self.target / 'Licenses/user-added.txt'
+        user.write_bytes(b'user file')
+        result = installer.verify_install(self.target, self.payload)
+        self.assertTrue(result['complete'], result)
+        self.assertEqual(user.read_bytes(), b'user file')
+
     def test_enable_verify_reinstall_restore_uninstall(self):
         self.assertTrue(self.enable()['ok'])
         config = asyncio.run(self.service.read_config(str(self.target)))
         self.assertEqual(config['fsr4_build'], '4.1.1b')
-        self.assertEqual(config['values']['FSR']['Fsr4ForceEnableInt8'], 'true')
+        self.assertEqual(config['values']['FSR']['Fsr4ForceEnableInt8'], '1')
         self.assertEqual(config['values']['FSR']['Fsr4Update'], 'auto')
         self.assertEqual(config['values']['FSR']['UpscalerIndex'], '0')
         self.assertEqual(config['values']['FrameGen']['FGOutput'], 'fsr3')

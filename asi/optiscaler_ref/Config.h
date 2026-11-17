@@ -266,7 +266,7 @@ class Config
 
     // RCAS
     CustomOptional<bool> ContrastEnabled { false };
-    CustomOptional<float> Contrast { -0.3f };
+    CustomOptional<float> Contrast { 0.0f };
 
     // DA Sharpening
     CustomOptional<bool> UseDepthAwareSharpen { false };
@@ -285,7 +285,7 @@ class Config
 
     // Menu
     CustomOptional<float, NoDefault> MenuScale;
-    CustomOptional<bool> OverlayMenu { true };
+    CustomOptional<bool, SoftDefault> OverlayMenu { true };
     CustomOptional<int> ShortcutKey { VK_INSERT };
     CustomOptional<bool> ExtendedLimits { false };
     CustomOptional<bool> ShowFps { false };
@@ -317,7 +317,7 @@ class Config
     // Hooks
     CustomOptional<bool> HookOriginalNvngxOnly { false };
     CustomOptional<bool> EarlyHooking { false };
-    CustomOptional<bool> UseNtdllHooks { true };
+    CustomOptional<bool, SoftDefault> UseNtdllHooks { true };
 
     // Upscale Ratio Override
     CustomOptional<bool> UpscaleRatioOverrideEnabled { false };
@@ -339,18 +339,18 @@ class Config
     // ProcessFilter
     CustomOptional<std::wstring, NoDefault> TargetProcess;
     CustomOptional<std::wstring> ProcessExclusionList = {
-        L"crashpad_handler.exe|crashreport.exe|crashreporter.exe|crs-handler.exe|unitycrashhandler64.exe|"
-        L"idtechlauncher.exe|cefviewwing.exe|ace-setup64.exe|ace-service64.exe|qtwebengineprocess.exe|"
-        L"platformprocess.exe|bugsplathd64.exe|bssndrpt64.exe|pspcsdkappmgr.exe|pspcsdkcore.exe|pspcsdkstttts.exe|"
-        L"pspcsdktelemetry.exe|pspcsdkui.exe|pspcsdkupdatechecker.exe|pspcsdkvoicechat.exe|pspcsdkwebview.exe|windhawk."
-        L"exe|vscodium.exe|crash_reporter.exe|steamerrorreporter64.exe|crashreportclient.exe|edcefcrashpadprocess.exe|"
-        L"edcefrenderprocess.exe"
+        L"crashpad_handler.exe|crashreport.exe|crashreporter.exe|crs-handler.exe|crs-uploader.exe|crs-video.exe|"
+        L"unitycrashhandler64.exe|idtechlauncher.exe|cefviewwing.exe|ace-setup64.exe|ace-service64.exe|"
+        L"qtwebengineprocess.exe|platformprocess.exe|bugsplathd64.exe|bssndrpt64.exe|pspcsdkappmgr.exe|pspcsdkcore.exe|"
+        L"pspcsdkstttts.exe|pspcsdktelemetry.exe|pspcsdkui.exe|pspcsdkupdatechecker.exe|pspcsdkvoicechat.exe|"
+        L"pspcsdkwebview.exe|windhawk.exe|vscodium.exe|crash_reporter.exe|steamerrorreporter64.exe|crashreportclient."
+        L"exe|edcefcrashpadprocess.exe|edcefrenderprocess.exe|unicrashreporter.exe"
     };
 
     // Hotfixes
     CustomOptional<bool> CheckForUpdate { true };
-    CustomOptional<bool> DisableOverlays { false };
-    CustomOptional<bool> ManualInputPolling { false };
+    CustomOptional<bool, SoftDefault> DisableOverlays { false };
+    CustomOptional<bool, SoftDefault> ManualInputPolling { false };
 
     CustomOptional<bool> SimulateWaitableObject { false };
 
@@ -368,9 +368,9 @@ class Config
     CustomOptional<int, NoDefault> RoundInternalResolution; // disabled by default
 
     CustomOptional<int, NoDefault> SkipFirstFrames; // disabled by default
-    CustomOptional<bool> RestoreComputeSignature { false };
-    CustomOptional<bool> RestoreGraphicSignature { false };
-    CustomOptional<bool> ExtendedStateRestore { false };
+    CustomOptional<bool, SoftDefault> RestoreComputeSignature { false };
+    CustomOptional<bool, SoftDefault> RestoreGraphicSignature { false };
+    CustomOptional<bool, SoftDefault> ExtendedStateRestore { false };
 
     CustomOptional<bool> UsePrecompiledShaders { true };
 
@@ -385,7 +385,7 @@ class Config
     CustomOptional<int32_t, NoDefault> MaskResourceBarrier;     // disabled by default
     CustomOptional<int32_t, NoDefault> OutputResourceBarrier;   // disabled by default
 
-    CustomOptional<bool> CreateD3D12DeviceForLuma { false };
+    CustomOptional<bool, SoftDefault> CreateD3D12DeviceForLuma { false };
 
     // Upscalers
     CustomOptional<std::string, SoftDefault> Dx11Upscaler { "fsr22" };
@@ -416,40 +416,40 @@ class Config
 
     // FSR4
     CustomOptional<bool> Fsr4Update { false };
-    CustomOptional<bool> Fsr4ForceEnableInt8 { false };
+    CustomOptional<uint32_t> Fsr4ForceEnableInt8 { 0 };
     CustomOptional<uint32_t, NoDefault> Fsr4Preset;
     CustomOptional<bool> Fsr4EnableDebugView { false };
     CustomOptional<bool> Fsr4EnableWatermark { false };
-    CustomOptional<bool> Fsr4DoNotLoadAmdxc64 { false };
+    CustomOptional<bool, SoftDefault> Fsr4DoNotLoadAmdxc64 { false };
 
     // FSR Common
     CustomOptional<float> FsrVerticalFov { 60.0f };
     CustomOptional<float> FsrHorizontalFov { 0.0f }; // off by default
     CustomOptional<float> FsrCameraNear { 0.1f };
     CustomOptional<float> FsrCameraFar { 100000.0f };
-    CustomOptional<bool> FsrUseFsrInputValues { true };
+    CustomOptional<bool, SoftDefault> FsrUseFsrInputValues { true };
 
     // dx11wdx12
     CustomOptional<bool> Dx11DelayedInit { false };
-    CustomOptional<bool> DontUseNTShared { true };
+    CustomOptional<bool, SoftDefault> DontUseNTShared { true };
 
     // vulkanwdx12
     CustomOptional<bool> VulkanUseCopyForInputs { false };
     CustomOptional<bool> VulkanUseCopyForOutput { false };
 
     // NVAPI Override
-    CustomOptional<bool> OverrideNvapiDll { false };
+    CustomOptional<bool, SoftDefault> OverrideNvapiDll { false };
     CustomOptional<bool> DontUseFakenvapiForXeLLOnNvidia { false };
     CustomOptional<bool> DisableFlipMetering { false };
 
     // Spoofing
-    CustomOptional<bool> DxgiSpoofing { true };
+    CustomOptional<bool, SoftDefault> DxgiSpoofing { true };
     CustomOptional<bool> DxgiFactoryWrapping { false };
-    CustomOptional<bool> StreamlineSpoofing { true };
+    CustomOptional<bool, SoftDefault> StreamlineSpoofing { true };
     CustomOptional<std::string, NoDefault> DxgiBlacklist; // disabled by default
     CustomOptional<int, NoDefault> DxgiVRAM;              // disabled by default
-    CustomOptional<bool> VulkanSpoofing { false };
-    CustomOptional<bool> VulkanExtensionSpoofing { false };
+    CustomOptional<bool, SoftDefault> VulkanSpoofing { false };
+    CustomOptional<bool, SoftDefault> VulkanExtensionSpoofing { false };
     CustomOptional<int, NoDefault> VulkanVRAM; // disabled by default
     CustomOptional<bool> SpoofHAGS { false };
     CustomOptional<bool> SpoofFeatureLevel { false };
@@ -475,7 +475,7 @@ class Config
     CustomOptional<FGOutput> FGOutput { FGOutput::NoFG };
     CustomOptional<bool> FGDrawUIOverFG { false };
     CustomOptional<bool> FGUIPremultipliedAlpha { true };
-    CustomOptional<bool> FGDisableHudless { false };
+    CustomOptional<bool, SoftDefault> FGDisableHudless { false };
     CustomOptional<bool> FGDisableUI { false };
     CustomOptional<bool> FGSkipReset { false };
     CustomOptional<int> FGAllowedFrameAhead { 1 };
@@ -483,8 +483,8 @@ class Config
     CustomOptional<bool> FGVelocityValidNow { false };
     CustomOptional<bool> FGHudlessValidNow { false };
     CustomOptional<bool> FGOnlyAcceptFirstHudless { false };
-    CustomOptional<bool> FGPreserveSwapChain { true };
-    CustomOptional<bool> FGSkipResizeBuffers { false };
+    CustomOptional<bool, SoftDefault> FGPreserveSwapChain { true };
+    CustomOptional<bool, SoftDefault> FGSkipResizeBuffers { false };
     CustomOptional<bool> FGModifyBufferState { false };
     CustomOptional<bool> FGModifySCIndex { false };
     CustomOptional<FrameTimeSource> FTInput { FrameTimeSource::Input };
@@ -496,7 +496,7 @@ class Config
     CustomOptional<bool> FGMakeDepthCopy { true };
     CustomOptional<bool> FGResourceFlip { false };
     CustomOptional<bool> FGResourceFlipOffset { false };
-    CustomOptional<bool> FGAlwaysCaptureFSRFGSwapchain { false };
+    CustomOptional<bool, SoftDefault> FGAlwaysCaptureFSRFGSwapchain { false };
 
     CustomOptional<int, NoDefault> FGRectLeft;
     CustomOptional<int, NoDefault> FGRectTop;
@@ -504,7 +504,7 @@ class Config
     CustomOptional<int, NoDefault> FGRectHeight;
 
     // OptiFG - Hudfix
-    CustomOptional<bool> FGDisableHUDFix { false };
+    CustomOptional<bool, SoftDefault> FGDisableHUDFix { false };
     CustomOptional<bool> FGHUDFix { false };
     CustomOptional<int> FGHUDLimit { 1 };
     CustomOptional<bool> FGHUDFixExtended { false };
@@ -537,6 +537,7 @@ class Config
     CustomOptional<bool> FGDebugPacingLines { false };
     CustomOptional<bool> FGAsync { false };
     CustomOptional<bool> FGFramePacingTuning { true };
+    CustomOptional<bool> FSRFGDisableFlipMetering { false };
     CustomOptional<float> FGFPTSafetyMarginInMs { 0.01f };
     CustomOptional<float> FGFPTVarianceFactor { 0.3f };
     CustomOptional<bool> FGFPTAllowHybridSpin { false };
@@ -555,7 +556,7 @@ class Config
     CustomOptional<bool> FGXeFGJitteredMV { false };
     CustomOptional<bool> FGXeFGHighResMV { false };
     CustomOptional<bool> FGXeFGDebugView { false };
-    CustomOptional<bool> FGXeFGForceBorderless { false };
+    CustomOptional<bool, SoftDefault> FGXeFGForceBorderless { false };
 
     // fakenvapi
     CustomOptional<bool> FN_EnableLogs { true };
@@ -567,17 +568,17 @@ class Config
     // Inputs
     CustomOptional<bool> EnableDlssInputs { true };
     CustomOptional<bool> EnableXeSSInputs { true };
-    CustomOptional<bool> UseFsr2Inputs { true };
-    CustomOptional<bool> UseFsr2Dx11Inputs { false };
-    CustomOptional<bool> UseFsr2VulkanInputs { false };
-    CustomOptional<bool> Fsr2Pattern { false };
-    CustomOptional<bool> UseFsr3Inputs { true };
-    CustomOptional<bool> Fsr3Pattern { false };
-    CustomOptional<bool> UseFfxInputs { true };
+    CustomOptional<bool, SoftDefault> UseFsr2Inputs { true };
+    CustomOptional<bool, SoftDefault> UseFsr2Dx11Inputs { false };
+    CustomOptional<bool, SoftDefault> UseFsr2VulkanInputs { false };
+    CustomOptional<bool, SoftDefault> Fsr2Pattern { false };
+    CustomOptional<bool, SoftDefault> UseFsr3Inputs { true };
+    CustomOptional<bool, SoftDefault> Fsr3Pattern { false };
+    CustomOptional<bool, SoftDefault> UseFfxInputs { true };
     CustomOptional<bool> EnableHotSwapping { false };
-    CustomOptional<bool> EnableFsr2Inputs { true };
-    CustomOptional<bool> EnableFsr3Inputs { true };
-    CustomOptional<bool> EnableFfxInputs { true };
+    CustomOptional<bool, SoftDefault> EnableFsr2Inputs { true };
+    CustomOptional<bool, SoftDefault> EnableFsr3Inputs { true };
+    CustomOptional<bool, SoftDefault> EnableFfxInputs { true };
 
     // Framerate
     CustomOptional<float> FramerateLimit { 0.0f };
@@ -588,7 +589,7 @@ class Config
     CustomOptional<bool> SkipColorSpace { false };
 
     // V-Sync
-    CustomOptional<bool> OverrideVsync { false };
+    CustomOptional<bool, SoftDefault> OverrideVsync { false };
     CustomOptional<bool, NoDefault> ForceVsync;
     CustomOptional<UINT> VsyncInterval { 0 };
 

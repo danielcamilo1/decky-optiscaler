@@ -1,13 +1,17 @@
 import { ButtonItem, Field, PanelSection, PanelSectionRow } from "@decky/ui";
 import { useState } from "react";
 import { getLiveLog, installLive } from "../api";
-import { liveFrameRates } from "../config/basic";
+import { liveFfxFgLabel, liveFrameRates, livePresentPathFps } from "../config/basic";
+import { hasVerifiedLiveRuntime, liveStatusMessage } from "../liveControl";
 import type { LiveStatus } from "../types";
 import { KeyValue, Mono, Notice } from "./Common";
 
 interface Props {
   targetDir: string;
   status: LiveStatus | null;
+  /** Steam reports the game running even if its live module never attached. */
+  running?: boolean;
+  onBeforeMutation?: () => Promise<void> | void;
   onChanged: () => Promise<void> | void;
 }
 
@@ -26,13 +30,6 @@ interface Props {
  * a map this plugin could not locate at all is a build mismatch and waiting
  * will not fix it.
  */
-function upscalerBlockedReason(status: LiveStatus) {
-  if (status.backend_entries === 0) {
-    return "Upscaler switching turns on once the game has drawn its first upscaled frame.";
-  }
-  return "Upscaler switching is unavailable: OptiScaler's backend list could not be read.";
-}
-
 /**
  * What the in-game plugin is actually measuring, when it is attached.
  *
@@ -44,25 +41,61 @@ function upscalerBlockedReason(status: LiveStatus) {
  * the other is a generator that is not running.
  */
 function Measurements({ status }: Readonly<{ status: LiveStatus }>) {
-  if (!status.attached) return null;
+  if (!hasVerifiedLiveRuntime(status)) return null;
   const ms = (value: number | null | undefined) =>
     typeof value === "number" && value > 0 ? `${value.toFixed(2)} ms` : "—";
   const fps = (value: number | null | undefined) =>
     typeof value === "number" && value > 0 ? `${value.toFixed(1)} fps` : "—";
   const rates = liveFrameRates(status);
+  const coreIntervals = status.telemetry_ready === true && status.telemetry_source === "core_intervals";
+  const presentPathFps = livePresentPathFps(status);
   return (
     <PanelSectionRow>
       <div style={{ padding: "2px 0" }}>
-        <KeyValue label="Presented" value={fps(status.total_fps)} />
-        <KeyValue label="Rendered" value={fps(status.base_fps)} />
-        {/* The raw slots, named after where in State they came from rather than
-            after a role: which one is the presented interval is decided from
-            the numbers above, and seeing both is how a slot that was never
-            written tells itself apart from a generator that is idle. */}
-        <KeyValue
-          label="Intervals"
-          value={`${ms(status.presented_ms)} present · ${ms(status.rendered_ms)} fg · ${fps(status.fps)} counted`}
-        />
+        {rates ? (
+          <>
+            <KeyValue label="Presented rate" value={fps(rates.total)} />
+            <KeyValue
+              label="Rendered rate"
+              value={
+                rates.base === null
+                  ? "not reported by the in-game plugin"
+                  : fps(rates.base)
+              }
+            />
+          </>
+        ) : coreIntervals ? (
+          <KeyValue
+            label="Present path FPS"
+            value={presentPathFps === null ? "unavailable" : fps(presentPathFps)}
+          />
+        ) : (
+          <KeyValue label="Frame counter rate" value={fps(status.fps)} />
+        )}
+        {status.fg_enabled !== null ? (
+          <KeyValue
+            label="Frame generation active"
+            value={status.fg_enabled ? "on" : "off"}
+          />
+        ) : null}
+        {typeof status.configured_fg_enabled === "boolean" ? (
+          <KeyValue
+            label="Frame generation configured"
+            value={status.configured_fg_enabled ? "on" : "off"}
+          />
+        ) : null}
+        {status.ffx_fg_versions?.length ? (
+          <KeyValue
+            label="FFX frame generator"
+            value={liveFfxFgLabel(status) ?? "not identified by the runtime"}
+          />
+        ) : null}
+        {status.telemetry_ready === true ? (
+          <KeyValue
+            label="Intervals"
+            value={`${ms(status.presented_ms)} present · ${ms(status.rendered_ms)} fg`}
+          />
+        ) : null}
         {/* Which build of the in-game plugin produced the line above. An older
             one does not report the intervals at all, and the two rates are then
             missing for a reason that has nothing to do with how they are
@@ -93,60 +126,47 @@ function Measurements({ status }: Readonly<{ status: LiveStatus }>) {
   );
 }
 
-export function LivePanel({ targetDir, status, onChanged }: Props) {
+export function LivePanel({ targetDir, status, running = false, onBeforeMutation, onChanged }: Props) {
   const [busy, setBusy] = useState(false);
   const [log, setLog] = useState<string[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [restartNeeded, setRestartNeeded] = useState(false);
 
-  if (!status) return null;
+  if (!status) {
+    return (
+      <PanelSection title="Live in-game control">
+        <PanelSectionRow>
+          <Notice tone="info" title="Waiting for live status">
+            The game has not reported a live-control state for this target yet.
+          </Notice>
+        </PanelSectionRow>
+      </PanelSection>
+    );
+  }
 
-  // Each of these is a different failure with a different fix, and the whole
-  // point of reporting them separately is that "not connected" on its own tells
-  // the user nothing about what to do next.
-  const chain = status.attached ? null : !status.asi_available ? (
-    <Notice tone="warn" title="Not included in this build">
-      This copy of the plugin was packaged without the live-control module, so every setting
-      needs a game restart.
-    </Notice>
-  ) : !status.asi_installed ? (
-    <Notice tone="info" title="Not installed for this game">
-      Add it below to change frame generation and the upscaler without restarting.
-    </Notice>
-  ) : status.load_enabled === false ? (
-    <Notice tone="warn" title="OptiScaler is not set to load plugins">
-      <b>LoadAsiPlugins</b> is off in OptiScaler.ini, and it defaults to off — so the plugin
-      is installed but never loaded. Use <b>Add live control</b> below to switch it on.
-    </Notice>
-  ) : status.loaded_by_optiscaler === false ? (
-    <Notice tone="warn" title="OptiScaler did not load it">
-      OptiScaler searched its plugins folder this run and did not load the module. Check that
-      it is still in <Mono>plugins/</Mono> next to OptiScaler.
-    </Notice>
-  ) : null;
-
-  const body = chain ? (
-    chain
-  ) : status.attached ? (
-    <Notice tone="success" title="Connected to the running game">
-      Frame generation
-      {status.can_switch_upscaler ? " and the upscaler apply" : " applies"} immediately.
-      {status.can_switch_upscaler ? "" : ` ${upscalerBlockedReason(status)}`}
-    </Notice>
-  ) : status.state === "failed" ? (
-    <Notice tone="warn" title="Loaded, but could not attach">
-      {status.error || "It could not locate OptiScaler's settings in memory."} This usually
-      means the game is running a different OptiScaler build than the one bundled here.
-      Everything still works through a restart.
-    </Notice>
-  ) : (
-    <Notice tone="info" title="Installed, waiting for the game">
-      It reports in a few seconds after the game starts.
-      {status.state !== "absent" ? ` Last state: ${status.state}.` : ""}
-      {status.loaded_by_optiscaler ? " OptiScaler's log says it was loaded." : ""}
+  const liveState = liveStatusMessage(status);
+  const gameRunning = running || status.legacy_running === true;
+  const body = (
+    <Notice tone={liveState.tone} title={liveState.title}>
+      {liveState.detail}
     </Notice>
   );
 
   return (
     <PanelSection title="Live in-game control">
+      {error ? (
+        <PanelSectionRow>
+          <Notice tone="error" title="Live control action failed">{error}</Notice>
+        </PanelSectionRow>
+      ) : null}
+      {restartNeeded ? (
+        <PanelSectionRow>
+          <Notice tone="info" title="Restart the game to load the change">
+            Live control was installed successfully. Close and relaunch the game before checking
+            its status.
+          </Notice>
+        </PanelSectionRow>
+      ) : null}
       <PanelSectionRow>{body}</PanelSectionRow>
 
       <Measurements status={status} />
@@ -163,36 +183,27 @@ export function LivePanel({ targetDir, status, onChanged }: Props) {
         </PanelSectionRow>
       ) : null}
 
-      {/* The plugin ships an ASI; each game holds its own copy of it, taken at
-          set-up time. Updating the plugin does not update those, so a game can
-          be attached and answering while missing everything added since — which
-          reads as the new feature not existing rather than as an old plugin.
-          The copy is deliberately not offered while the game is running: the
-          DLL is mapped into it, and truncating a mapped file is how you take
-          the game down with you. */}
-      {status.asi_current === false ? (
-        <PanelSectionRow>
-          <Notice tone="warn" title="The in-game plugin is out of date">
-            This game has an older build of the live-control plugin than the one shipped here.
-            It still works, but anything added since is missing — including the rendered frame
-            rate and the FSR version list.
-            {status.attached
-              ? " Close the game, then reinstall live control here."
-              : " Reinstall live control below."}
-          </Notice>
-        </PanelSectionRow>
-      ) : null}
-
-      {status.asi_available && !status.attached ? (
+      {status.can_install === true && !status.attached ? (
         <PanelSectionRow>
           <ButtonItem
             layout="below"
-            disabled={busy}
+            disabled={busy || gameRunning}
             onClick={async () => {
+              if (busy || gameRunning) return;
               setBusy(true);
+              setError(null);
+              setRestartNeeded(false);
               try {
-                await installLive(targetDir);
+                await onBeforeMutation?.();
+                const result = await installLive(targetDir);
+                if (!result.ok) {
+                  setError(result.error ?? "Could not install live control.");
+                  return;
+                }
+                setRestartNeeded(true);
                 await onChanged();
+              } catch (exc) {
+                setError(String(exc));
               } finally {
                 setBusy(false);
               }
@@ -200,6 +211,13 @@ export function LivePanel({ targetDir, status, onChanged }: Props) {
           >
             {status.asi_installed ? "Reinstall live control" : "Add live control"}
           </ButtonItem>
+        </PanelSectionRow>
+      ) : null}
+      {status.can_install === true && !status.attached && gameRunning ? (
+        <PanelSectionRow>
+          <Notice tone="info" title="Close the game before repairing live control">
+            The running module may be mapped into the game process. Stop the game, then add or reinstall it here.
+          </Notice>
         </PanelSectionRow>
       ) : null}
 
@@ -210,8 +228,11 @@ export function LivePanel({ targetDir, status, onChanged }: Props) {
             disabled={busy}
             onClick={async () => {
               setBusy(true);
+              setError(null);
               try {
                 setLog((await getLiveLog(targetDir, 30)).lines);
+              } catch (exc) {
+                setError(String(exc));
               } finally {
                 setBusy(false);
               }

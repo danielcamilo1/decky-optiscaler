@@ -26,13 +26,19 @@ export function MonitorTab({
 }) {
   const [report, setReport] = useState<MonitorReport | null>(null);
   const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const timer = useRef<number | null>(null);
 
   const refresh = useCallback(async () => {
+    setLoading(true);
+    setError(null);
     try {
       setReport(await getMonitor(targetDir));
-    } catch {
-      /* the game may be mid-write; the next tick will pick it up */
+    } catch (exc) {
+      setError(String(exc));
+    } finally {
+      setLoading(false);
     }
   }, [targetDir]);
 
@@ -49,11 +55,53 @@ export function MonitorTab({
     return (
       <PanelSection title="Monitoring">
         <PanelSectionRow>
-          <Notice tone="info">Reading OptiScaler log…</Notice>
+          {loading ? (
+            <Notice tone="info">Reading OptiScaler log…</Notice>
+          ) : error ? (
+            <Notice tone="error" title="Could not read OptiScaler log">{error}</Notice>
+          ) : (
+            <Notice tone="info">No OptiScaler log is available yet.</Notice>
+          )}
         </PanelSectionRow>
+        {!loading ? (
+          <PanelSectionRow>
+            <ButtonItem layout="below" disabled={busy} onClick={() => void refresh()}>
+              Try again
+            </ButtonItem>
+          </PanelSectionRow>
+        ) : null}
       </PanelSection>
     );
   }
+
+  const runLogging = async (checked: boolean) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await setLogging(targetDir, checked);
+      if (!result.ok) throw new Error(result.error ?? "Could not update logging.");
+      await refresh();
+      onNeedsRestart();
+    } catch (exc) {
+      setError(String(exc));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const runClear = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await clearLog(targetDir);
+      if (!result.ok) throw new Error(result.error ?? "Could not clear the log.");
+      await refresh();
+    } catch (exc) {
+      setError(String(exc));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const loggingOn = report.logging_enabled === "true";
   const state = report.state ?? {};
@@ -61,6 +109,19 @@ export function MonitorTab({
 
   return (
     <>
+      {error ? (
+        <PanelSection title="Monitoring">
+          <PanelSectionRow>
+            <Notice tone="error" title="Monitoring action failed">{error}</Notice>
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <ButtonItem layout="below" disabled={busy} onClick={() => void refresh()}>
+              Refresh log
+            </ButtonItem>
+          </PanelSectionRow>
+        </PanelSection>
+      ) : null}
+
       <PanelSection title="Monitoring">
         <PanelSectionRow>
           <ToggleField
@@ -69,13 +130,7 @@ export function MonitorTab({
             checked={loggingOn}
             disabled={busy}
             bottomSeparator="standard"
-            onChange={async (checked) => {
-              setBusy(true);
-              await setLogging(targetDir, checked);
-              await refresh();
-              onNeedsRestart();
-              setBusy(false);
-            }}
+            onChange={(checked) => void runLogging(checked)}
           />
         </PanelSectionRow>
 
@@ -175,12 +230,7 @@ export function MonitorTab({
               <ButtonItem
                 layout="below"
                 disabled={busy}
-                onClick={async () => {
-                  setBusy(true);
-                  await clearLog(targetDir);
-                  await refresh();
-                  setBusy(false);
-                }}
+                onClick={() => void runClear()}
               >
                 Clear log file
               </ButtonItem>

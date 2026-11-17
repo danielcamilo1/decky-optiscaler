@@ -1,6 +1,6 @@
 import { DropdownItem, SliderField, TextField, ToggleField } from "@decky/ui";
 import { useEffect, useState } from "react";
-import type { ConfigValues, OptionMeta } from "../types";
+import type { ConfigValues, LiveContext, OptionMeta } from "../types";
 import {
   AUTO,
   asBool,
@@ -14,7 +14,9 @@ import {
 interface Props {
   option: OptionMeta;
   values: ConfigValues;
-  onChange: (option: OptionMeta, value: string) => void;
+  onChange: (option: OptionMeta, value: string, context?: LiveContext | null) => void;
+  /** Runtime ordered version choices for FFX fields, when a game reported them. */
+  runtimeChoices?: { value: string; label: string; context: LiveContext | null }[];
   disabled?: boolean;
 }
 
@@ -33,7 +35,7 @@ function describe(option: OptionMeta, values: ConfigValues) {
   return parts.join(" ");
 }
 
-export function OptionControl({ option, values, onChange, disabled }: Props) {
+export function OptionControl({ option, values, onChange, runtimeChoices, disabled }: Props) {
   const raw = rawValue(values, option);
   const effective = effectiveValue(values, option);
   const label = labelWithState(option, values);
@@ -53,7 +55,12 @@ export function OptionControl({ option, values, onChange, disabled }: Props) {
   }
 
   if (option.type === "enum") {
-    const choices = [AUTO, ...(option.options ?? [])];
+    const dynamicLabels = runtimeChoices
+      ? Object.fromEntries(runtimeChoices.map((choice) => [choice.value.toLowerCase(), choice.label]))
+      : null;
+    const choices = [AUTO, ...(runtimeChoices
+      ? runtimeChoices.filter((choice) => choice.value.toLowerCase() !== AUTO).map((choice) => choice.value)
+      : option.options ?? [])];
     // OptiScaler's ini is case-insensitive and hand-edited files show it, so
     // the value is matched to a choice rather than compared to one. A value
     // that matches nothing keeps an option of its own: Steam's dropdown shows
@@ -73,11 +80,21 @@ export function OptionControl({ option, values, onChange, disabled }: Props) {
           data: choice,
           label:
             choice === AUTO
-              ? `Auto (${labelFor(option, option.default)})`
-              : labelFor(option, choice),
+              ? dynamicLabels?.[choice.toLowerCase()] ?? `Auto (${labelFor(option, option.default)})`
+              : dynamicLabels?.[choice.toLowerCase()] ?? (runtimeChoices
+                ? `Index ${choice} (not reported by the current FFX runtime)`
+                : labelFor(option, choice)),
         }))}
         selectedOption={selected}
-        onChange={(picked) => onChange(option, String(picked.data))}
+        onChange={(picked) => {
+          const value = String(picked.data);
+          if (runtimeChoices) {
+            const choice = runtimeChoices.find((item) => item.value.toLowerCase() === value.toLowerCase());
+            onChange(option, value, choice?.context ?? null);
+          } else {
+            onChange(option, value);
+          }
+        }}
       />
     );
   }

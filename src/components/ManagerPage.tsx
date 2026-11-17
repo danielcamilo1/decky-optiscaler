@@ -1,5 +1,5 @@
 import { PanelSection, PanelSectionRow, Tabs } from "@decky/ui";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getStatus, preparePayload } from "../api";
 import { resolveGame } from "../shortcuts";
 import {
@@ -31,6 +31,7 @@ export function ManagerPage() {
   const [resolving, setResolving] = useState(false);
   const [resolveError, setResolveError] = useState<string | null>(null);
   const runningGame = useRunningGame();
+  const resolveSequence = useRef(0);
   // Land on the running game when there is one; otherwise the games list is
   // what the page is for. The current app is read synchronously on mount, so
   // this is the real answer rather than a guess that corrects itself.
@@ -44,6 +45,7 @@ export function ManagerPage() {
    * first. A request naming neither is a request for the library list.
    */
   const openTarget = useCallback((target: ManagerTarget) => {
+    const request = ++resolveSequence.current;
     setResolveError(null);
     if (target.path && target.name) {
       setResolving(false);
@@ -56,10 +58,12 @@ export function ManagerPage() {
       return;
     }
     const appid = target.appid;
+    setSelection(null);
     setResolving(true);
     void (async () => {
       try {
         const game = await resolveGame(appid);
+        if (resolveSequence.current !== request) return;
         if (game.found && game.path && game.name) {
           setSelection({ path: game.path, name: game.name, appid });
         } else {
@@ -73,9 +77,9 @@ export function ManagerPage() {
           );
         }
       } catch (err) {
-        setResolveError(String(err));
+        if (resolveSequence.current === request) setResolveError(String(err));
       } finally {
-        setResolving(false);
+        if (resolveSequence.current === request) setResolving(false);
       }
     })();
   }, []);
@@ -169,6 +173,7 @@ export function ManagerPage() {
 
       {selection ? (
         <GameDetail
+          key={`${selection.appid ?? ""}:${selection.path}:${selection.name}`}
           gamePath={selection.path}
           gameName={selection.name}
           appid={selection.appid}
@@ -186,6 +191,7 @@ export function ManagerPage() {
               title: "Now Playing",
               content: (
                 <NowPlaying
+                  key={runningGame?.appid ?? "none"}
                   runningGame={runningGame}
                   onOpenGame={(game: Game) =>
                     setSelection({ path: game.path, name: game.name, appid: game.appid })

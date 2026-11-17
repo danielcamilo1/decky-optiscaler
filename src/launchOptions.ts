@@ -20,8 +20,9 @@
  *   the override this plugin recognises is removed; anything else is left, on
  *   the grounds that it is not ours to guess about.
  */
-import { getLaunchOptions, recordLaunchOptions } from "./api";
+import { createRestorePoint, getLaunchOptions, recordLaunchOptions } from "./api";
 import { readLaunchOptions } from "./hooks/useRunningGame";
+import { preferRecentLaunchOptions } from "./launchOptionState";
 import type { LaunchRecord } from "./types";
 
 /** What to do with the launch options when OptiScaler is removed. */
@@ -54,9 +55,286 @@ export function launchOptionFor(filename: string): string {
   return `WINEDLLOVERRIDES="${overrideStem(filename)}=n,b" %command%`;
 }
 
+interface ShellToken {
+  start: number;
+  end: number;
+  raw: string;
+}
+
+/** Find shell words while keeping the exact source ranges and quoted arguments. */
+function shellTokens(source: string): ShellToken[] {
+  const tokens: ShellToken[] = [];
+  let index = 0;
+  while (index < source.length) {
+    while (index < source.length && /\s/.test(source[index])) index += 1;
+    if (index >= source.length) break;
+    const start = index;
+    let quote = "";
+    while (index < source.length) {
+      const char = source[index];
+      if (quote) {
+        if (char === "\\" && quote === '"' && index + 1 < source.length) {
+          index += 2;
+          continue;
+        }
+        if (char === quote) quote = "";
+      } else if (char === '"' || char === "'") {
+        quote = char;
+      } else if (/\s/.test(char)) {
+        break;
+      }
+      index += 1;
+    }
+    tokens.push({ start, end: index, raw: source.slice(start, index) });
+  }
+  return tokens;
+}
+
+function assignmentValue(raw: string): { prefix: string; value: string; quote: string } | null {
+  const match = raw.match(/^([A-Za-z_][A-Za-z0-9_]*=)(.*)$/);
+  if (!match) return null;
+  const rest = match[2];
+  const quote = rest[0] === '"' || rest[0] === "'" ? rest[0] : "";
+  if (quote) {
+    if (rest[rest.length - 1] !== quote) return null;
+    const value = rest.slice(1, -1);
+    // Concatenated shell fragments and escaped double quotes need shell
+    // evaluation to interpret. Keep those forms outside this small parser.
+    if (value.includes(quote) || (quote === '"' && value.includes("\\"))) return null;
+    return { prefix: match[1], value, quote };
+  }
+  if (/["']/.test(rest)) return null;
+  return { prefix: match[1], value: rest, quote: "" };
+}
+
+function isEnvironmentAssignment(raw: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*=/.test(raw);
+}
+
+function isAssignmentLike(raw: string): boolean {
+  return /^["']?[A-Za-z_][A-Za-z0-9_]*=/.test(raw);
+}
+
+function simpleWordValue(raw: string): string {
+  const quote = raw[0];
+  if ((quote === '"' || quote === "'") && raw[raw.length - 1] === quote) {
+    const value = raw.slice(1, -1);
+    if (!value.includes(quote) && !(quote === '"' && value.includes("\\"))) return value;
+  }
+  return raw;
+}
+
+/**
+ * Accept only the plain shell subset this editor can preserve safely. Quoted
+ * semicolons are valid Wine override separators; shell control operators,
+ * escaped words and command substitutions are deliberately left untouched.
+ */
+function supportedShellSyntax(source: string): boolean {
+  let quote = "";
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+    if (quote === "'") {
+      if (char === "'") quote = "";
+      continue;
+    }
+    if (quote === '"') {
+      if (char === "\\") {
+        index += 1;
+        continue;
+      }
+      if (char === '"') quote = "";
+      else if (char === "`" || (char === "$" && source[index + 1] === "(")) return false;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (char === "\\" || char === "\n" || char === "\r" || /[;&|<>`()]/.test(char)) return false;
+    if (char === "#" && (index === 0 || /\s/.test(source[index - 1]))) return false;
+    if (char === "$" && source[index + 1] === "(") return false;
+  }
+  return quote === "";
+}
+
+interface EnvironmentPrefix {
+  assignments: ShellToken[];
+  envToken: ShellToken | null;
+  insertionOffset: number;
+}
+
+/** Parse leading assignments and one simple `env NAME=value` wrapper. */
+function environmentPrefix(source: string): EnvironmentPrefix | null {
+  if (!supportedShellSyntax(source)) return null;
+  const tokens = shellTokens(source);
+  const assignments: ShellToken[] = [];
+  let index = 0;
+  while (index < tokens.length && isEnvironmentAssignment(tokens[index].raw)) {
+    assignments.push(tokens[index]);
+    index += 1;
+  }
+
+  const command = tokens[index];
+  const commandValue = command ? simpleWordValue(command.raw) : "";
+  if (commandValue === "env" && command?.raw !== "env") return null;
+  let prefix: EnvironmentPrefix;
+  if (command?.raw === "env") {
+    const envToken = command;
+    index += 1;
+    const outerCount = assignments.length;
+    while (index < tokens.length && isEnvironmentAssignment(tokens[index].raw)) {
+      assignments.push(tokens[index]);
+      index += 1;
+    }
+    if (index < tokens.length && (tokens[index].raw.startsWith("-") || isAssignmentLike(tokens[index].raw))) {
+      // env options and quoted/otherwise unusual assignment spellings are not
+      // interpreted here, since they can change which value reaches the game.
+      return null;
+    }
+    const envAssignments = assignments.slice(outerCount);
+    prefix = {
+      assignments,
+      envToken,
+      insertionOffset: envAssignments.length > 0
+        ? envAssignments[envAssignments.length - 1].end
+        : envToken.end,
+    };
+  } else {
+    if (command && /(?:^|\/)env$/i.test(commandValue)) return null;
+    prefix = {
+      assignments,
+      envToken: null,
+      insertionOffset: assignments.length > 0 ? assignments[assignments.length - 1].end : 0,
+    };
+  }
+  const commandPlaceholder = tokens.find((token) => token.raw.toLowerCase() === "%command%");
+  const environmentCommands = tokens.filter((token) => {
+    if (commandPlaceholder && token.start >= commandPlaceholder.start) return false;
+    const value = simpleWordValue(token.raw);
+    return value === "env" || /(?:^|\/)env$/i.test(value);
+  });
+  if (environmentCommands.some((token) => token.start !== prefix.envToken?.start)) return null;
+  return prefix;
+}
+
+function quoteAssignment(value: string, quote: string): string {
+  if (quote === "'" && !value.includes("'")) return `'${value}'`;
+  if (quote === '"' || /[;\s]/.test(value)) {
+    return `"${value.replace(/[\\"$`]/g, "\\$&")}"`;
+  }
+  return value;
+}
+
+function pluginMode(mode: string): boolean {
+  const members = mode.split(",").map((item) => item.trim().toLowerCase()).filter(Boolean);
+  return members.length === 2 && members[0] === "n" && members[1] === "b";
+}
+
+function targetModes(value: string, filename: string): string[] {
+  const stem = overrideStem(filename).toLowerCase();
+  return value.split(";").flatMap((clause) => {
+    const equals = clause.indexOf("=");
+    if (equals < 0) return [];
+    const names = clause.slice(0, equals).split(",");
+    return names.some((name) => name.trim().toLowerCase() === stem)
+      ? [clause.slice(equals + 1)]
+      : [];
+  });
+}
+
+function removeLibraryMember(left: string, stem: string): { left: string; found: boolean } {
+  const members = Array.from(left.matchAll(/[^,]+/g));
+  const targetIndex = members.findIndex(
+    (member) => (member[0] ?? "").trim().toLowerCase() === stem,
+  );
+  if (targetIndex < 0) return { left, found: false };
+  const target = members[targetIndex];
+  const start = target.index ?? 0;
+  const end = start + target[0].length;
+  if (members.length === 1) return { left: "", found: true };
+  if (targetIndex < members.length - 1) {
+    const next = members[targetIndex + 1];
+    const nextStart = next.index ?? end;
+    return { left: left.slice(0, start) + left.slice(nextStart), found: true };
+  }
+  const previous = members[targetIndex - 1];
+  const previousEnd = (previous.index ?? 0) + previous[0].length;
+  const comma = left.indexOf(",", previousEnd);
+  return {
+    left: left.slice(0, comma < 0 ? start : comma) + left.slice(end),
+    found: true,
+  };
+}
+
+/** Remove only this plugin's exact DLL clause from a Wine override value. */
+function withoutOwnedClause(value: string, filename: string): { value: string; found: boolean } {
+  const stem = overrideStem(filename).toLowerCase();
+  const clauses = value.split(";");
+  let found = false;
+  const kept = clauses.flatMap((clause) => {
+    const equals = clause.indexOf("=");
+    if (equals < 0) return [clause];
+    const removed = removeLibraryMember(clause.slice(0, equals), stem);
+    if (!removed.found) return [clause];
+    found = true;
+    return removed.left.trim()
+      ? [`${removed.left}=${clause.slice(equals + 1)}`]
+      : [];
+  });
+  return { value: found ? kept.join(";") : value, found };
+}
+
+function withoutPluginClause(value: string, filename: string): { value: string; found: boolean } {
+  const stem = overrideStem(filename).toLowerCase();
+  const clauses = value.split(";");
+  let found = false;
+  const kept = clauses.flatMap((clause) => {
+    const equals = clause.indexOf("=");
+    if (equals < 0 || !pluginMode(clause.slice(equals + 1))) return [clause];
+    const removed = removeLibraryMember(clause.slice(0, equals), stem);
+    if (!removed.found) return [clause];
+    found = true;
+    return removed.left.trim()
+      ? [`${removed.left}=${clause.slice(equals + 1)}`]
+      : [];
+  });
+  return { value: found ? kept.join(";") : value, found };
+}
+
+function isWineAssignmentToken(token: ShellToken): boolean {
+  return /^WINEDLLOVERRIDES=/.test(token.raw);
+}
+
+function effectiveWineAssignment(tokens: ShellToken[]): ShellToken | undefined {
+  return [...tokens].reverse().find(isWineAssignmentToken);
+}
+
+function isSafeWineValue(assignment: { value: string; quote: string }): boolean {
+  // Requoting an expanded value would turn it into a different literal value.
+  return assignment.quote === "'" || !/[$`]/.test(assignment.value);
+}
+
+function renderAssignment(
+  assignment: { prefix: string; quote: string },
+  value: string,
+): string {
+  return `${assignment.prefix}${quoteAssignment(value, assignment.quote)}`;
+}
+
+function insertAt(source: string, offset: number, word: string): string {
+  const before = source.slice(0, offset);
+  const after = source.slice(offset);
+  const beforeSpace = before.length > 0 && !/\s$/.test(before) ? " " : "";
+  const afterSpace = after.length > 0 && !/^\s/.test(after) ? " " : "";
+  return `${before}${beforeSpace}${word}${afterSpace}${after}`;
+}
+
 export function hasOverride(options: string | null, filename: string): boolean {
   if (!options) return false;
-  return options.toLowerCase().includes(`${overrideStem(filename).toLowerCase()}=n,b`);
+  const prefix = environmentPrefix(options);
+  const token = prefix && effectiveWineAssignment(prefix.assignments);
+  const assignment = token && assignmentValue(token.raw);
+  return Boolean(assignment && targetModes(assignment.value, filename).some(pluginMode));
 }
 
 /**
@@ -69,13 +347,192 @@ export function hasOverride(options: string | null, filename: string): boolean {
  * written out longhand, so that collapses to an empty field.
  */
 export function stripOverride(options: string, filename: string): string {
-  const stem = overrideStem(filename).toLowerCase();
-  const withoutOurs = options.replace(
-    /WINEDLLOVERRIDES=(?:"[^"]*"|'[^']*'|\S+)/gi,
-    (match) => (match.toLowerCase().includes(`${stem}=`) ? "" : match),
-  );
-  const collapsed = withoutOurs.replace(/\s+/g, " ").trim();
-  return collapsed === "%command%" ? "" : collapsed;
+  const prefix = environmentPrefix(options);
+  if (!prefix) return options;
+  let result = options;
+  const updates: Array<{ start: number; end: number; value: string }> = [];
+  for (const token of prefix.assignments) {
+    if (!isWineAssignmentToken(token)) continue;
+    const assignment = assignmentValue(token.raw);
+    if (!assignment || !isSafeWineValue(assignment)) return options;
+    const stripped = withoutPluginClause(assignment.value, filename);
+    if (!stripped.found) continue;
+    updates.push({
+      start: token.start,
+      end: token.end,
+      value: stripped.value.trim()
+        ? renderAssignment(assignment, stripped.value)
+        : "",
+    });
+  }
+  for (const update of updates.reverse()) {
+    result = result.slice(0, update.start) + update.value + result.slice(update.end);
+  }
+  if (updates.some((update) => update.start === 0 && update.value === "")) result = result.trimStart();
+  return result.trim() === "%command%" ? "" : result;
+}
+
+/** Add/update our Wine override and planned flags while preserving other shell text. */
+export function mergeLaunchOptions(
+  current: string | null,
+  filename: string,
+  flags: string[] = [],
+  additionalOverrides: string[] = [],
+): string | null {
+  if (current === null) return null;
+  const stems = [
+    ...(filename.toLowerCase().endsWith(".asi") ? [] : [overrideStem(filename)]),
+    ...additionalOverrides.map((item) => overrideStem(item)),
+  ];
+  return mergeWineOverrides(current, stems, flags);
+}
+
+/** Merge exact DLL stems into WINEDLLOVERRIDES and append missing game flags. */
+export function mergeWineOverrides(
+  current: string | null,
+  stems: string[],
+  flags: string[] = [],
+): string | null {
+  if (current === null) return null;
+  const wanted = Array.from(new Set(stems.map((stem) => stem.toLowerCase()).filter(Boolean)));
+  if (wanted.length === 0 && flags.length === 0) return current;
+  const prefix = environmentPrefix(current);
+  if (!prefix) return null;
+  let merged = current;
+  if (wanted.length > 0) {
+    const token = effectiveWineAssignment(prefix.assignments);
+    if (token) {
+      const assignment = assignmentValue(token.raw);
+      if (!assignment || !isSafeWineValue(assignment)) return null;
+      let remaining = assignment.value;
+      for (const stem of wanted) {
+        const removed = withoutOwnedClause(remaining, `${stem}.dll`);
+        remaining = removed.value;
+      }
+      const additions = wanted.map((stem) => `${stem}=n,b`).join(";");
+      const value = remaining.trim() ? `${remaining};${additions}` : additions;
+      const replacement = renderAssignment(assignment, value);
+      merged = current.slice(0, token.start) + replacement + current.slice(token.end);
+    } else {
+      const assignment = `WINEDLLOVERRIDES=${quoteAssignment(
+        wanted.map((stem) => `${stem}=n,b`).join(";"),
+        '"',
+      )}`;
+      merged = insertAt(current, prefix.insertionOffset, assignment);
+    }
+  }
+  const withCommand = ensureCommandPlaceholder(merged);
+  if (withCommand === null) return null;
+  merged = withCommand;
+  return mergeFlags(merged, flags);
+}
+
+function ensureCommandPlaceholder(source: string): string | null {
+  if (!supportedShellSyntax(source)) return null;
+  const tokens = shellTokens(source);
+  const commandTokens = tokens.filter((token) => token.raw.toLowerCase() === "%command%");
+  if (commandTokens.length === 1) return source;
+  if (commandTokens.length > 1 || source.toLowerCase().includes("%command%")) return null;
+  const argumentsOnly = argumentOnlyTokens(source, tokens);
+  if (!argumentsOnly) return null;
+  const offset = argumentsOnly[0]?.start ?? source.length;
+  return insertAt(source, offset, "%command%");
+}
+
+function argumentOnlyTokens(source: string, tokens: ShellToken[]): ShellToken[] | null {
+  const prefix = environmentPrefix(source);
+  if (!prefix) return null;
+  const boundary = Math.max(0, prefix.envToken?.end ?? 0, ...prefix.assignments.map((token) => token.end));
+  const argumentsOnly = tokens.filter((token) => token.start >= boundary);
+  // Without %command%, only a plain flag/value list is unambiguous.
+  return argumentsOnly.length === 0 || /^[+-]/.test(argumentsOnly[0].raw) ? argumentsOnly : null;
+}
+
+function gameArgumentTokens(source: string): ShellToken[] | null {
+  if (!supportedShellSyntax(source)) return null;
+  const tokens = shellTokens(source);
+  const commands = tokens.filter((token) => token.raw.toLowerCase() === "%command%");
+  if (commands.length > 1 || (commands.length === 0 && source.toLowerCase().includes("%command%"))) return null;
+  if (commands.length === 0) return argumentOnlyTokens(source, tokens);
+  return tokens.filter((token) => token.start >= commands[0].end);
+}
+
+/** Remove the owned DLL clause and any exact wiki flags, preserving other text. */
+export function stripLaunchOptions(
+  current: string,
+  filename: string,
+  flags: string[] = [],
+  additionalOverrides: string[] = [],
+  originalOptions: string | null = null,
+): string {
+  let result = current;
+  const stems = [
+    ...(filename.toLowerCase().endsWith(".asi") ? [] : [filename]),
+    ...additionalOverrides,
+  ];
+  for (const stem of stems) {
+    const originalPrefix = originalOptions === null ? null : environmentPrefix(originalOptions);
+    const originalWine = originalPrefix && effectiveWineAssignment(originalPrefix.assignments);
+    const originalAssignment = originalWine && assignmentValue(originalWine.raw);
+    const originalModes = originalAssignment
+      ? targetModes(originalAssignment.value, stem)
+      : [];
+    result = stripOverride(result, stem);
+    if (originalModes.length > 0) {
+      result = mergeOriginalModes(result, stem, originalModes);
+    }
+  }
+  const wanted = new Set(flags.map((flag) => flag.trim()).filter(Boolean));
+  if (wanted.size > 0 && originalOptions !== null) {
+    const originalArguments = gameArgumentTokens(originalOptions);
+    const currentArguments = gameArgumentTokens(result);
+    if (!originalArguments || !currentArguments) return result;
+    const originalCounts = new Map<string, number>();
+    for (const token of originalArguments) {
+      originalCounts.set(token.raw, (originalCounts.get(token.raw) ?? 0) + 1);
+    }
+    const seenCounts = new Map<string, number>();
+    const ranges = currentArguments
+      .filter((token) => {
+        if (!wanted.has(token.raw)) return false;
+        const seen = (seenCounts.get(token.raw) ?? 0) + 1;
+        seenCounts.set(token.raw, seen);
+        return seen > (originalCounts.get(token.raw) ?? 0);
+      })
+      .map(({ start, end }) => ({ start, end }));
+    for (const range of ranges.reverse()) {
+      result = result.slice(0, range.start) + result.slice(range.end);
+    }
+  }
+  return result.trim() === "%command%" ? "" : result;
+}
+
+function mergeOriginalModes(current: string, filename: string, modes: string[]): string {
+  const wanted = overrideStem(filename).toLowerCase();
+  const prefix = environmentPrefix(current);
+  if (!prefix) return current;
+  const token = effectiveWineAssignment(prefix.assignments);
+  const restored = modes.map((mode) => `${wanted}=${mode}`).join(";");
+  if (token) {
+    const assignment = assignmentValue(token.raw);
+    if (!assignment || !isSafeWineValue(assignment)) return current;
+    const value = assignment.value.trim() ? `${assignment.value};${restored}` : restored;
+    const replacement = renderAssignment(assignment, value);
+    return current.slice(0, token.start) + replacement + current.slice(token.end);
+  }
+  const wineAssignment = `WINEDLLOVERRIDES=${quoteAssignment(restored, '"')}`;
+  return insertAt(current, prefix.insertionOffset, wineAssignment);
+}
+
+function mergeFlags(current: string, flags: string[]): string | null {
+  const gameArguments = gameArgumentTokens(current);
+  if (!gameArguments) return null;
+  const present = new Set(gameArguments.map((token) => token.raw));
+  const missing = flags.map((flag) => flag.trim()).filter((flag) => flag && !present.has(flag));
+  if (missing.length === 0) return current;
+  const command = shellTokens(current).find((token) => token.raw.toLowerCase() === "%command%");
+  if (!command) return null;
+  return current.slice(0, command.end) + ` ${missing.join(" ")}` + current.slice(command.end);
 }
 
 /**
@@ -123,29 +580,21 @@ export function launchChoices(state: LaunchState): LaunchChoice[] {
     recorded === ""
       ? ""
       : current !== null && hasOverride(current, filename)
-        ? stripOverride(current, filename)
+        ? recorded !== null
+          ? stripLaunchOptions(current, filename, [], [], recorded)
+          : stripOverride(current, filename)
         : null;
-  const blind = known === null && current === null;
+  if (known === null) return [...restore, keep];
 
-  if (known === null && !blind) return [...restore, keep];
-
-  const cleared = known ?? "";
+  const cleared = known;
   const clear: LaunchChoice = {
     action: "clear",
-    label:
-      blind
-        ? "Clear the launch options"
-        : cleared === ""
-          ? "Clear the launch options"
-          : "Remove only the OptiScaler override",
-    description: blind
-      ? `Steam would not report this game's launch options, so this empties the field
-         completely — including anything you added yourself.`
-      : cleared === ""
-        ? recorded === ""
-          ? "This game had none before OptiScaler was installed."
-          : "Leaves the launch options empty."
-        : `Leaves: ${cleared}`,
+    label: cleared === "" ? "Clear the launch options" : "Remove only the OptiScaler override",
+    description: cleared === ""
+      ? recorded === ""
+        ? "This game had none before OptiScaler was installed."
+        : "Leaves the launch options empty."
+      : `Leaves: ${cleared}`,
     value: cleared,
   };
 
@@ -155,7 +604,7 @@ export function launchChoices(state: LaunchState): LaunchChoice[] {
     cleared === current || restore.some((choice) => choice.value === cleared);
   if (duplicate) return [...restore, keep];
   // Blind clearing is a guess, so it never leads — the safe answer does.
-  return blind ? [...restore, keep, clear] : [...restore, clear, keep];
+  return [...restore, clear, keep];
 }
 
 /**
@@ -198,9 +647,9 @@ export async function currentLaunchOptions(appid: string | null): Promise<string
   if (fromClient !== null) return fromClient;
   try {
     const found = await getLaunchOptions(appid);
-    return found.found ? found.value : null;
+    return preferRecentLaunchOptions(appid, found.found ? found.value : null);
   } catch {
-    return null;
+    return preferRecentLaunchOptions(appid, null);
   }
 }
 
@@ -219,12 +668,34 @@ export async function currentLaunchOptions(appid: string | null): Promise<string
 export async function recordPreviousLaunchOptions(
   appid: string | null,
   targetDir: string,
-): Promise<void> {
-  if (!appid) return;
-  const current = await readLaunchOptions(Number(appid));
+): Promise<boolean> {
+  if (!appid) return true;
+  const current = await currentLaunchOptions(appid);
+  if (current === null) return false;
   try {
-    await recordLaunchOptions(targetDir, current, appid);
+    const result = await recordLaunchOptions(targetDir, current, appid);
+    return Boolean(result.ok && result.recorded);
   } catch {
-    /* the record is a convenience; failing to write it must not fail an install */
+    return false;
+  }
+}
+
+/** Snapshot an existing install before a managed file/runtime mutation. */
+export async function preserveExistingInstall(
+  targetDir: string,
+  gamePath: string,
+  appid: string | null,
+): Promise<{ ok: boolean; error?: string }> {
+  const launchOptions = await currentLaunchOptions(appid);
+  if (appid && launchOptions === null) {
+    return { ok: false, error: "Steam did not report the current launch options, so the install was left unchanged." };
+  }
+  try {
+    const result = await createRestorePoint(targetDir, gamePath, launchOptions);
+    return result.ok
+      ? result
+      : { ok: false, error: result.error ?? "Could not preserve the current install." };
+  } catch (exc) {
+    return { ok: false, error: String(exc) };
   }
 }

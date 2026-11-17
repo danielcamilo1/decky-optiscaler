@@ -1,6 +1,16 @@
 import { ButtonItem, DropdownItem, PanelSection, PanelSectionRow, ToggleField } from "@decky/ui";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { switchUpscaler } from "../api";
+import {
+  backendOptionId,
+  bindLiveChanges,
+  currentLiveContext,
+  hasVerifiedLiveRuntime,
+  isConfirmedLiveResult,
+  isSameLiveContext,
+  receiptAuthorizationChanged,
+  liveFfxVersionChoices,
+} from "../liveControl";
 import {
   FFX_FG_ID,
   FFX_UPSCALER_ID,
@@ -20,10 +30,15 @@ import {
   needsForcedInt8,
   runningBackend,
   supportsInt8Override,
+  supportsOfficialInt8,
+  isRdna2Apu,
+  STEAM_DECK_FSR4_BUILD_ID,
   supportsMultiplier,
   usesFfxFrameGen,
   usesFfxUpscaler,
 } from "../config/basic";
+import { getTargetLiveRecord } from "../config/liveRecord";
+import { getTargetConfigQueue } from "../config/writeRecord";
 import { curatedLabel } from "../config/labels";
 import { optionById } from "../config/tabs";
 import { AUTO, effectiveValue, labelFor } from "../config/values";
@@ -33,6 +48,8 @@ import type {
   ConfigValues,
   FfxUpscalerInfo,
   GpuInfo,
+  LiveApplyResult,
+  LiveContext,
   LiveStatus,
   OptionChange,
   OptionMeta,
@@ -56,6 +73,18 @@ interface Props {
    * running, so it leaves this out and the control never appears there.
    */
   targetDir?: string;
+  /** Target used to bind saved values when the direct switch is hidden. */
+  liveTargetDir?: string;
+  /** Flush the INI queue before an explicit backend switch. */
+  onFlush?: () => Promise<void>;
+  liveResult?: LiveApplyResult | null;
+  onLiveResult?: (
+    result: LiveApplyResult,
+    context: LiveContext,
+    keys: string[],
+    expectedValues: Record<string, string>,
+    revisions?: Record<string, number>,
+  ) => void;
   /** Trims descriptions and explanations for the ~310px Quick Access column. */
   compact?: boolean;
   /**
@@ -66,11 +95,12 @@ interface Props {
   plan?: AutoPlan | null;
   /** Whether the wiki is currently driving everything but the three choices. */
   auto?: boolean;
+  autoBusy?: boolean;
   onAutoChange?: (enabled: boolean) => void;
   onLiveChanged?: () => void;
   fsr4Build?: string | null;
   onEnableFsr4?: () => Promise<void>;
-  onApply: (changes: OptionChange[]) => void;
+  onApply: (changes: OptionChange[]) => void | Promise<Record<string, number> | null>;
 }
 
 const MULTIPLIER_ID = `${MULTIPLIER_SECTION}.${MULTIPLIER_KEY}`;
@@ -95,8 +125,9 @@ const MULTIPLIER_ID = `${MULTIPLIER_SECTION}.${MULTIPLIER_KEY}`;
 function ffxVersionOptions(
   reported: string[] | undefined,
   option: OptionMeta | undefined,
-  newest?: string | null
-) {
+  newest?: string | null,
+  ids?: string[],
+): { fromGame: boolean; options: Choice[] } {
   if (reported && reported.length > 0) {
     return {
       fromGame: true,
@@ -104,6 +135,7 @@ function ffxVersionOptions(
         data: String(index),
         label: `FSR ${name}`,
         version: name,
+        id: ids?.[index],
       })),
     };
   }
@@ -133,6 +165,9 @@ interface Choice {
   label: string;
   /** The FidelityFX version this entry names, where the entry is one. */
   version?: string;
+  /** Runtime identity aligned with the live FFX list, when reported. */
+  id?: string;
+  context?: LiveContext | null;
 }
 
 /**
@@ -197,45 +232,137 @@ function ValueDropdown({
 }
 
 /** The DX12 backend id a preset selects, or null for "leave the game alone". */
-function backendCode(preset: Preset | undefined): string | null {
+function backendCode(preset: Preset | undefined, api?: LiveStatus["active_api"]): string | null {
+  if (api !== "dx11" && api !== "dx12" && api !== "vulkan") return null;
+  const key = api === "dx11"
+    ? "Dx11Upscaler"
+    : api === "vulkan"
+      ? "VulkanUpscaler"
+      : "Dx12Upscaler";
   const change = preset?.changes.find(
-    (item) => item.section === "Upscalers" && item.key === "Dx12Upscaler"
+    (item) => item.section === "Upscalers" && item.key === key
   );
   const value = change?.value?.toLowerCase();
   return value && value !== "auto" ? value : null;
+}
+
+function backendKeyForApi(api: LiveStatus["active_api"]): string | null {
+  return api === "dx11" ? "Dx11Upscaler"
+    : api === "dx12" ? "Dx12Upscaler"
+      : api === "vulkan" ? "VulkanUpscaler" : null;
 }
 
 export function BasicPanel({
   values,
   disabled,
   gpu,
-  live,
+  live: reportedLive,
   ffx,
   targetDir,
+  liveTargetDir,
+  onFlush,
+  liveResult,
+  onLiveResult,
   compact,
   plan,
   auto,
+  autoBusy,
   onAutoChange,
   onLiveChanged,
   onApply,
   fsr4Build,
   onEnableFsr4,
 }: Readonly<Props>) {
+  const live = reportedLive?.supported === true ? reportedLive : null;
+  const bindingTarget = liveTargetDir ?? targetDir ?? null;
+  const liveRef = useRef(reportedLive);
+  liveRef.current = reportedLive;
   // Which upscaler the user just picked, if it is not the one the game is
   // running. Cleared once the game has taken it, so the switch is offered only
   // when there is something to switch to.
   const [installingFsr4, setInstallingFsr4] = useState(false);
   const [fsr4Error, setFsr4Error] = useState<string | null>(null);
-  const busy = disabled || installingFsr4;
-  const [picked, setPicked] = useState<string | null>(null);
-  const [methodChanged, setMethodChanged] = useState(false);
-  const [ffxFgChanged, setFfxFgChanged] = useState(false);
-  const [ffxUpscalerChanged, setFfxUpscalerChanged] = useState(false);
   const [switching, setSwitching] = useState(false);
+  const busy = disabled || installingFsr4 || autoBusy || switching;
+  const [picked, setPicked] = useState<string | null>(null);
+  const [pickedBinding, setPickedBinding] = useState<{
+    context: LiveContext | null;
+    baselineSeq: string | null;
+    token: number;
+    persistedValues: Record<string, string>;
+    persistedRevisions: Record<string, number>;
+    saveFailed: boolean;
+  } | null>(null);
+  const pickedBindingRef = useRef<typeof pickedBinding>(null);
+  const selectionToken = useRef(0);
+  const [switchResult, setSwitchResult] = useState<LiveApplyResult | null>(null);
+  const [switchResultBinding, setSwitchResultBinding] = useState<LiveContext | null>(null);
+  const [methodChanged, setMethodChanged] = useState(false);
+  const [ffxFgSelection, setFfxFgSelection] = useState<{
+    value: string;
+    label: string;
+    context: LiveContext | null;
+    baselineSeq: string | null;
+    baselineResult: LiveApplyResult | null;
+  } | null>(null);
+  const [ffxUpscalerSelection, setFfxUpscalerSelection] = useState<{
+    value: string;
+    label: string;
+    context: LiveContext | null;
+    baselineSeq: string | null;
+    baselineResult: LiveApplyResult | null;
+  } | null>(null);
   const [switchError, setSwitchError] = useState<string | null>(null);
 
   /** Explanatory text, dropped in the narrow Quick Access column. */
   const hint = (text: string | undefined) => (compact ? undefined : text);
+  const bindChanges = (changes: OptionChange[], omitBackend = false) =>
+    bindLiveChanges(changes, live, bindingTarget, { omitBackend });
+  const applyChanges = (changes: OptionChange[], omitBackend = false) =>
+    onApply(bindChanges(changes, omitBackend));
+  const rememberPickedBackend = (
+    presetId: string,
+    context: LiveContext | null,
+    backendChanges: OptionChange[],
+  ) => {
+    const binding = {
+      context,
+      baselineSeq: liveResult?.seq ?? live?.seq ?? null,
+      token: ++selectionToken.current,
+      persistedValues: Object.fromEntries(backendChanges.map((change) => [
+        `${change.section}.${change.key}`, change.value,
+      ])),
+      persistedRevisions: {},
+      saveFailed: false,
+    };
+    pickedBindingRef.current = binding;
+    setPickedBinding(binding);
+    setPicked(presetId);
+    setSwitchResult(null);
+    setSwitchResultBinding(null);
+    return binding;
+  };
+
+  useEffect(() => {
+    if (
+      ffxFgSelection &&
+      values.FSR?.FGIndex === ffxFgSelection.value &&
+      liveResult !== ffxFgSelection.baselineResult &&
+      liveResult?.seq && liveResult.seq !== ffxFgSelection.baselineSeq &&
+      isConfirmedLiveResult(liveResult, ffxFgSelection.context, [FFX_FG_ID])
+    ) {
+      setFfxFgSelection(null);
+    }
+    if (
+      ffxUpscalerSelection &&
+      values.FSR?.UpscalerIndex === ffxUpscalerSelection.value &&
+      liveResult !== ffxUpscalerSelection.baselineResult &&
+      liveResult?.seq && liveResult.seq !== ffxUpscalerSelection.baselineSeq &&
+      isConfirmedLiveResult(liveResult, ffxUpscalerSelection.context, [FFX_UPSCALER_ID])
+    ) {
+      setFfxUpscalerSelection(null);
+    }
+  }, [ffxFgSelection, ffxUpscalerSelection, liveResult, values.FSR?.FGIndex, values.FSR?.UpscalerIndex]);
 
   const fgOn = frameGenEnabled(values);
   const fgPreset = activeFgPreset(values);
@@ -264,8 +391,14 @@ export function BasicPanel({
   // in it is the other way round: the upgrade path is what reaches FSR 4, and
   // the INT8 preset is the one that does nothing.
   const fsr4Selected = upscalerPreset?.id === "fsr4";
-  const int8Selected = upscalerPreset?.id === "fsr4-int8";
-  const int8Route = needsForcedInt8(gpu) && (fsr4Build === "4.1.1b" || supportsInt8Override(ffx));
+  const int8Selected = values.Upscalers?.Dx12Upscaler?.toLowerCase() === "fsr31" &&
+    values.FSR?.Fsr4ForceEnableInt8 === "1" && values.FSR?.UpscalerIndex === "0";
+  const int8PresetMatches = upscalerPreset?.id === "fsr4-int8" &&
+    fsr4Build === STEAM_DECK_FSR4_BUILD_ID;
+  const int8Route = needsForcedInt8(gpu) && !supportsOfficialInt8(ffx) &&
+    (fsr4Build === "4.1.1b" || supportsInt8Override(ffx));
+  const liveReady = currentLiveContext(reportedLive, bindingTarget) !== null;
+  const liveRuntimeVerified = hasVerifiedLiveRuntime(reportedLive);
 
   // DLSS needs a real Nvidia GPU; offering it on a Deck is offering a setting
   // that can only fail. Kept visible when the ini already selects it, so the
@@ -282,19 +415,31 @@ export function BasicPanel({
         upscalerPreset?.id === "dlss" ||
         !gpu?.vendor ||
         gpu.vendor === "nvidia") &&
-      (preset.id !== "fsr4-int8" || needsForcedInt8(gpu) || int8Selected)
+      (preset.id !== "fsr4-int8" || isRdna2Apu(gpu) || fsr4Build === STEAM_DECK_FSR4_BUILD_ID)
   );
 
   const needsInt8 = fsr4Selected && int8Route;
   // An FSR 4 version picked while the FidelityFX backend is on something else.
   // The version is recorded, but nothing here makes it reachable, and the one
   // setting that would is the setting this device must not have written.
-  const ffxUpsNeedsInt8 = ffxUpscalerChanged && int8Route && !int8Selected;
+  const ffxUpsNeedsInt8 = Boolean(ffxUpscalerSelection) && int8Route && !int8Selected;
 
   // The FFX frame generator, which only the FSR FG output runs. When the game
   // is attached its own reported list wins; otherwise the shipped INI's.
   const ffxOption = optionById(FFX_FG_ID);
-  const ffxChoices = ffxVersionOptions(live?.ffx_fg_versions, ffxOption);
+  const runtimeFgChoices = liveFfxVersionChoices(reportedLive, bindingTarget, "fg");
+  const ffxChoices = runtimeFgChoices.length > 0
+    ? {
+        fromGame: true,
+        options: runtimeFgChoices.map((choice) => ({
+          data: choice.data,
+          label: choice.label,
+          version: choice.version,
+          id: choice.id,
+          context: choice.context,
+        })),
+      }
+    : ffxVersionOptions(undefined, ffxOption);
   // A game that reports a generator list has OptiScaler's FidelityFX FG built
   // for it, which is a firmer answer than the ini can give — FGOutput "auto"
   // resolves at runtime and the file cannot say which way it went. Either is
@@ -308,63 +453,227 @@ export function BasicPanel({
   // Attached, the user has moved it, and there is no way to act on it: the
   // in-game plugin did not find State's two FG change flags, so this was an ini
   // write only. Only worth saying once it has actually been asked for.
-  const ffxNotLive = ffxFgChanged && Boolean(live?.attached) && !live?.can_change_fg;
+  const fgSelectionIsStale = Boolean(
+    ffxFgSelection?.context && !isSameLiveContext(ffxFgSelection.context, reportedLive, bindingTarget),
+  );
+  const ffxFgResultRejected = Boolean(
+    ffxFgSelection?.context && liveResult && liveResult !== ffxFgSelection.baselineResult &&
+      ((liveResult.deferred ?? []).includes(FFX_FG_ID) ||
+        !liveResult.sent || liveResult.ack === "rejected" || liveResult.ack === "timeout" ||
+        (liveResult.confirmed === true && !isConfirmedLiveResult(liveResult, ffxFgSelection.context, [FFX_FG_ID]))),
+  );
+  const ffxNotLive = Boolean(ffxFgSelection && (!ffxFgSelection.context || fgSelectionIsStale || ffxFgResultRejected));
 
   // Which version of FSR the FidelityFX backend runs — the overlay's "FFX
   // Upscaler" combo, and the only place the exact version is written down.
   const ffxUpsOption = optionById(FFX_UPSCALER_ID);
-  const ffxUpsChoices = ffxVersionOptions(
-    live?.ffx_upscaler_versions, ffxUpsOption, ffxVersionName(ffx));
+  const runtimeUpscalerChoices = liveFfxVersionChoices(reportedLive, bindingTarget, "upscaler");
+  const ffxUpsChoices = runtimeUpscalerChoices.length > 0
+    ? {
+        fromGame: true,
+        options: runtimeUpscalerChoices.map((choice) => ({
+          data: choice.data,
+          label: choice.label,
+          version: choice.version,
+          id: choice.id,
+          context: choice.context,
+        })),
+      }
+    : ffxVersionOptions(undefined, ffxUpsOption, fsr4Build === STEAM_DECK_FSR4_BUILD_ID ? "4.1.2 Lite Exact (community)" : ffxVersionName(ffx));
   const ffxUpsSelected = ffxUpsOption ? effectiveValue(values, ffxUpsOption) : "0";
   const ffxUpsFixed = ffxUpsChoices.options.length < 2;
 
-  const liveFg = typeof live?.fg_enabled === "boolean" ? live.fg_enabled : null;
-  // The same order the live tiles read it in — a DX11 game reports its backend
-  // under dx11 and nowhere else, and leaving that out made the switch compare
-  // the pick against nothing at all.
+  const liveFg = liveRuntimeVerified && typeof live?.fg_enabled === "boolean" ? live.fg_enabled : null;
+  // Resolve only the backend reported for the verified active API.
   const liveBackend = runningBackend(live);
   // Only the FidelityFX backend has versions to choose between. The ini answers
   // for a game that is not running; a game that *is* running has already picked
   // one, which settles it for the "auto" the ini can only leave open.
-  const ffxUpsUsable = live?.attached ? isFfxBackend(liveBackend) : usesFfxUpscaler(values);
+  const ffxUpsUsable = liveRuntimeVerified ? isFfxBackend(liveBackend) : usesFfxUpscaler(values);
   // Attached, the user has moved it, and there was nothing to act on: no
   // upscaler is registered yet, so this was an ini write only.
-  const ffxUpsNotLive =
-    ffxUpscalerChanged && Boolean(live?.attached) && !live?.can_change_ffx_upscaler;
-  const wanted = backendCode(UPSCALER_PRESETS.find((preset) => preset.id === picked));
+  const ffxUpsSelectionIsStale = Boolean(
+    ffxUpscalerSelection?.context && !isSameLiveContext(ffxUpscalerSelection.context, reportedLive, bindingTarget),
+  );
+  const ffxUpsResultRejected = Boolean(
+    ffxUpscalerSelection?.context && liveResult && liveResult !== ffxUpscalerSelection.baselineResult &&
+      ((liveResult.deferred ?? []).includes(FFX_UPSCALER_ID) ||
+        !liveResult.sent || liveResult.ack === "rejected" || liveResult.ack === "timeout" ||
+        (liveResult.confirmed === true && !isConfirmedLiveResult(liveResult, ffxUpscalerSelection.context, [FFX_UPSCALER_ID]))),
+  );
+  const ffxUpsNotLive = Boolean(
+    (ffxUpscalerSelection && (!ffxUpscalerSelection.context || ffxUpsSelectionIsStale || ffxUpsResultRejected)),
+  );
+  const wanted = backendCode(UPSCALER_PRESETS.find((preset) => preset.id === picked), reportedLive?.active_api);
   // The backend switch is live; the INT8 override is not, and it is read where
   // the upscaler is created. Offering the switch under that preset would move
   // the backend now and leave the thing the user actually asked for waiting for
   // a restart, so that preset says so and this stays out of it.
-  const int8RestartOnly = int8Selected;
-  // Nothing to apply once the game is already on it, or if the choice cannot be
-  // pushed at all — the plugin has to be attached with an upscaler registered.
+  const int8RestartOnly = int8Selected || picked === "fsr4-int8";
+  const pickedContext = pickedBinding?.context ?? null;
+  const selectedBackendKey = pickedContext && pickedContext.active_api !== "unknown"
+    ? backendOptionId(pickedContext.active_api)
+    : null;
+  const selectedBackendCapability = Boolean(
+    selectedBackendKey &&
+      reportedLive?.live_keys?.includes(selectedBackendKey) &&
+      reportedLive.capabilities?.[selectedBackendKey] === true &&
+      reportedLive.capabilities?.switch_upscaler === true,
+  );
+  const currentSelectionContext = currentLiveContext(reportedLive, bindingTarget);
+  const pickedContextCurrent = Boolean(
+    pickedContext && currentSelectionContext && isSameLiveContext(pickedContext, reportedLive, bindingTarget),
+  );
+  const pickedBackendKey = backendKeyForApi(
+    pickedBinding?.context?.active_api ?? reportedLive?.active_api,
+  );
+  const pickedBackendId = pickedBackendKey ? `Upscalers.${pickedBackendKey}` : null;
+  const pickedBackendValue = pickedBackendId
+    ? pickedBinding?.persistedValues[pickedBackendId] ?? null
+    : null;
+  const pickedBackendRevision = pickedBackendId
+    ? pickedBinding?.persistedRevisions[pickedBackendId] ?? null
+    : null;
+  const pickedRecord = targetDir && pickedBackendId ? getTargetLiveRecord(targetDir) : null;
+  const pickedQueueItem = targetDir && pickedBackendId
+    ? (getTargetConfigQueue(targetDir).pending.get(pickedBackendId) ??
+      getTargetConfigQueue(targetDir).inFlight.get(pickedBackendId))
+    : undefined;
+  const pickedConfigPersisted = Boolean(
+    pickedBackendId && pickedBackendRevision !== null && pickedBackendRevision !== undefined &&
+      pickedBackendValue !== null &&
+      pickedRecord?.persistedRevisions[pickedBackendId] === pickedBackendRevision &&
+      pickedRecord.persistedValues[pickedBackendId] === pickedBackendValue &&
+      (!pickedQueueItem || pickedQueueItem.revision <= pickedBackendRevision),
+  );
+  const switchSelectionStale = Boolean(pickedContext && !isSameLiveContext(pickedContext, reportedLive, bindingTarget));
+  const switchSelectionNeedsRefresh = Boolean(picked && pickedContext && switchSelectionStale);
+  const switchResultKey = switchResultBinding && switchResultBinding.active_api !== "unknown"
+    ? backendOptionId(switchResultBinding.active_api)
+    : null;
+  const switchOutcome = switchResult && liveResult?.session === switchResult.session &&
+    liveResult?.seq === switchResult.seq ? liveResult : switchResult;
+  const switchAuthorizationLost = Boolean(switchOutcome?.sent && reportedLive && (
+    receiptAuthorizationChanged(switchOutcome, reportedLive) ||
+    reportedLive.dir_verified !== true || reportedLive.dir_matches !== true
+  ));
+  const switchAccepted = Boolean(
+    switchResultBinding && switchResultKey && !switchAuthorizationLost &&
+    (!reportedLive?.session || reportedLive.session === switchResultBinding.session) &&
+    isConfirmedLiveResult(switchOutcome, switchResultBinding, [switchResultKey])
+  );
+  // A backend switch is offered only for the API and capability captured when
+  // the user picked the preset. An API/generation change requires a fresh pick.
   const canSwitchNow =
     Boolean(targetDir) &&
     Boolean(wanted) &&
     wanted !== liveBackend &&
-    Boolean(live?.attached) &&
-    Boolean(live?.can_switch_upscaler) &&
+    Boolean(wanted && reportedLive?.switchable_backends?.includes(wanted)) &&
+    pickedContextCurrent &&
+    selectedBackendCapability &&
+    pickedConfigPersisted &&
+    !(switchOutcome?.sent && (switchOutcome.ack === "pending" || switchOutcome.ack === "timeout")) &&
+    !switchAccepted &&
     !int8RestartOnly;
-  // Attached, a different upscaler picked, and still no switch on offer. The
-  // one thing that causes this is a game that has not built an upscaler yet, so
-  // say so rather than leaving the button mysteriously absent.
   const switchNotReady =
     Boolean(targetDir) &&
+    Boolean(picked) &&
     Boolean(wanted) &&
     wanted !== liveBackend &&
-    Boolean(live?.attached) &&
-    !live?.can_switch_upscaler &&
-    !int8RestartOnly;
+    !int8RestartOnly &&
+    !switchSelectionStale &&
+    !switching &&
+    !(switchOutcome?.sent && (switchOutcome.ack === "pending" || switchOutcome.ack === "timeout")) &&
+    !canSwitchNow;
+  useEffect(() => {
+    if (!switchAccepted) return;
+    pickedBindingRef.current = null;
+    setPickedBinding(null);
+    setPicked(null);
+  }, [switchAccepted]);
 
   const applyUpscalerNow = async () => {
-    if (!targetDir || !wanted) return;
+    const selection = pickedBindingRef.current;
+    const selectedBackendKey = selection?.context
+      ? backendKeyForApi(selection.context.active_api)
+      : null;
+    const selectedId = selectedBackendKey ? `Upscalers.${selectedBackendKey}` : null;
+    const expectedValue = selectedId ? selection?.persistedValues[selectedId] : null;
+    const selectedRevision = selectedId ? selection?.persistedRevisions[selectedId] : null;
+    if (
+      !targetDir || !wanted || !selection?.context || selection.context.active_api === "unknown" ||
+      !selectedId || expectedValue === null || expectedValue === undefined || selectedRevision == null
+    ) {
+      setSwitchError("This choice is saved, but live control was not ready when you selected it. Refresh status and choose again.");
+      return;
+    }
+    const persisted = () => {
+      const record = getTargetLiveRecord(targetDir);
+      const queue = getTargetConfigQueue(targetDir);
+      const queued = queue.pending.get(selectedId) ?? queue.inFlight.get(selectedId);
+      return record.persistedRevisions[selectedId] === selectedRevision &&
+        record.persistedValues[selectedId] === expectedValue &&
+        (!queued || queued.revision <= selectedRevision);
+    };
+    if (!persisted()) {
+      setSwitchError("The selected backend value has not been saved, or a newer choice replaced it. Save the current choice before switching.");
+      return;
+    }
+    if (!isSameLiveContext(selection.context, liveRef.current, bindingTarget) || !currentLiveContext(liveRef.current, bindingTarget)) {
+      setSwitchError("The active API, session, or version list changed after selection. Refresh live status and choose again.");
+      return;
+    }
+    const key = backendOptionId(selection.context.active_api);
     setSwitching(true);
     setSwitchError(null);
+    setSwitchResult(null);
     try {
-      const result = await switchUpscaler(targetDir, wanted);
-      if (result.ok) setPicked(null);
-      else setSwitchError(result.error ?? "Could not switch the upscaler");
+      await onFlush?.();
+      if (!isSameLiveContext(selection.context, liveRef.current, bindingTarget) || !currentLiveContext(liveRef.current, bindingTarget)) {
+        setSwitchError("The active API, session, or version list changed while the INI was saving. Refresh and choose again.");
+        return;
+      }
+      if (!persisted()) {
+        setSwitchError("The selected backend value changed while the INI was saving. Choose it again before switching.");
+        return;
+      }
+      const result = await switchUpscaler(targetDir, wanted, selection.context);
+      const liveResult = result.live ?? null;
+      const stillSelected = pickedBindingRef.current?.token === selection.token;
+      if (liveResult) {
+        if (stillSelected) {
+          setSwitchResult(liveResult);
+          setSwitchResultBinding(selection.context);
+        }
+        // `switch_upscaler` reports ok only after a terminal confirmation.
+        // A timeout or a still-pending ACK was nevertheless sent to the game,
+        // so keep it in the shared target record even if a newer preset now
+        // owns the component-local selection. The token protects only the UI;
+        // the older request still needs its own sequence and revision record.
+        if (liveResult.sent === true && targetDir) {
+          onLiveResult?.(
+            liveResult,
+            selection.context,
+            [selectedId],
+            { [selectedId]: expectedValue },
+            { [selectedId]: selectedRevision },
+          );
+        }
+      }
+      const confirmed = Boolean(
+        liveResult?.seq && liveResult.seq !== selection.baselineSeq &&
+          isConfirmedLiveResult(liveResult, selection.context, [key]),
+      );
+      if (confirmed && stillSelected) {
+        pickedBindingRef.current = null;
+        setPickedBinding(null);
+        setPicked(null);
+      } else if (stillSelected && (!liveResult?.sent || liveResult.ack === "rejected")) {
+        setSwitchError(
+          result.error ?? liveResult?.error ?? liveResult?.reason ??
+            "The live switch was not confirmed. Refresh status before trying again.",
+        );
+      }
       onLiveChanged?.();
     } catch (error_) {
       setSwitchError(String(error_));
@@ -374,7 +683,7 @@ export function BasicPanel({
   };
 
   const turnFrameGenOn = () =>
-    onApply(
+    applyChanges(
       automatic && plannedFg && plannedFg.input !== "nofg"
         ? enableFrameGenWith(plannedFg.input, plannedFg.output)
         : enableFrameGenChanges(values)
@@ -392,17 +701,12 @@ export function BasicPanel({
    */
   const methodControls = (
     <>
-      {/* The method is offered in automatic mode too. The wiki's pair is the
-          better *starting* answer — it is what the game can actually feed —
-          but which generator to run is as much the user's call as the
-          upscaler is, so it is a recommendation printed under the control
-          rather than the control's replacement. */}
       <PanelSectionRow>
         <ValueDropdown
           label="Method"
           description={hint(fgPreset?.description ?? "Choose which frame generator to use.")}
           disabled={busy || !fgOn}
-          bottomSeparator={automatic && plannedFg ? "none" : "standard"}
+          bottomSeparator={automatic && fgOn && plannedFg ? "none" : "standard"}
           options={FG_PRESETS.map((preset) => ({ data: preset.id, label: preset.label }))}
           // A wiki plan writes the pair the entry names, which is a stronger
           // statement than any preset and need not be one of them.
@@ -415,15 +719,15 @@ export function BasicPanel({
             const preset = FG_PRESETS.find((p) => p.id === id);
             if (!preset) return;
             setMethodChanged(true);
-            onApply(preset.changes);
+            applyChanges(preset.changes);
           }}
         />
       </PanelSectionRow>
 
-      {automatic && plannedFg ? (
+      {automatic && fgOn && plannedFg ? (
         <PanelSectionRow>
           <div style={{ padding: "0 0 8px", fontSize: "12px", opacity: 0.85 }}>
-            The wiki recommends{" "}
+            Wiki FG path: {" "}
             <strong>
               {plannedFg.input === "nofg"
                 ? "no frame generation"
@@ -455,10 +759,12 @@ export function BasicPanel({
               label="Automatic"
               description={hint(
                 automatic
-                  ? `Set from “${planned.game}” on the OptiScaler wiki. You choose frame ` +
+                  ? `Applied from “${planned.game}” when you set up, enable, or re-apply it. ` +
+                    "Wiki changes are not written continuously. You choose frame " +
                     "generation and how it runs, the multiplier and the upscaler; " +
                     "everything else follows the entry."
-                  : "Let this game's wiki entry set everything except frame generation " +
+                  : "Apply this game's wiki settings during setup, when enabling Automatic, " +
+                    "or when you re-apply it. Frame generation " +
                     "and how it runs, the multiplier and the upscaler."
               )}
               checked={automatic}
@@ -481,26 +787,28 @@ export function BasicPanel({
                         </Mono>
                       </span>
                     ))}
-                    {plannedFg && plannedFg.input !== "nofg" ? (
-                      <>
-                        , and frame generation through {plannedFg.input_label} →{" "}
-                        {plannedFg.output_label}
-                      </>
-                    ) : null}
                     . Turn this off to get every option back.
                   </>
                 ) : (
                   <>
                     This entry needs no special OptiScaler settings
-                    {plannedFg && plannedFg.input !== "nofg"
-                      ? ` beyond frame generation through ${plannedFg.input_label} → ${plannedFg.output_label}`
-                      : ""}
                     . Turn this off to get every option back.
                   </>
                 )}
               </div>
             </PanelSectionRow>
           ) : null}
+        </PanelSection>
+      ) : null}
+
+      {reportedLive?.supported === false ? (
+        <PanelSection>
+          <PanelSectionRow>
+            <Notice tone="info" title="Live control is unavailable">
+              {reportedLive?.reason ?? "This runtime version is not supported by the live-control plugin."}
+              {compact ? " Settings are saved for the next launch." : " No in-game changes are being reported."}
+            </Notice>
+          </PanelSectionRow>
         </PanelSection>
       ) : null}
 
@@ -517,7 +825,7 @@ export function BasicPanel({
             disabled={busy || fgUnavailable}
             bottomSeparator={liveFg === null ? "standard" : "none"}
             onChange={(checked) =>
-              checked ? turnFrameGenOn() : onApply(disableFrameGenChanges())
+              checked ? turnFrameGenOn() : applyChanges(disableFrameGenChanges())
             }
           />
         </PanelSectionRow>
@@ -554,17 +862,31 @@ export function BasicPanel({
                     ? "The frame generators this game's FidelityFX runtime reports."
                     : "Which FidelityFX frame generator the FSR FG output runs."
               )}
-              disabled={busy || !fgOn || ffxFixed}
+              disabled={busy || ffxFixed}
               bottomSeparator={ffxNotLive ? "none" : "standard"}
               options={ffxChoices.options}
-              selected={ffxSelected}
+              selected={fgSelectionIsStale && ffxFgSelection ? `stale:${ffxFgSelection.value}` : ffxSelected}
               // The ini can hold an index this game's runtime does not offer —
               // it was set for another game, or by an older release with a
               // different list.
-              describe={(index) => `Generator ${index} (not offered here)`}
+              describe={(index) => index.startsWith("stale:") && ffxFgSelection
+                ? `Previous choice: ${ffxFgSelection.label} (refresh and choose again)`
+                : `Generator ${index} (not offered here)`}
               onPick={(index) => {
-                setFfxFgChanged(true);
-                onApply(ffxFgChanges(index));
+                const choice = ffxChoices.options.find((item) => item.data === index);
+                const pendingChanges = ffxFgChanges(index);
+                const changes = choice?.context
+                  ? pendingChanges.map((change) => ({ ...change, live_context: choice.context as LiveContext }))
+                  : bindChanges(pendingChanges);
+                const selected = changes.find((change) => change.section === "FSR" && change.key === "FGIndex");
+                setFfxFgSelection({
+                  value: index,
+                  label: choice?.label ?? `Generator ${index}`,
+                  context: selected?.live_context ?? null,
+                  baselineSeq: liveResult?.seq ?? reportedLive?.seq ?? null,
+                  baselineResult: liveResult ?? null,
+                });
+                onApply(changes);
               }}
             />
           </PanelSectionRow>
@@ -576,8 +898,9 @@ export function BasicPanel({
         {ffxNotLive ? (
           <PanelSectionRow>
             <Notice tone="info">
-              Saved. This game's frame generator cannot be rebuilt from here, so it changes
-              when the game restarts.
+            {fgSelectionIsStale || ffxFgResultRejected
+              ? "The active API, session, or FFX list changed, or the game did not confirm this selection. Refresh live status and choose the version again."
+              : "Live control was not ready with an explicit FFX FG capability when this version was selected. It is saved for the next launch."}
             </Notice>
           </PanelSectionRow>
         ) : null}
@@ -591,7 +914,7 @@ export function BasicPanel({
                   ? hint("How many frames to present per rendered frame.")
                   : "Only XeSS Frame Generation can do more than 2X."
               }
-              disabled={busy || !fgOn || !multiplierUsable}
+              disabled={busy || !multiplierUsable}
               bottomSeparator="standard"
               options={(multiplierOption.options ?? []).map((value) => ({
                 data: value,
@@ -600,7 +923,7 @@ export function BasicPanel({
               selected={effectiveValue(values, multiplierOption)}
               describe={(value) => labelFor(multiplierOption, value)}
               onPick={(value) =>
-                onApply([
+                applyChanges([
                   { section: MULTIPLIER_SECTION, key: MULTIPLIER_KEY, value },
                 ])
               }
@@ -612,10 +935,10 @@ export function BasicPanel({
             restart path and OptiScaler's own hotkey here whether or not either
             was relevant, which is noise on a page for a game that is not even
             running. */}
-        {!compact && live?.attached ? (
+        {!compact && liveReady ? (
           <PanelSectionRow>
             <Notice tone="success" title="Live control is connected">
-              Frame generation changes as soon as you set it here — no restart, no overlay.
+              Only settings with an explicit per-game capability can change now; other settings remain saved for the next launch.
             </Notice>
           </PanelSectionRow>
         ) : null}
@@ -626,7 +949,9 @@ export function BasicPanel({
           <ValueDropdown
             label="Override upscaler with"
             description={hint(
-              upscalerPreset?.description ?? "Replaces whichever upscaler the game asks for."
+              int8Selected && !int8PresetMatches
+                ? "Existing INT8 configuration. Use Installed Files to review or restore this game's upscaler."
+                : upscalerPreset?.description ?? "Replaces whichever upscaler the game asks for."
             )}
             disabled={busy}
             bottomSeparator="standard"
@@ -637,23 +962,113 @@ export function BasicPanel({
             // The Advanced page can set a backend no preset covers — fsr21, or
             // one of the dx11on12 variants. Showing "Auto" for those said the
             // opposite of what the file holds.
-            selected={int8Selected && fsr4Build !== "4.1.1b" ? "manual-int8" : upscalerPreset?.id ?? rawUpscaler}
-            describe={(code) => code === "manual-int8" ? "FSR 4 INT8 (manual)" : curatedLabel("Upscalers.Dx12Upscaler", code) ?? code}
+            selected={
+              switchSelectionNeedsRefresh && picked && !int8RestartOnly
+                ? `stale:${picked}`
+                : int8Selected && !int8PresetMatches
+                  ? "manual-int8"
+                  : upscalerPreset?.id ?? rawUpscaler
+            }
+            describe={(code) => code.startsWith("stale:")
+              ? `Previous choice: ${UPSCALER_PRESETS.find((preset) => preset.id === code.slice(6))?.label ?? code.slice(6)} (refresh and choose again)`
+              : code === "manual-int8" ? (fsr4Build === "4.1.1b" ? "FSR 4.1.1b (legacy)" : "FSR 4 INT8 (manual)") : curatedLabel("Upscalers.Dx12Upscaler", code) ?? code}
             onPick={(id) => {
               const preset = UPSCALER_PRESETS.find((p) => p.id === id);
               if (!preset) return;
               setFsr4Error(null);
               if (preset.id === "fsr4-int8") {
                 if (!onEnableFsr4) return;
+                pickedBindingRef.current = null;
+                setPickedBinding(null);
+                setPicked(null);
                 setInstallingFsr4(true);
                 void onEnableFsr4().then(() => setPicked(preset.id))
                   .catch((error) => setFsr4Error(String(error)))
                   .finally(() => setInstallingFsr4(false));
                 return;
               }
-              setPicked(preset.id);
+              const selectedApi = reportedLive?.active_api;
+              const activeKey = backendKeyForApi(selectedApi);
+              const backendChanges = preset.changes.filter(
+                (change) => change.section === "Upscalers",
+              );
+              const selectedChange = activeKey
+                ? preset.changes.find(
+                    (change) => change.section === "Upscalers" && change.key === activeKey,
+                  )
+                : undefined;
+              const selectionContext = selectedChange
+                ? bindChanges([selectedChange])[0]?.live_context ?? null
+                : null;
+              const binding = rememberPickedBackend(
+                preset.id,
+                selectionContext,
+                backendChanges,
+              );
               setSwitchError(null);
-              onApply(preset.changes);
+              void Promise.resolve()
+                .then(() => {
+                  const result = applyChanges(preset.changes, true);
+                  return result ?? null;
+                })
+                .then(async (revisions) => {
+                  if (!targetDir) return;
+                  if (!revisions) {
+                    if (pickedBindingRef.current?.token === binding.token) {
+                      const failedBinding = { ...binding, saveFailed: true };
+                      pickedBindingRef.current = failedBinding;
+                      setPickedBinding(failedBinding);
+                      setSwitchError("The INI save did not complete. The live switch is unavailable until this choice is saved.");
+                    }
+                    return;
+                  }
+                  await onFlush?.();
+                  const record = getTargetLiveRecord(targetDir);
+                  const queue = getTargetConfigQueue(targetDir);
+                  const persistedValues: Record<string, string> = {};
+                  const persistedRevisions: Record<string, number> = {};
+                  for (const change of backendChanges) {
+                    const id = `${change.section}.${change.key}`;
+                    const revision = revisions[id];
+                    const queued = queue.pending.get(id) ?? queue.inFlight.get(id);
+                    if (
+                      revision !== undefined && record.persistedRevisions[id] === revision &&
+                      record.persistedValues[id] === change.value &&
+                      (!queued || queued.revision <= revision)
+                    ) {
+                      persistedValues[id] = change.value;
+                      persistedRevisions[id] = revision;
+                    }
+                  }
+                  const selectedId = activeKey ? `Upscalers.${activeKey}` : null;
+                  const selectedRevision = selectedId ? persistedRevisions[selectedId] : null;
+                  const stillPersisted = selectedId
+                    ? selectedRevision !== undefined
+                    : Object.keys(persistedRevisions).length > 0;
+                  if (pickedBindingRef.current?.token !== binding.token) return;
+                  if (!stillPersisted) {
+                    const failedBinding = { ...binding, saveFailed: true };
+                    pickedBindingRef.current = failedBinding;
+                    setPickedBinding(failedBinding);
+                    setSwitchError("A newer backend choice replaced this one before it was saved. Choose the backend again before switching.");
+                    return;
+                  }
+                  const persistedBinding = {
+                    ...binding,
+                    persistedValues,
+                    persistedRevisions,
+                  };
+                  pickedBindingRef.current = persistedBinding;
+                  setPickedBinding(persistedBinding);
+                })
+                .catch((error) => {
+                  if (pickedBindingRef.current?.token === binding.token) {
+                    const failedBinding = { ...binding, saveFailed: true };
+                    pickedBindingRef.current = failedBinding;
+                    setPickedBinding(failedBinding);
+                    setSwitchError(String(error));
+                  }
+                });
             }}
           />
         </PanelSectionRow>
@@ -687,20 +1102,28 @@ export function BasicPanel({
               disabled={busy || ffxUpsFixed}
               bottomSeparator={ffxUpsNotLive ? "none" : "standard"}
               options={ffxUpsChoices.options}
-              selected={ffxUpsSelected}
+              selected={ffxUpsSelectionIsStale && ffxUpscalerSelection ? `stale:${ffxUpscalerSelection.value}` : ffxUpsSelected}
               // The ini can hold an index this game's runtime does not offer —
               // it was set for another game, or written from the list a
               // different FidelityFX build reported.
-              describe={(index) => `Version ${index} (not offered here)`}
+              describe={(index) => index.startsWith("stale:") && ffxUpscalerSelection
+                ? `Previous choice: ${ffxUpscalerSelection.label} (refresh and choose again)`
+                : `Version ${index} (not offered here)`}
               onPick={(index) => {
-                setFfxUpscalerChanged(true);
-                onApply(
-                  ffxUpscalerChanges(
-                    index,
-                    ffxUpsChoices.options.find((choice) => choice.data === index)?.version,
-                    int8Route
-                  )
-                );
+                const choice = ffxUpsChoices.options.find((item) => item.data === index);
+                const pendingChanges = ffxUpscalerChanges(index, choice?.version, int8Route);
+                const changes = choice?.context
+                  ? pendingChanges.map((change) => ({ ...change, live_context: choice.context as LiveContext }))
+                  : bindChanges(pendingChanges);
+                const selected = changes.find((change) => change.section === "FSR" && change.key === "UpscalerIndex");
+                setFfxUpscalerSelection({
+                  value: index,
+                  label: choice?.label ?? `Version ${index}`,
+                  context: selected?.live_context ?? null,
+                  baselineSeq: liveResult?.seq ?? reportedLive?.seq ?? null,
+                  baselineResult: liveResult ?? null,
+                });
+                onApply(changes);
               }}
             />
           </PanelSectionRow>
@@ -712,8 +1135,9 @@ export function BasicPanel({
         {ffxUpsNotLive ? (
           <PanelSectionRow>
             <Notice tone="info">
-              Saved. The game has not started upscaling yet, so the version changes as soon
-              as it does.
+            {ffxUpsSelectionIsStale || ffxUpsResultRejected
+              ? "The active API, session, or FFX list changed, or the game did not confirm this selection. Refresh live status and choose the version again."
+              : "Live control was not ready with an explicit FFX upscaler capability when this version was selected. It is saved for the next launch."}
             </Notice>
           </PanelSectionRow>
         ) : null}
@@ -734,12 +1158,51 @@ export function BasicPanel({
           </PanelSectionRow>
         ) : null}
 
+        {targetDir && picked && switchSelectionStale && !int8RestartOnly ? (
+          <PanelSectionRow>
+            <Notice tone="warn">
+              The active API, session, or FFX version list changed after selection. Refresh live status and choose this upscaler again.
+            </Notice>
+          </PanelSectionRow>
+        ) : null}
+
         {switchNotReady ? (
           <PanelSectionRow>
-            <Notice tone="info">
-              {live?.backend_entries === 0
-                ? "Saved. The game has not started upscaling yet, so there is nothing to switch — it takes effect as soon as it does."
-                : "Saved. It applies when the game restarts."}
+            <Notice tone={switchSelectionStale ? "warn" : "info"}>
+              {switchSelectionStale
+                ? "The active API, session, or FFX version list changed after selection. Refresh live status and choose this upscaler again."
+                : pickedBinding?.saveFailed
+                  ? "The selected backend value was not saved, so the live switch is unavailable. Choose it again after fixing the INI write."
+                  : !pickedConfigPersisted
+                    ? pickedBackendRevision !== null && pickedBackendRevision !== undefined
+                      ? "The backend value changed. Choose it again before switching."
+                      : "Saving this backend value before offering a live switch."
+                : !pickedBinding?.context
+                  ? "Saved. Live control was not ready with an explicit backend capability when you selected this upscaler. It applies after restart, or choose again when live status is ready."
+                  : "Saved. The selected backend has no verified live capability for the current game state, so it applies after restart."}
+            </Notice>
+          </PanelSectionRow>
+        ) : null}
+
+        {switchOutcome ? (
+          <PanelSectionRow>
+            <Notice
+              tone={
+                switchAccepted ? "success" :
+                  switchOutcome.ack === "rejected" ? "error" :
+                  switchOutcome.ack === "timeout" ? "warn" :
+                    "info"
+              }
+              title={
+                switchAuthorizationLost ? "Live authorization changed" :
+                switchAccepted ? "Backend request sent to OptiScaler" :
+                  switchOutcome.ack === "rejected" ? "The game rejected the backend switch" :
+                  switchOutcome.ack === "timeout" ? "The backend switch was not confirmed" :
+                        switchOutcome.ack === "pending" ? "Backend switch sent; waiting for confirmation" :
+                          "Waiting for OptiScaler"
+              }
+            >
+              {switchOutcome.error ?? switchOutcome.reason}
             </Notice>
           </PanelSectionRow>
         ) : null}
@@ -752,31 +1215,28 @@ export function BasicPanel({
 
         {installingFsr4 || fsr4Error ? (
           <PanelSectionRow>
-            <Notice tone={fsr4Error ? "error" : "info"} title={fsr4Error ? "FSR 4 setup failed" : "Setting up FSR 4.1.1b…"}>
+            <Notice tone={fsr4Error ? "error" : "info"} title={fsr4Error ? "FSR 4 setup failed" : "Setting up community FSR 4.1.2 Lite…"}>
               {fsr4Error ?? "Downloading and enabling the Steam Deck upscaler."}
             </Notice>
           </PanelSectionRow>
         ) : null}
-        {int8Selected ? (
+        {int8Selected && !int8PresetMatches ? (
           <PanelSectionRow>
-            <Notice tone="info" title={fsr4Build === "4.1.1b" ? "FSR 4.1.1b ready for the next launch" : "Manual INT8 settings"}>
-              {fsr4Build === "4.1.1b"
-                ? "Experimental RDNA2 upscaling. Check for FSR4-I8 in the game's watermark. Frame generation is configured separately."
-                : "Select FSR 4.1.1b — Steam Deck to install the RDNA2 ghosting fix."}
+            <Notice tone="info" title="Manual INT8 settings">
+              The current file or settings do not match the complete community Lite preset. Review the installed upscaler; to use the official path, restore the bundled DLL first.
             </Notice>
           </PanelSectionRow>
         ) : needsInt8 || ffxUpsNeedsInt8 ? (
           <PanelSectionRow>
             <Notice tone="info" title="FSR 4 on Steam Deck">
-              Select FSR 4.1.1b — Steam Deck to install the RDNA2 build and enable INT8.
+              Official 4.1.2 is bundled. Restore the bundled upscaler and select FSR 3.X/4; recognized RDNA2 APUs can also try the experimental community Lite preset.
             </Notice>
           </PanelSectionRow>
         ) : fsr4Selected && !compact ? (
           <PanelSectionRow>
             <Notice tone="info" title="FSR 4 selected">
-              Uses the FidelityFX 4.1 library bundled with OptiScaler. OptiScaler only picks
-              FSR 4 by itself on RDNA 4, which is why choosing it here also sets the FSR
-              backend explicitly.
+              Uses the installed FidelityFX library. Official 4.1.2 includes RDNA2 and APU
+              INT8 models. Verify the active model with the in-game FSR watermark.
             </Notice>
           </PanelSectionRow>
         ) : null}
@@ -785,7 +1245,7 @@ export function BasicPanel({
       {/* Last, and only in the Quick Access panel: everything above it takes
           effect in the running game, and this does not. */}
       {compact ? (
-        <PanelSection title="Needs a restart">{methodControls}</PanelSection>
+        <PanelSection title="Startup settings">{methodControls}</PanelSection>
       ) : null}
     </>
   );

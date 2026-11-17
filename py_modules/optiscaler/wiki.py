@@ -5,6 +5,8 @@ markdown table in Compatibility-List.md and, when a game has its own entry, the
 AsciiDoc detail page that names the exact proxy filename to install as.
 """
 
+import contextvars
+import http.client
 import difflib
 import hashlib
 import json
@@ -137,32 +139,67 @@ def _is_tls_error(exc):
     return False
 
 
+_force_ipv4 = contextvars.ContextVar("optiscaler_force_ipv4", default=False)
+
+
 class _ipv4_only:
-    """Resolve names to IPv4 for the duration of one request.
-
-    The classic "works on my machine" network fault: a router advertises IPv6,
-    the address resolves, and nothing routes. Python's urllib has no Happy
-    Eyeballs, so it does not fall back the way a browser does — it sits on the
-    first address until the timeout, every time, and the wiki simply never
-    loads on that network while everything else on the Deck is fine.
-    """
-
+    """Request-local retry policy; never mutate the process-wide resolver."""
     def __enter__(self):
-        self._real = socket.getaddrinfo
-
-        def ipv4(host, port, family=0, *args, **kwargs):
-            return self._real(host, port, socket.AF_INET, *args, **kwargs)
-
-        socket.getaddrinfo = ipv4
+        self.token = _force_ipv4.set(True)
         return self
 
     def __exit__(self, *exc):
-        socket.getaddrinfo = self._real
+        _force_ipv4.reset(self.token)
         return False
 
 
+def _connect_ipv4(address, timeout=socket._GLOBAL_DEFAULT_TIMEOUT, source_address=None):
+    host, port = address
+    last = None
+    for family, kind, proto, _, endpoint in socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM):
+        connection = socket.socket(family, kind, proto)
+        try:
+            if timeout is not socket._GLOBAL_DEFAULT_TIMEOUT:
+                connection.settimeout(timeout)
+            if source_address:
+                connection.bind(source_address)
+            connection.connect(endpoint)
+            return connection
+        except OSError as exc:
+            last = exc
+            connection.close()
+    raise last or OSError("No IPv4 address found")
+
+
+class _IPv4HTTPConnection(http.client.HTTPConnection):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._create_connection = _connect_ipv4
+
+
+class _IPv4HTTPSConnection(http.client.HTTPSConnection):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._create_connection = _connect_ipv4
+
+
+class _IPv4HTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, request):
+        return self.do_open(_IPv4HTTPConnection, request)
+
+
+class _IPv4HTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, request):
+        return self.do_open(_IPv4HTTPSConnection, request, context=self._context)
+
+
 def _open(request, timeout, context, binary=False):
-    with urllib.request.urlopen(request, timeout=timeout, context=context) as response:
+    if _force_ipv4.get():
+        opener = urllib.request.build_opener(_IPv4HTTPHandler(), _IPv4HTTPSHandler(context=context))
+        response = opener.open(request, timeout=timeout)
+    else:
+        response = urllib.request.urlopen(request, timeout=timeout, context=context)
+    with response:
         body = response.read()
     return body if binary else body.decode("utf-8", errors="replace")
 

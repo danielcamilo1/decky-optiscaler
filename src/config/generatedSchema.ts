@@ -326,6 +326,14 @@ export const GENERATED_OPTIONS: OptionMeta[] = [
   },
   {
     "section": "FSRFG",
+    "key": "DisableFlipMetering",
+    "label": "Disable Flip Metering",
+    "description": "Disables AMD hardware flip metering requested by the FSR FG swapchain (Driver-Assisted Frame Pacing)",
+    "default": "false",
+    "type": "bool"
+  },
+  {
+    "section": "FSRFG",
     "key": "FPTSafetyMarginInMs",
     "label": "FPT Safety Margin In Ms",
     "description": "This info is from: https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/blob/54fbaafdc34716811751bea5032700e78f5a0f33/ffx-api/include/ffx_api/ffx_api_types.h#L197 Default Tuning safetyMarginInMs==0.1ms and varianceFactor==0.1. Tuning set A safetyMarginInMs==0.75ms, and varianceFactor==0.1. Tuning Set B safetyMarginInMs==0.01ms and varianceFactor==0.3. If your game when using FG, frame rate is running at unexpectly low frame rate, after gradual transition from rendering complex to easy scene complexity, you could try setting \"Tuning Set B\" to recover lost FPS at cost of a bit higher variance. OptiScaler will use Tuning B as default Frame Pace Tuning Sets safety margin",
@@ -990,9 +998,21 @@ export const GENERATED_OPTIONS: OptionMeta[] = [
     "section": "FSR",
     "key": "Fsr4ForceEnableInt8",
     "label": "Fsr4 Force Enable Int8",
-    "description": "Enables INT8 model for all GPUs",
-    "default": "false",
-    "type": "bool"
+    "description": "Enables INT8 model for all GPUs 0 = Disabled, 1 = Force INT8, 2 = Force INT8 RDNA2, 3 = Force INT8 Lite",
+    "default": "3 for AMD APUs, 0 for others",
+    "type": "enum",
+    "options": [
+      "0",
+      "1",
+      "2",
+      "3"
+    ],
+    "optionLabels": {
+      "0": "Disabled",
+      "1": "Force INT8",
+      "2": "Force INT8 RDNA2",
+      "3": "Force INT8 Lite"
+    }
   },
   {
     "section": "FSR",
@@ -2228,10 +2248,10 @@ export const GENERATED_OPTIONS: OptionMeta[] = [
     "section": "CAS",
     "key": "Contrast",
     "label": "Contrast",
-    "description": "Contrast based sharpening value Higher values increases sharpness at high contrast areas. High values might cause graphical GLITCHES when used with high sharpness values !!!",
-    "default": "-0.3",
+    "description": "Contrast based sharpening value Lowers sharpness at high contrast areas. High values might cause graphical GLITCHES when used with high sharpness values !!!",
+    "default": "0.0",
     "type": "float",
-    "min": -2.0,
+    "min": 0.0,
     "max": 2.0
   },
   {

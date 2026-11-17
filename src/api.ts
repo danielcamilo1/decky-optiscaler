@@ -9,6 +9,8 @@ import type {
   GameDetail,
   Library,
   LiveStatus,
+  LiveApplyResult,
+  LiveContext,
   OptipatcherStatus,
   ReframeworkStatus,
   MonitorReport,
@@ -82,6 +84,23 @@ export const recordLaunchOptions = callable<
   ActionResult & { recorded: boolean; value: string; written: boolean }
 >("record_launch_options");
 
+/** Preserve the current managed installation and its Steam launch options once. */
+export const createRestorePoint = callable<
+  [targetDir: string, gamePath: string, launchOptions: string | null],
+  ActionResult & { available?: boolean; version?: string; metadata?: Record<string, unknown> }
+>("create_restore_point");
+
+/** Restore a retained pre-upgrade installation snapshot. */
+export const rollbackInstall = callable<
+  [targetDir: string, gamePath: string],
+  ActionResult & { launch_options?: string | null }
+>("rollback_install");
+
+export const upgradeRuntime = callable<
+  [targetDir: string, gamePath: string, launchOptions: string | null, name: string],
+  ActionResult & { upgraded?: boolean; deferred?: boolean; held?: boolean }
+>("upgrade_runtime");
+
 /**
  * What Steam passes a game, read out of its own config file. The fallback for
  * client builds with no `GetAppLaunchOptions`, where nothing else can tell.
@@ -125,7 +144,13 @@ export const setAutoMode = callable<[gamePath: string, enabled: boolean], Action
   "set_auto_mode"
 );
 export const autoInstall = callable<
-  [targetDir: string, gamePath?: string, name?: string, extraNames?: string[]],
+  [
+    targetDir: string,
+    gamePath?: string,
+    name?: string,
+    extraNames?: string[],
+    launchOptions?: string | null,
+  ],
   ActionResult & Partial<AutoPlanResult>
 >("auto_install");
 export const applyAutoSettings = callable<
@@ -136,7 +161,15 @@ export const applyAutoSettings = callable<
 export const listAllGames = callable<[], Game[]>("list_all_games");
 
 export const install = callable<
-  [targetDir: string, filename: string, preserveIni: boolean, optipatcher: boolean],
+  [
+    targetDir: string,
+    filename: string,
+    preserveIni: boolean,
+    optipatcher: boolean,
+    gamePath?: string,
+    launchOptions?: string | null,
+    autoMode?: boolean,
+  ],
   ActionResult
 >("install");
 export const uninstall = callable<[targetDir: string, removeIni: boolean], ActionResult>(
@@ -144,9 +177,10 @@ export const uninstall = callable<[targetDir: string, removeIni: boolean], Actio
 );
 
 export const readConfig = callable<[targetDir: string], ConfigResult>("read_config");
-export const writeConfig = callable<[targetDir: string, changes: OptionChange[]], WriteConfigResult>(
-  "write_config"
-);
+export const writeConfig = callable<
+  [targetDir: string, changes: OptionChange[], pushLive?: boolean, liveContext?: LiveContext],
+  WriteConfigResult
+>("write_config");
 export const resetConfig = callable<[targetDir: string], ActionResult>("reset_config");
 
 export const getReframeworkStatus = callable<
@@ -172,9 +206,10 @@ export const installOptipatcher = callable<
 
 export const getLiveStatus = callable<[targetDir: string], LiveStatus>("get_live_status");
 export const installLive = callable<[targetDir: string], ActionResult>("install_live");
-export const switchUpscaler = callable<[targetDir: string, code: string], ActionResult>(
-  "switch_upscaler"
-);
+export const switchUpscaler = callable<
+  [targetDir: string, code: string, liveContext?: LiveContext],
+  ActionResult & { live?: LiveApplyResult }
+>("switch_upscaler");
 export const getLiveLog = callable<[targetDir: string, lines?: number], { lines: string[] }>(
   "get_live_log"
 );

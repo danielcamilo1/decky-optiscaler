@@ -15,10 +15,10 @@ Two rules run through all of it:
   OptiScaler's own overlay uses. Anything else is reported in ``unresolved`` so
   the user can see what the wiki asked for that this could not do — silently
   dropping half a wiki entry would be worse than not offering the feature.
-* **The user's three choices are never overridden.** Automatic mode exists so
-  that frame generation on/off, the frame multiplier and the upscaler stay the
+* **The user's choices are preserved.** Automatic mode exists so
+  that frame generation on/off and method, the frame multiplier and the upscaler stay the
   user's, with everything around them set from the wiki. Keys belonging to
-  those three are dropped even when a wiki entry names them.
+  those controls are dropped even when a wiki entry names them.
 """
 
 import re
@@ -40,6 +40,8 @@ USER_OWNED = {
     ("FSR", "UpscalerIndex"),
     ("FSR", "FGIndex"),
     ("FrameGen", "Enabled"),
+    ("FrameGen", "FGInput"),
+    ("FrameGen", "FGOutput"),
     ("XeFG", "InterpolationCount"),
 }
 

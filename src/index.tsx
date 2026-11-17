@@ -6,6 +6,7 @@ import { ManagerPage } from "./components/ManagerPage";
 import { QuickPanel } from "./components/QuickPanel";
 import { ROUTE, openManager } from "./navigation";
 import { useRunningGame } from "./hooks/useRunningGame";
+import { clearTargetAfterSteamRestart } from "./config/liveRecord";
 
 function Content() {
   const runningGame = useRunningGame();
@@ -21,6 +22,19 @@ function Content() {
 export default definePlugin(() => {
   routerHook.addRoute(ROUTE, ManagerPage, { exact: true });
   const unpatchContextMenu = patchLibraryContextMenu();
+  let unregisterGameSession: (() => void) | undefined;
+  try {
+    const registration = SteamClient?.GameSessions?.RegisterForAppLifetimeNotifications(
+      (notification) => {
+        if (notification.bRunning && notification.unAppID !== 0) {
+          clearTargetAfterSteamRestart(String(notification.unAppID));
+        }
+      },
+    );
+    unregisterGameSession = () => registration?.unregister();
+  } catch {
+    /* not running inside the Steam client */
+  }
 
   return {
     name: "Decky OptiScaler",
@@ -28,6 +42,7 @@ export default definePlugin(() => {
     content: <Content />,
     icon: <FaLayerGroup />,
     onDismount() {
+      unregisterGameSession?.();
       routerHook.removeRoute(ROUTE);
       unpatchContextMenu();
     },

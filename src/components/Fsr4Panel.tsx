@@ -1,23 +1,26 @@
 import { ButtonItem, PanelSection, PanelSectionRow } from "@decky/ui";
 import { toaster } from "@decky/api";
 import { useCallback, useEffect, useState } from "react";
-import { getFsr4Info, restoreFsr4Build, importFsr4Files, verifyInstall } from "../api";
+import { getFsr4Info, restoreFsr4Build, setFsr4Build, importFsr4Files, verifyInstall } from "../api";
 import type { Fsr4Build, Fsr4Source, GpuInfo, VerifyResult } from "../types";
 import { KeyValue, Mono, Notice, Pill } from "./Common";
+import { STEAM_DECK_FSR4_BUILD_ID } from "../config/basic";
 
 interface Props {
   targetDir: string;
   sources: Fsr4Source[];
   gpu: GpuInfo | undefined;
+  readOnly?: boolean;
+  onBeforeMutation?: () => Promise<void> | void;
   onChanged: () => Promise<void> | void;
 }
 
 const GPU_NOTE: Record<string, string> = {
   native: "This GPU runs FSR 4 natively.",
   int8: "This GPU can run FSR 4 through the INT8 model.",
-  experimental: "Select FSR 4.1.1b — Steam Deck in Basic settings for experimental RDNA2 upscaling.",
+  experimental: "Official 4.1.2 includes RDNA2 and selected APU models. Confirm the active model in game.",
   unsupported:
-    "AMD supports FSR 4 on RDNA 3 and RDNA 4 only. RDNA 2 — which includes the Steam Deck — is not supported yet.",
+    "Official FSR 4.1.2 supports selected AMD GPUs and APUs. Other devices may require a forced model; verify the in-game watermark.",
   unknown: "Could not identify this GPU from sysfs.",
 };
 
@@ -28,7 +31,14 @@ const GPU_NOTE: Record<string, string> = {
  * so the useful question is whether that file is really there and which version
  * it is — not whether some extra download is missing.
  */
-export function Fsr4Panel({ targetDir, sources, gpu, onChanged }: Props) {
+export function Fsr4Panel({
+  targetDir,
+  sources,
+  gpu,
+  readOnly = false,
+  onBeforeMutation,
+  onChanged,
+}: Props) {
   const [report, setReport] = useState<VerifyResult | null>(null);
   const [build, setBuild] = useState<Fsr4Build | null>(null);
   const [busy, setBusy] = useState(false);
@@ -51,6 +61,13 @@ export function Fsr4Panel({ targetDir, sources, gpu, onChanged }: Props) {
 
   return (
     <PanelSection title="Installed Files & FSR 4">
+      {readOnly ? (
+        <PanelSectionRow>
+          <Notice tone="warn" title="Runtime is read-only">
+            Upgrade the OptiScaler runtime in Setup before changing FSR files.
+          </Notice>
+        </PanelSectionRow>
+      ) : null}
       <PanelSectionRow>
         <div style={{ padding: "2px 0" }}>
           <div style={{ marginBottom: "6px" }}>
@@ -77,11 +94,31 @@ export function Fsr4Panel({ targetDir, sources, gpu, onChanged }: Props) {
         </div>
       </PanelSectionRow>
 
-      {ffx?.fsr4_capable ? (
+      {build?.id === STEAM_DECK_FSR4_BUILD_ID ? (
+        <PanelSectionRow>
+          <Notice tone="info" title="Community Lite (experimental)">
+            The model is 4.1.2 Lite; this modified DLL keeps a 4.1.1 resource version.
+            Confirm the 4.1.2l-exact provider in OptiScaler's overlay. Official and legacy
+            fallbacks are available below.
+          </Notice>
+        </PanelSectionRow>
+      ) : null}
+
+      {ffx?.fsr4_capable && build?.id === "bundled" ? (
         <PanelSectionRow>
           <Notice tone="success" title="FSR 4 is present">
-            On Steam Deck, select <b>FSR 4.1.1b — Steam Deck</b> in Basic settings.
-            This installs the community RDNA2 fix and enables INT8 upscaling.
+            Official FSR 4.1.2 is bundled. Select <b>FSR 3.X/4</b> in Basic settings
+            to use the installed library, then verify the active model with the in-game watermark.
+            The community Lite preset replaces this DLL only when selected.
+          </Notice>
+        </PanelSectionRow>
+      ) : null}
+
+      {ffx?.fsr4_capable && build?.known && build.id !== "bundled" ? (
+        <PanelSectionRow>
+          <Notice tone="info" title="Return to official FSR 4.1.2">
+            Close the game, choose Restore bundled upscaler below, then select FSR 3.X/4
+            in Basic settings. Selecting a settings preset alone does not restore this DLL.
           </Notice>
         </PanelSectionRow>
       ) : null}
@@ -105,11 +142,12 @@ export function Fsr4Panel({ targetDir, sources, gpu, onChanged }: Props) {
 
       {build?.known && build.id !== "bundled" ? (
         <PanelSectionRow>
-          <ButtonItem layout="below" disabled={Boolean(busy)}
+          <ButtonItem layout="below" disabled={Boolean(busy || readOnly)}
             description="Close the game first. Keeps your upscaler and frame generation settings."
             onClick={async () => {
               setBusy(true);
               try {
+                await onBeforeMutation?.();
                 const result = await restoreFsr4Build(targetDir);
                 if (!result.ok) throw new Error(result.error);
                 await onChanged();
@@ -119,6 +157,26 @@ export function Fsr4Panel({ targetDir, sources, gpu, onChanged }: Props) {
               } finally { setBusy(false); }
             }}>
             Restore bundled upscaler
+          </ButtonItem>
+        </PanelSectionRow>
+      ) : null}
+      {build?.id === STEAM_DECK_FSR4_BUILD_ID ? (
+        <PanelSectionRow>
+          <ButtonItem layout="below" disabled={Boolean(busy || readOnly)}
+            description="Compatibility fallback. Close the game first; keeps frame generation settings."
+            onClick={async () => {
+              setBusy(true);
+              try {
+                await onBeforeMutation?.();
+                const result = await setFsr4Build(targetDir, "4.1.1b");
+                if (!result.ok) throw new Error(result.error);
+                await onChanged();
+                await verify();
+              } catch (error) {
+                toaster.toast({ title: "Could not restore legacy upscaler", body: String(error) });
+              } finally { setBusy(false); }
+            }}>
+            Use legacy 4.1.1b
           </ButtonItem>
         </PanelSectionRow>
       ) : null}
@@ -141,11 +199,12 @@ export function Fsr4Panel({ targetDir, sources, gpu, onChanged }: Props) {
             <PanelSectionRow key={source.path}>
               <ButtonItem
                 layout="below"
-                disabled={busy}
+                disabled={busy || readOnly}
                 description={source.files.join(", ")}
                 onClick={async () => {
                   setBusy(true);
                   try {
+                    await onBeforeMutation?.();
                     const result = await importFsr4Files(targetDir, source.path);
                     if (result.ok) {
                       toaster.toast({ title: "Copied into game folder", body: source.files.join(", ") });
@@ -154,6 +213,8 @@ export function Fsr4Panel({ targetDir, sources, gpu, onChanged }: Props) {
                     } else {
                       toaster.toast({ title: "Copy failed", body: String(result.error) });
                     }
+                  } catch (exc) {
+                    toaster.toast({ title: "Copy failed", body: String(exc) });
                   } finally {
                     setBusy(false);
                   }

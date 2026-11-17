@@ -1,3 +1,4 @@
+import { hasPbzIdentity, normalizeGamePath, pbzTargetMismatch } from "../gameTarget";
 import {
   ButtonItem,
   ConfirmModal,
@@ -9,12 +10,14 @@ import {
   showModal,
 } from "@decky/ui";
 import { toaster } from "@decky/api";
-import { useEffect, useState } from "react";
-import { install, setGameTarget, setWikiEntry } from "../api";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { install, setWikiEntry } from "../api";
 import { setLaunchOptions } from "../hooks/useRunningGame";
 import {
   currentLaunchOptions,
   launchOptionFor,
+  mergeLaunchOptions,
+  preserveExistingInstall,
   recordPreviousLaunchOptions,
 } from "../launchOptions";
 import { PREF_INSTALL_LAUNCH, isRemembering, recall, remember } from "../prefs";
@@ -31,6 +34,8 @@ interface Props {
   status: PayloadStatus | null;
   appid: string | null;
   live: LiveStatus | null;
+  running: boolean;
+  onBeforeMutation?: () => Promise<void> | void;
   onChanged: () => Promise<void> | void;
 }
 
@@ -67,8 +72,8 @@ function LaunchOptionsPrompt({
       onCancel={() => onDecide(false, rememberIt)}
     >
       <div style={{ fontSize: "14px", lineHeight: 1.5 }}>
-        Proton loads its own <Mono>{filename}</Mono> unless this override is set, and
-        OptiScaler never gets to run:
+        Proton loads its own <Mono>{filename}</Mono> unless this override is set. The preview
+        merges it with the launch options already in Steam:
         <div style={{ margin: "8px 0" }}>
           <Mono>{launchOption}</Mono>
         </div>
@@ -91,7 +96,7 @@ function LaunchOptionsPrompt({
  * launch options. Reached from "Manual setup" on the setup checklist,
  * which is where the majority of games never have to come.
  */
-export function InstallPanel({ detail, status, appid, live, onChanged }: Props) {
+export function InstallPanel({ detail, status, appid, live, running, onBeforeMutation, onChanged }: Props) {
   const [filename, setFilename] = useState(detail.install.filename ?? "dxgi.dll");
   const [target, setTarget] = useState(detail.target);
   const [preserveIni, setPreserveIni] = useState(false);
@@ -108,12 +113,23 @@ export function InstallPanel({ detail, status, appid, live, onChanged }: Props) 
    */
   const [launchNow, setLaunchNow] = useState<string | null>(null);
   const [launchRead, setLaunchRead] = useState(false);
+  const launchRequest = useRef(0);
+  const activeAppid = useRef(appid);
+  activeAppid.current = appid;
   const proxies = status?.proxy_filenames ?? ["dxgi.dll"];
+  const runtimeCurrent = detail.install.managed && detail.install.runtime_current === true;
   const {
+    plan,
     recommendation,
     loading: loadingWiki,
     reload: lookup,
   } = useAutoPlan(detail.path, detail.name);
+
+  const targetRequirement = plan?.required_target ?? (hasPbzIdentity(detail) ? "PBZ/platform/steam" : null);
+  const inspectedTarget = detail.install.installed ? detail.install.path : target;
+  const requiredTargetMismatch = pbzTargetMismatch(detail, Boolean(targetRequirement), inspectedTarget);
+  const targetWritable = detail.candidates.find((candidate) => normalizeGamePath(candidate.path) === normalizeGamePath(target))?.writable
+    ?? (normalizeGamePath(target) === normalizeGamePath(detail.target) && detail.writable);
 
   useEffect(() => {
     setTarget(detail.target);
@@ -124,36 +140,87 @@ export function InstallPanel({ detail, status, appid, live, onChanged }: Props) 
     if (recommendation && !detail.install.installed) setFilename(recommendation.filename);
   }, [recommendation, detail.install.installed]);
 
-  useEffect(() => {
-    void (async () => {
+  const refreshLaunchOptions = useCallback(async () => {
+    const request = ++launchRequest.current;
+    setLaunchRead(false);
+    try {
       const value = await currentLaunchOptions(appid);
+      if (activeAppid.current !== appid || launchRequest.current !== request) return;
       setLaunchNow(value);
       setLaunchRead(true);
-    })();
-  }, [appid, detail.install.installed]);
+    } catch {
+      if (activeAppid.current === appid && launchRequest.current === request) {
+        setLaunchNow(null);
+        setLaunchRead(true);
+      }
+    }
+  }, [appid]);
+
+  useEffect(() => {
+    void refreshLaunchOptions();
+  }, [refreshLaunchOptions, detail.install.installed]);
 
   // An .asi build is loaded by an ASI loader, so Proton has nothing to shadow.
   const needsNoOverride = filename.toLowerCase().endsWith(".asi");
-  const launchOption = launchOptionFor(filename);
+  const launchReadRequired = Boolean(
+    appid && (detail.install.installed ||
+      (!detail.install.installed && !needsNoOverride)),
+  );
+  const launchUnavailable = launchReadRequired && (!launchRead || launchNow === null);
+  const plannedFlags = plan?.launch_flags ?? [];
+  const extraOverrides = plan?.reframework?.override ? [plan.reframework.override] : [];
+  const launchOption = launchNow === null
+    ? launchOptionFor(filename)
+    : mergeLaunchOptions(launchNow, filename, plannedFlags, extraOverrides) ??
+      `Manual merge required. Add this override to your existing launch options: ${launchOptionFor(filename)}`;
+
+  const beforeManagedMutation = async () => {
+    await onBeforeMutation?.();
+    if (!detail.install.installed) return;
+    const preserved = await preserveExistingInstall(detail.install.path, detail.path, appid);
+    if (!preserved.ok) {
+      throw new Error(preserved.error ?? "Could not preserve the current install.");
+    }
+  };
 
   const doInstall = async () => {
     setBusy(true);
     try {
-      const result = await install(target, filename, preserveIni, optipatcher);
+      if (requiredTargetMismatch) throw new Error("Choose the main PBZ.exe folder at PBZ/platform/steam first.");
+      if (!targetWritable) throw new Error("The chosen install folder is not writable.");
+      await beforeManagedMutation();
+      const launchAtInstall = appid ? await currentLaunchOptions(appid) : null;
+      if (!detail.install.installed && appid && !needsNoOverride) {
+        if (launchAtInstall === null) {
+          throw new Error("Steam launch options could not be read. The install was left unchanged.");
+        }
+      }
+      if (appid && launchAtInstall !== null) {
+        setLaunchNow(launchAtInstall);
+        setLaunchRead(true);
+      }
+      const firstInstall = !detail.install.installed;
+      const result = await install(
+        target,
+        filename,
+        firstInstall ? preserveIni : true,
+        optipatcher,
+        detail.path,
+        launchAtInstall,
+        false,
+      );
       if (result.ok) {
         toaster.toast({
           title: "OptiScaler installed",
           body: `${filename} in ${target.split("/").slice(-2).join("/")}`,
         });
-        await setGameTarget(detail.path, target);
-        // Before anything of ours reaches Steam: what the game was launched
-        // with until now is what removing OptiScaler will offer to put back.
-        await recordPreviousLaunchOptions(appid, target);
         await onChanged();
-        await offerLaunchOptions();
+        await offerLaunchOptions(true);
       } else {
         toaster.toast({ title: "Install failed", body: String(result.error) });
       }
+    } catch (exc) {
+      toaster.toast({ title: "Install failed", body: String(exc) });
     } finally {
       setBusy(false);
     }
@@ -163,36 +230,82 @@ export function InstallPanel({ detail, status, appid, live, onChanged }: Props) 
    * The one thing an install cannot do for itself without being asked.
    * Answered already? Honour that answer and say nothing.
    */
-  const offerLaunchOptions = async () => {
+  const offerLaunchOptions = async (justInstalled = false) => {
     if (!appid || needsNoOverride) return;
+    const latest = await currentLaunchOptions(appid);
+    if (latest !== null) {
+      setLaunchNow(latest);
+      setLaunchRead(true);
+    }
+    const preview = latest === null
+      ? launchOptionFor(filename)
+      : mergeLaunchOptions(latest, filename, plannedFlags, extraOverrides) ??
+        `Manual merge required. Add this override to your existing launch options: ${launchOptionFor(filename)}`;
     const remembered = await recall(PREF_INSTALL_LAUNCH);
     if (remembered === "never") return;
     if (remembered === "always") {
-      applyLaunchOptions();
+      void applyLaunchOptions(justInstalled ? target : undefined);
       return;
     }
     const canRemember = await isRemembering();
     showModal(
       <LaunchOptionsPrompt
         filename={filename}
-        launchOption={launchOption}
+        launchOption={preview}
         canRemember={canRemember}
         onDecide={(apply, rememberIt) => {
           if (rememberIt) void remember(PREF_INSTALL_LAUNCH, apply ? "always" : "never");
-          if (apply) applyLaunchOptions();
+          if (apply) void applyLaunchOptions(justInstalled ? target : undefined);
         }}
       />
     );
   };
 
-  const applyLaunchOptions = () => {
-    if (!appid) return;
-    if (setLaunchOptions(Number(appid), launchOption)) {
-      setLaunchNow(launchOption);
+  const applyLaunchOptions = async (confirmedTarget?: string) => {
+    if (requiredTargetMismatch || (!detail.install.managed && !confirmedTarget)) return false;
+    if (!appid) {
+      toaster.toast({
+        title: "Could not read Steam launch options",
+        body: "The current value is unknown, so it was left unchanged.",
+      });
+      return false;
+    }
+    let latest = await currentLaunchOptions(appid);
+    if (latest === null) {
+      toaster.toast({
+        title: "Could not read Steam launch options",
+        body: "The current value is unknown, so it was left unchanged.",
+      });
+      return false;
+    }
+    if (detail.install.installed || confirmedTarget) {
+      const recorded = await recordPreviousLaunchOptions(appid, confirmedTarget ?? detail.install.path);
+      if (!recorded) {
+        toaster.toast({ title: "Could not preserve launch options", body: "Steam was not changed." });
+        return false;
+      }
+      latest = await currentLaunchOptions(appid);
+      if (latest === null) {
+        toaster.toast({ title: "Could not read Steam launch options", body: "Steam was left unchanged." });
+        return false;
+      }
+    }
+    const value = mergeLaunchOptions(latest, filename, plannedFlags, extraOverrides);
+    if (value === null) {
+      toaster.toast({ title: "Merge launch options manually", body: `Steam was left unchanged because its shell syntax cannot be merged safely. Required override: ${launchOptionFor(filename)}` });
+      return false;
+    }
+    if (setLaunchOptions(Number(appid), value)) {
+      // Ignore a read started before Steam accepted this value; on some client
+      // builds its config-file fallback may still contain the previous value.
+      launchRequest.current += 1;
+      setLaunchNow(value);
       setLaunchRead(true);
-      toaster.toast({ title: "Launch options set", body: launchOption });
+      toaster.toast({ title: "Launch options updated", body: value });
+      return true;
     } else {
       toaster.toast({ title: "Could not set launch options", body: "Set them manually in Steam." });
+      return false;
     }
   };
 
@@ -231,6 +344,11 @@ export function InstallPanel({ detail, status, appid, live, onChanged }: Props) 
                   {stripMarkdown(recommendation.notes)}
                 </Notice>
               ) : null}
+              {recommendation.detail?.Notes && recommendation.detail.Notes !== "-" ? (
+                <Notice tone="info" title="Wiki notes">
+                  {stripMarkdown(recommendation.detail.Notes)}
+                </Notice>
+              ) : null}
               {recommendation.detail?.["Known Issues"] &&
               recommendation.detail["Known Issues"] !== "-" ? (
                 <Notice tone="warn" title="Known issues">
@@ -267,17 +385,38 @@ export function InstallPanel({ detail, status, appid, live, onChanged }: Props) 
             initialQuery={detail.name}
             current={detail.wiki_entry}
             onPick={async (entryName) => {
-              await setWikiEntry(detail.path, entryName);
-              setSearching(false);
-              await onChanged();
-              await lookup(false);
-              toaster.toast({ title: "Compatibility entry set", body: entryName });
+              try {
+                const result = await setWikiEntry(detail.path, entryName);
+                if (!result.ok) throw new Error(result.error ?? "Could not save the wiki entry.");
+                setSearching(false);
+                await onChanged();
+                await lookup(false);
+                toaster.toast({ title: "Compatibility entry set", body: entryName });
+              } catch (exc) {
+                toaster.toast({ title: "Could not save compatibility entry", body: String(exc) });
+              }
             }}
           />
         ) : null}
       </PanelSection>
 
       <PanelSection title={detail.install.installed ? "Installation" : "Install OptiScaler"}>
+      {detail.install.installed && !runtimeCurrent ? (
+          <PanelSectionRow>
+            <Notice tone="warn" title="Runtime settings are read-only">
+              Upgrade the OptiScaler runtime in Setup before changing config or FSR files.
+            </Notice>
+          </PanelSectionRow>
+        ) : null}
+        {requiredTargetMismatch && targetRequirement ? (
+          <PanelSectionRow>
+            <Notice tone="error" title="This game needs a different install folder">
+              {detail.install.installed
+                ? <>OptiScaler is installed in <Mono>{shorten(detail.install.path)}</Mono>, but this game requires <Mono>{targetRequirement}</Mono>. Remove this install first, then choose the folder containing the main <Mono>PBZ.exe</Mono> in Manual setup.</>
+                : <>The selected folder is <Mono>{shorten(target)}</Mono>, but this game requires <Mono>{targetRequirement}</Mono>. Choose the folder containing the main <Mono>PBZ.exe</Mono> in Manual setup before installing.</>}
+            </Notice>
+          </PanelSectionRow>
+        ) : null}
         {detail.install.installed ? (
           <PanelSectionRow>
             <div style={{ padding: "2px 0" }}>
@@ -306,7 +445,7 @@ export function InstallPanel({ detail, status, appid, live, onChanged }: Props) 
           </PanelSectionRow>
         ) : null}
 
-        {detail.candidates.length > 1 ? (
+        {detail.candidates.length > 1 || (detail.candidates.length === 1 && detail.candidates[0].path !== target) ? (
           <PanelSectionRow>
             <DropdownItem
               label="Install location"
@@ -346,9 +485,8 @@ export function InstallPanel({ detail, status, appid, live, onChanged }: Props) 
         {detail.ini_info?.legacy ? (
           <PanelSectionRow>
             <Notice tone="warn" title="Existing config looks out of date">
-              The OptiScaler.ini already here still uses the old <Mono>FGType</Mono> key, so it
-              was written by an older tool. Install with a fresh config unless you know you
-              want to keep it.
+              The OptiScaler.ini already here still uses the old <Mono>FGType</Mono> key. An
+              upgrade preserves the file and comments while migrating supported values.
             </Notice>
           </PanelSectionRow>
         ) : null}
@@ -369,6 +507,14 @@ export function InstallPanel({ detail, status, appid, live, onChanged }: Props) 
             />
           </PanelSectionRow>
         )}
+
+        {detail.install.installed ? (
+          <PanelSectionRow>
+            <Notice tone="info" title="Existing settings are preserved">
+              Upgrades keep the current OptiScaler.ini and migrate supported settings.
+            </Notice>
+          </PanelSectionRow>
+        ) : null}
 
         {detail.install.installed ? null : (
           <PanelSectionRow>
@@ -393,7 +539,7 @@ export function InstallPanel({ detail, status, appid, live, onChanged }: Props) 
           </PanelSectionRow>
         ) : null}
 
-        {!detail.writable ? (
+        {!targetWritable ? (
           <PanelSectionRow>
             <Notice tone="error" title="Folder is not writable">
               <Mono>{shorten(target)}</Mono>
@@ -402,13 +548,19 @@ export function InstallPanel({ detail, status, appid, live, onChanged }: Props) 
         ) : null}
 
         <PanelSectionRow>
-          <ButtonItem layout="below" disabled={busy || !detail.writable} onClick={doInstall}>
+          <ButtonItem
+            layout="below"
+            disabled={busy || !targetWritable || launchUnavailable || requiredTargetMismatch}
+            onClick={doInstall}
+          >
             {busy
               ? "Working…"
               : detail.install.installed
-                ? detail.install.filename === filename
-                  ? `Reinstall as ${filename}`
-                  : `Switch to ${filename}`
+                ? !runtimeCurrent
+                  ? `Upgrade runtime as ${filename}`
+                  : detail.install.filename === filename
+                    ? `Reinstall as ${filename}`
+                    : `Switch to ${filename}`
                 : `Install as ${filename}`}
           </ButtonItem>
         </PanelSectionRow>
@@ -420,16 +572,28 @@ export function InstallPanel({ detail, status, appid, live, onChanged }: Props) 
           targetDir={detail.install.path}
           sources={detail.fsr4_sources ?? []}
           gpu={detail.gpu}
+          readOnly={!runtimeCurrent}
+          onBeforeMutation={beforeManagedMutation}
           onChanged={onChanged}
         />
       ) : null}
 
       {detail.install.installed ? (
-        <LivePanel targetDir={detail.install.path} status={live} onChanged={onChanged} />
+        <LivePanel
+          targetDir={detail.install.path}
+          status={live}
+          running={running}
+          onBeforeMutation={beforeManagedMutation}
+          onChanged={onChanged}
+        />
       ) : null}
 
       {detail.install.installed ? (
-        <OptipatcherPanel targetDir={detail.install.path} />
+        <OptipatcherPanel
+          targetDir={detail.install.path}
+          onBeforeMutation={beforeManagedMutation}
+          onChanged={onChanged}
+        />
       ) : null}
 
       <PanelSection title="Steam Launch Options">
@@ -443,6 +607,12 @@ export function InstallPanel({ detail, status, appid, live, onChanged }: Props) 
                 <div style={{ marginTop: "6px" }}>
                   <Mono>{launchOption}</Mono>
                 </div>
+                {launchNow === null && appid ? (
+                  <div style={{ marginTop: "6px", opacity: 0.8 }}>
+                    Steam's current value is unknown, so this is only the plugin's requested addition.
+                    It will not overwrite the field until Steam's existing options can be read.
+                  </div>
+                ) : null}
               </>
             )}
           </Notice>
@@ -485,10 +655,21 @@ export function InstallPanel({ detail, status, appid, live, onChanged }: Props) 
             </Focusable>
           </PanelSectionRow>
         ) : null}
-        {appid && !needsNoOverride ? (
+        {appid && detail.install.installed && !needsNoOverride ? (
           <PanelSectionRow>
-            <ButtonItem layout="below" disabled={busy} onClick={applyLaunchOptions}>
+            <ButtonItem
+              layout="below"
+              disabled={busy || !detail.install.managed || !launchRead || launchNow === null || requiredTargetMismatch}
+              onClick={() => void applyLaunchOptions()}
+            >
               Set launch options for me
+            </ButtonItem>
+          </PanelSectionRow>
+        ) : null}
+        {appid && launchRead && launchNow === null ? (
+          <PanelSectionRow>
+            <ButtonItem layout="below" disabled={busy} onClick={() => void refreshLaunchOptions()}>
+              Retry reading Steam launch options
             </ButtonItem>
           </PanelSectionRow>
         ) : null}
@@ -509,6 +690,8 @@ function shorten(path: string, keep = 3) {
   const parts = path.split("/").filter(Boolean);
   return parts.length <= keep ? path : `…/${parts.slice(-keep).join("/")}`;
 }
+
+
 
 /** The wiki cells contain markdown links and AsciiDoc markup. */
 function stripMarkdown(text: string) {

@@ -9,6 +9,7 @@
 #include <vulkan/vulkan.h>
 #include <ankerl/unordered_dense.h>
 #include <mutex>
+#include <shared_mutex>
 
 typedef enum WindowsVersion
 {
@@ -236,6 +237,10 @@ class State
     std::vector<uint64_t> ffxFGVersionIds {};
     std::optional<uint32_t> currentFsr4Preset {};
 
+    // AMD driver flip metering
+    bool amdFlipMeterCreated = false;
+    uint32_t amdFlipMeterMode = 0;
+
     // Linux checks
     bool isRunningOnLinux = false;
     bool isRunningOnDXVK = false;
@@ -244,6 +249,8 @@ class State
     bool isRunningOnNvidia = false;
     std::optional<bool> isRunningOnRDNA4;
     std::optional<bool> isRunningOnRDNA3;
+    std::optional<bool> isRunningOnRDNA2;
+    bool isAmdApu = false;
     bool isPascalOrOlder = false;
     WorkingMode workingMode = WorkingMode::Other;
 
@@ -274,17 +281,19 @@ class State
     float screenHeight = 450.0;
     bool realExclusiveFullscreen = false;
     bool SCExclusiveFullscreen = false;
+    // Requested by the swapchain being created, applied when it gets the FG swapchain
+    bool SCExclusiveFullscreenRequested = false;
     bool SCAllowTearing = false;
     UINT SCLastFlags = 0;
 
     // HDR
-    std::vector<IUnknown*> SCbuffers;
     bool isHdrActive = false;
 
     std::string setInputApiName;
     std::string currentInputApiName;
 
     bool isShuttingDown = false;
+    bool releasingFGSwapchain = false;
     std::set<PVOID> modulesToFree;
 
     // menu warnings
@@ -348,7 +357,7 @@ class State
         if (_serveOwner == 0 || _serveOwner == owner)
         {
             _serveOriginal = false;
-            _skipOwner = 0;
+            _serveOwner = 0;
         }
     };
 
@@ -357,7 +366,7 @@ class State
         if (_serveOwner == 0 || _serveOwner == owner)
         {
             _serveOriginal = true;
-            _skipOwner = owner;
+            _serveOwner = owner;
         }
     };
 
@@ -365,7 +374,23 @@ class State
     static std::string SkipDllName() { return _skipDllName; }
     static bool ServeOriginal() { return _serveOriginal; }
 
+    // Back buffers of the game's swapchain, read from view creation on any thread
+    bool IsSCBuffer(IUnknown* resource)
+    {
+        std::shared_lock<std::shared_mutex> lock(_scBuffersMutex);
+        return std::find(_scBuffers.begin(), _scBuffers.end(), resource) != _scBuffers.end();
+    }
+
+    void SetSCBuffers(std::vector<IUnknown*> buffers)
+    {
+        std::unique_lock<std::shared_mutex> lock(_scBuffersMutex);
+        _scBuffers = std::move(buffers);
+    }
+
   private:
+    std::vector<IUnknown*> _scBuffers;
+    std::shared_mutex _scBuffersMutex;
+
     inline static bool _skipChecks = false;
     inline static std::string _skipDllName = "";
     inline static UINT _skipOwner = 0;
