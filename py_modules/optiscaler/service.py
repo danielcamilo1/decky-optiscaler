@@ -750,7 +750,7 @@ class OptiScalerService:
             return {"ok": False, "error": str(exc)}
 
     async def setup_deck_experiment(self, target_dir, game_path=None, game_name=None):
-        """Explicit opt-in: community FSR4.1 INT8 with OptiScaler FG disabled."""
+        """Explicit opt-in: community FSR4.1.2 Lite INT8 with OptiScaler FG disabled."""
         try:
             if not game_path:
                 raise ValueError("This experiment is only defined for Phantom Blade Zero.")
@@ -758,7 +758,7 @@ class OptiScalerService:
             expected = gameprofiles.target_for(game_path, game_name, wiki_identity)
             if not expected or Path(expected).resolve() != Path(target_dir).resolve():
                 raise ValueError("Choose the main PBZ.exe folder at PBZ/platform/steam before starting the experiment.")
-            build = fsr4build.find("4.1.1b")
+            build = fsr4build.find(constants.FSR4_STEAM_DECK_BUILD_ID)
             async with self._mutation_lock:
                 dll = await self._run(fsr4build.fetch, build, self.fsr4_build_cache(), self.log)
                 def work():

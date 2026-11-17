@@ -12,10 +12,15 @@ import asyncio, hashlib, json, logging, sys
 from pathlib import Path
 from unittest.mock import AsyncMock
 plugin=Path(sys.argv[1]); sys.path.insert(0,str(plugin/'py_modules'))
-from optiscaler import constants, fsr4build, gameprofiles, installer, live, restorepoint
+from optiscaler import constants, fsr4build, gameprofiles, installer, live, restorepoint, wiki
 from optiscaler.service import OptiScalerService
 from optiscaler.inifile import IniFile
 root=plugin.parent
+def reject_network(*args, **kwargs):
+ raise AssertionError('Offline lifecycle attempted a download')
+wiki.download=reject_network
+for build in constants.FSR4_BUILDS:
+ assert (plugin/'bin'/build['sources'][0]['asset']).is_file(), 'Missing offline community archive'
 service=OptiScalerService(plugin,root/'settings',root/'runtime',root/'home',logging.getLogger('zip-verification'))
 service.get_recommendation=AsyncMock(return_value=gameprofiles.recommendation({'matched':False},'Phantom Blade Zero'))
 service.refresh_wiki_if_stale=lambda:None
@@ -54,7 +59,15 @@ async def verify():
  assert ini.get('FrameGen','Enabled')=='false'
  assert ini.get('FrameGen','FGInput')==ini.get('FrameGen','FGOutput')=='nofg'
  assert ini.get('FSR','Fsr4ForceEnableInt8')=='1'
+ assert fsr4build.identify(target/constants.FFX_UPSCALER_DLL)['id']=='4.1.2-lite-exact-20261105'
+ assert ini.get('FSR','Fsr4Update')=='true'
+ assert installer.pe_file_version(target/constants.FFX_UPSCALER_DLL)[:3]==(4,1,1)
+ # A stock restore point must not prevent direct fallback to the older build.
+ framegen={key:ini.get('FrameGen',key) for key in ['Enabled','FGInput','FGOutput']}
+ legacy=await service.set_fsr4_build(str(target),'4.1.1b');assert legacy['ok'],legacy
  assert fsr4build.identify(target/constants.FFX_UPSCALER_DLL)['id']=='4.1.1b'
+ assert {key:IniFile(target/'OptiScaler.ini').get('FrameGen',key) for key in framegen}==framegen
+ modern=await service.set_fsr4_build(str(target),'4.1.2-lite-exact-20261105');assert modern['ok'],modern
  reapplied=await service.apply_auto_settings(str(target),str(game),'Phantom Blade Zero')
  assert reapplied['ok'],reapplied
  assert IniFile(target/'OptiScaler.ini').get('FrameGen','FGInput')=='nofg'
@@ -77,7 +90,7 @@ async def verify():
  assert not (target/restorepoint.RESTORE_DIR).exists()
  assert service.settings.snapshot_game(str(game))=={'target':None,'auto':None,'experiment':None}
  print(json.dumps({'ok':True,'runtime':constants.OPTISCALER_VERSION,'inventory_files':len(provenance['files']),
-  'community':'4.1.1b archive and DLL hash verified','lifecycle':'install/experiment/reapply/stock restore/rollback/Remove',
+  'community':'4.1.2 Lite Exact + legacy 4.1.1b archive and DLL hashes verified','lifecycle':'install/experiment/reapply/stock restore/rollback/Remove',
   'network':'not used','real_game_gpu':'not tested'}))
 asyncio.run(verify())
 '''

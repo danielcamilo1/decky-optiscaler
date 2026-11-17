@@ -15,6 +15,7 @@ import { createRoot } from "react-dom/client";
 import { act } from "react";
 import { fixtures, invocations } from "@decky/api";
 import { GENERATED_OPTIONS } from "../src/config/generatedSchema";
+import { Fsr4Panel } from "../src/components/Fsr4Panel";
 import { BasicPanel } from "../src/components/BasicPanel";
 import { ConfigTab } from "../src/components/ConfigTab";
 import { LiveOutcome } from "../src/components/LiveOutcome";
@@ -277,11 +278,11 @@ Object.assign(fixtures, {
   find_running_game: () => ({ found: true, appid: "1091500", detail }),
   get_auto_plan: { recommendation: { matched: false }, plan: { available: false } },
   get_pref: { key: "auto", value: null },
-  set_fsr4_build: () => {
+  set_fsr4_build: (_dir: string, build: string) => {
     if (fsr4SetupFails) return { ok: false, error: "Close the game before changing the FSR 4 build." };
-    installedFsr4Build = "4.1.1b";
+    installedFsr4Build = build;
     setIni({ Upscalers: { Dx12Upscaler: "fsr31" },
-      FSR: { Fsr4ForceEnableInt8: "1", Fsr4Update: "auto", UpscalerIndex: "0" } });
+      FSR: { Fsr4ForceEnableInt8: "1", Fsr4Update: build === "4.1.1b" ? "auto" : "true", UpscalerIndex: "0" } });
     return { ok: true };
   },
   read_config: () => ({
@@ -2093,6 +2094,60 @@ const tile = (host: Element, label: string) => {
   lateHost.remove();
   detail.gpu = DECK_GPU;
   FFX_VERSIONS.splice(0, FFX_VERSIONS.length, ...DEFAULT_FFX_VERSIONS);
+
+  console.log("--- community Lite targets RDNA2 APUs and labels legacy installs ---");
+  for (const [gpu, expected] of [
+    [DECK_GPU, 1],
+    [{ name: "Radeon RX 6800", vendor: "amd", generation: "RDNA2", fsr4: "experimental" }, 0],
+    [{ name: "Intel Arc", vendor: "intel", generation: null, fsr4: "unsupported" }, 0],
+    [undefined, 0],
+  ] as const) {
+    const host = document.createElement("div"); document.body.appendChild(host);
+    const probe = createRoot(host);
+    await act(async () => probe.render(<BasicPanel values={{ Upscalers: { Dx12Upscaler: "auto" } }}
+      gpu={gpu as any} fsr4Build="bundled" onApply={() => {}} />));
+    check(`community Lite recommendation for ${gpu?.name ?? "unknown GPU"}`,
+      all(host, '[data-opt-value="fsr4-int8"]').length, expected);
+    await act(async () => probe.unmount()); host.remove();
+  }
+  const legacyHost = document.createElement("div"); document.body.appendChild(legacyHost);
+  const legacyRoot = createRoot(legacyHost);
+  const legacyValues = { Upscalers: { Dx12Upscaler: "fsr31" },
+    FSR: { Fsr4ForceEnableInt8: "1", Fsr4Update: "auto", UpscalerIndex: "0" } };
+  await act(async () => legacyRoot.render(<BasicPanel values={legacyValues}
+    gpu={DECK_GPU as any} fsr4Build="4.1.1b" onApply={() => {}} />));
+  check("4.1.1b is not labeled as the new Lite preset", selected(legacyHost, "Override upscaler with"), "manual-int8");
+  check("the older installed build is named", legacyHost.textContent?.includes("FSR 4.1.1b (legacy)"), true);
+  await act(async () => legacyRoot.render(<BasicPanel values={legacyValues}
+    fsr4Build="4.1.2-lite-exact-20261105" onApply={() => {}} />));
+  check("new DLL without the complete preset stays manual", selected(legacyHost, "Override upscaler with"), "manual-int8");
+  const liteValues = { ...legacyValues, FSR: { ...legacyValues.FSR, Fsr4Update: "true" } };
+  await act(async () => legacyRoot.render(<BasicPanel values={liteValues}
+    fsr4Build="4.1.2-lite-exact-20261105" onApply={() => {}} />));
+  check("an installed Lite build remains visible while hardware is unknown", selected(legacyHost, "Override upscaler with"), "fsr4-int8");
+  await act(async () => legacyRoot.unmount()); legacyHost.remove();
+
+  console.log("--- the installed Lite build offers direct legacy recovery ---");
+  const priorInfo = fixtures.get_fsr4_info; const priorVerify = fixtures.verify_install;
+  installedFsr4Build = "4.1.2-lite-exact-20261105";
+  fixtures.get_fsr4_info = () => ({ status: { build: { known: true,
+    id: installedFsr4Build, label: installedFsr4Build } } });
+  fixtures.verify_install = { ok: true, complete: true, problems: [],
+    ffx_upscaler: { present: true, version: "4.1.1.2740", fsr4_capable: true } };
+  const fallbackHost = document.createElement("div"); document.body.appendChild(fallbackHost);
+  const fallbackRoot = createRoot(fallbackHost); let protectedChanges = 0;
+  await act(async () => fallbackRoot.render(<Fsr4Panel targetDir="/games/lite-fallback" sources={[]}
+    gpu={DECK_GPU as any} onBeforeMutation={async () => { protectedChanges++; }} onChanged={() => {}} />));
+  await settle(100);
+  check("community build explains restoring the DLL before official settings", fallbackHost.textContent?.includes("Selecting a settings preset alone does not restore this DLL"), true);
+  const legacyButton = all(fallbackHost, '[data-mock="ButtonItem"]').find((node) => node.textContent?.includes("Use legacy 4.1.1b"));
+  check("new community build exposes the legacy fallback", Boolean(legacyButton), true);
+  await act(async () => (legacyButton as HTMLElement).click());
+  await settle(100);
+  check("legacy fallback preserves the install before writing", protectedChanges, 1);
+  check("legacy fallback selects the actual old component", installedFsr4Build, "4.1.1b");
+  await act(async () => fallbackRoot.unmount()); fallbackHost.remove();
+  fixtures.get_fsr4_info = priorInfo; fixtures.verify_install = priorVerify;
 
   const real = errors.filter((e) => !e.includes("not wrapped in act"));
   console.log(`\nreal React errors: ${real.length}`);

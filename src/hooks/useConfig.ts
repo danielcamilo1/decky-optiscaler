@@ -11,6 +11,7 @@ import type { PendingLiveChange } from "../config/liveRecord";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { readConfig, setFsr4Build, writeConfig } from "../api";
 import { AUTO } from "../config/values";
+import { STEAM_DECK_FSR4_BUILD_ID } from "../config/basic";
 import { optionsInSection } from "../config/tabs";
 import {
   confirmedLiveKeys,
@@ -831,8 +832,8 @@ export function useConfig(
       if (!gameContext?.gamePath) throw new Error("Open Setup to preserve this game before changing its FSR build.");
       const preserved = await preserveExistingInstall(targetDir, gameContext.gamePath, gameContext.appid);
       if (!preserved.ok) throw new Error(preserved.error ?? "Could not preserve the previous install.");
-      const result = await serializeTargetWrite(targetDir, () => setFsr4Build(targetDir, "4.1.1b"));
-      if (!result.ok) throw new Error(result.error ?? "Could not enable FSR 4.1.1b");
+      const result = await serializeTargetWrite(targetDir, () => setFsr4Build(targetDir, STEAM_DECK_FSR4_BUILD_ID));
+      if (!result.ok) throw new Error(result.error ?? "Could not enable community FSR 4.1.2 Lite");
       forgetWrites(targetDir);
       await readTarget(targetDir, identity, generationAtRender, true);
       clearTargetLiveActions(targetDir);

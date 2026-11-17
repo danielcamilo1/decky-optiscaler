@@ -85,6 +85,8 @@ function upscalerPreset(
   };
 }
 
+export const STEAM_DECK_FSR4_BUILD_ID = "4.1.2-lite-exact-20261105";
+
 export const UPSCALER_PRESETS: Preset[] = [
   {
     id: "auto",
@@ -104,18 +106,15 @@ export const UPSCALER_PRESETS: Preset[] = [
     // installer._replace_fsr4 owns the atomic DLL/settings write. This list
     // documents the preset for matching/validation; onEnableFsr4 applies it.
     id: "fsr4-int8",
-    label: "FSR 4.1.1b — Steam Deck",
-    description: "Downloads the community RDNA2 ghosting fix and enables INT8 upscaling. Close the game first.",
+    label: "FSR 4.1.2 Lite — community",
+    description: "Experimental Lite Exact build for Steam Deck / RDNA2 APUs. Keeps frame generation unchanged. Close the game first.",
     changes: [
       change("Upscalers", "Dx12Upscaler", "fsr31"),
       change("Upscalers", "Dx11Upscaler", "fsr31_12"),
       change("Upscalers", "VulkanUpscaler", "fsr31_12"),
-      // Fsr4Update is left alone rather than turned on: v0.9.4's release notes
-      // and the maintainer both say not to set it on a GPU AMD does not
-      // officially support, because the upgrade path forces FP8 and OptiScaler
-      // answers with its internal FSR 3 fallback. The INT8 override is the
-      // route that keeps FSR 4 on an RDNA 2 part, and it is what this preset is.
-      change("FSR", "Fsr4Update", AUTO),
+      // This DLL carries Lite in the old generic INT8 provider slot, not
+      // the SDK 2.4 Lite provider slot. Its pinned build therefore needs 1.
+      change("FSR", "Fsr4Update", "true"),
       change("FSR", "Fsr4ForceEnableInt8", "1"),
       change("FSR", "UpscalerIndex", "0"),
       change("FSR", "Fsr4Preset", AUTO),
@@ -123,7 +122,7 @@ export const UPSCALER_PRESETS: Preset[] = [
     matches: (values) =>
       get(values, "Upscalers", "Dx12Upscaler") === "fsr31" &&
       get(values, "FSR", "Fsr4ForceEnableInt8") === "1" &&
-      get(values, "FSR", "Fsr4Update") !== "true" &&
+      get(values, "FSR", "Fsr4Update") === "true" &&
       get(values, "FSR", "UpscalerIndex") === "0",
   },
   upscalerPreset(
@@ -304,6 +303,14 @@ export function supportsOfficialInt8(ffx?: { version?: string | null } | null): 
   return parts.length === 3 && parts.every(Number.isFinite) &&
     (parts[0] > 4 || (parts[0] === 4 &&
       (parts[1] > 1 || (parts[1] === 1 && parts[2] >= 2))));
+}
+
+/** The archive is tuned for RDNA2 integrated GPUs, rather than all RDNA2 cards. */
+export function isRdna2Apu(gpu: GpuInfo | null | undefined): boolean {
+  return gpu?.vendor === "amd" && gpu.generation === "RDNA2" &&
+    /steam\s*deck|van\s*gogh|jupiter|galileo|rembrandt|\b(?:680m|660m|610m)\b/i.test(
+      [gpu.name, ...(gpu.names ?? [])].filter(Boolean).join(" ")
+    );
 }
 
 /**

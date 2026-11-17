@@ -1,9 +1,10 @@
 import { ButtonItem, PanelSection, PanelSectionRow } from "@decky/ui";
 import { toaster } from "@decky/api";
 import { useCallback, useEffect, useState } from "react";
-import { getFsr4Info, restoreFsr4Build, importFsr4Files, verifyInstall } from "../api";
+import { getFsr4Info, restoreFsr4Build, setFsr4Build, importFsr4Files, verifyInstall } from "../api";
 import type { Fsr4Build, Fsr4Source, GpuInfo, VerifyResult } from "../types";
 import { KeyValue, Mono, Notice, Pill } from "./Common";
+import { STEAM_DECK_FSR4_BUILD_ID } from "../config/basic";
 
 interface Props {
   targetDir: string;
@@ -17,7 +18,7 @@ interface Props {
 const GPU_NOTE: Record<string, string> = {
   native: "This GPU runs FSR 4 natively.",
   int8: "This GPU can run FSR 4 through the INT8 model.",
-  experimental: "Official 4.1.2 includes APU INT8 models. The community 4.1.1b preset remains an optional alternative.",
+  experimental: "Official 4.1.2 includes RDNA2 and selected APU models. Confirm the active model in game.",
   unsupported:
     "Official FSR 4.1.2 supports selected AMD GPUs and APUs. Other devices may require a forced model; verify the in-game watermark.",
   unknown: "Could not identify this GPU from sysfs.",
@@ -93,12 +94,31 @@ export function Fsr4Panel({
         </div>
       </PanelSectionRow>
 
-      {ffx?.fsr4_capable ? (
+      {build?.id === STEAM_DECK_FSR4_BUILD_ID ? (
+        <PanelSectionRow>
+          <Notice tone="info" title="Community Lite (experimental)">
+            The model is 4.1.2 Lite; this modified DLL keeps a 4.1.1 resource version.
+            Confirm the 4.1.2l-exact provider in OptiScaler's overlay. Official and legacy
+            fallbacks are available below.
+          </Notice>
+        </PanelSectionRow>
+      ) : null}
+
+      {ffx?.fsr4_capable && build?.id === "bundled" ? (
         <PanelSectionRow>
           <Notice tone="success" title="FSR 4 is present">
             Official FSR 4.1.2 is bundled. Select <b>FSR 3.X/4</b> in Basic settings
             to use the installed library, then verify the active model with the in-game watermark.
-            The community 4.1.1b preset replaces this DLL only when selected.
+            The community Lite preset replaces this DLL only when selected.
+          </Notice>
+        </PanelSectionRow>
+      ) : null}
+
+      {ffx?.fsr4_capable && build?.known && build.id !== "bundled" ? (
+        <PanelSectionRow>
+          <Notice tone="info" title="Return to official FSR 4.1.2">
+            Close the game, choose Restore bundled upscaler below, then select FSR 3.X/4
+            in Basic settings. Selecting a settings preset alone does not restore this DLL.
           </Notice>
         </PanelSectionRow>
       ) : null}
@@ -137,6 +157,26 @@ export function Fsr4Panel({
               } finally { setBusy(false); }
             }}>
             Restore bundled upscaler
+          </ButtonItem>
+        </PanelSectionRow>
+      ) : null}
+      {build?.id === STEAM_DECK_FSR4_BUILD_ID ? (
+        <PanelSectionRow>
+          <ButtonItem layout="below" disabled={Boolean(busy || readOnly)}
+            description="Compatibility fallback. Close the game first; keeps frame generation settings."
+            onClick={async () => {
+              setBusy(true);
+              try {
+                await onBeforeMutation?.();
+                const result = await setFsr4Build(targetDir, "4.1.1b");
+                if (!result.ok) throw new Error(result.error);
+                await onChanged();
+                await verify();
+              } catch (error) {
+                toaster.toast({ title: "Could not restore legacy upscaler", body: String(error) });
+              } finally { setBusy(false); }
+            }}>
+            Use legacy 4.1.1b
           </ButtonItem>
         </PanelSectionRow>
       ) : null}

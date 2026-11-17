@@ -118,6 +118,32 @@ class BuildFetchTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'did not contain'):
                 fsr4build.fetch(self.build, self.root)
 
+    def test_exact_variant_is_selected_when_archive_has_multiple_same_name_dlls(self):
+        self.build['archive_path'] = '4.1.2l-exact/' + self.build['file']
+        def extract(archive, target, logger=None):
+            for directory, data in [('lossy', b'wrong lossy DLL'), ('exact', b'wrong full model'),
+                                    ('4.1.2l-exact', self.dll_bytes)]:
+                folder = target / directory
+                folder.mkdir(parents=True, exist_ok=True)
+                (folder / self.build['file']).write_bytes(data)
+        with patch.object(fsr4build.wiki, 'download', side_effect=self.download), \
+                patch.object(fsr4build.payload, 'extract_archive', side_effect=extract):
+            selected = fsr4build.fetch(self.build, self.root)
+        self.assertEqual(selected.read_bytes(), self.dll_bytes)
+
+    def test_missing_exact_variant_never_falls_back_to_another_same_name_dll(self):
+        self.build['archive_path'] = '4.1.2l-exact/' + self.build['file']
+        def extract(archive, target, logger=None):
+            folder = target / 'lossy'
+            folder.mkdir(parents=True, exist_ok=True)
+            # Even matching bytes under another path do not satisfy this pin.
+            (folder / self.build['file']).write_bytes(self.dll_bytes)
+        with patch.object(fsr4build.wiki, 'download', side_effect=self.download), \
+                patch.object(fsr4build.payload, 'extract_archive', side_effect=extract):
+            with self.assertRaisesRegex(RuntimeError, 'pinned'):
+                fsr4build.fetch(self.build, self.root)
+        self.assertFalse(fsr4build.cached_path(self.root, self.build).exists())
+
 
 class DeckFsr4Tests(unittest.TestCase):
     def setUp(self):
