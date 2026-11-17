@@ -7,12 +7,13 @@ The first formal 0.0.8 release bundles the complete official OptiScaler 0.9.5 pa
 ### Added
 
 - Official FFX SDK 2.4 and FSR 4.1.2, with official support for RDNA2 and some APUs.
+- Add **FSR 4.1.2 Lite — community**, an explicitly selected experimental preset for recognized Steam Deck / RDNA2 APU devices. The plugin installs only the pinned `4.1.2l-exact` variant.
 - Automatic upgrades for recognized managed 0.9.4 and 0.9.5-pre5 installs, preserving the INI, installed components, launch options and a restore snapshot.
 - A live-control bridge calibrated against the 0.9.5 core and PDB, retaining all 14 live controls.
 
 ### Changed
 
-- Keep **FSR 4.1.1b — Steam Deck** as an explicit optional community preset. Existing selections are preserved during upgrades and are not silently changed to the official upscaler.
+- Keep the official **FSR 3.X/4** preset on OptiScaler's automatic model path. Existing 4.1.1b installs remain identified as legacy and are not silently replaced; **Use legacy 4.1.1b** remains available as an explicit fallback from Installed Files after trying the new build. Both community switches preserve frame-generation settings.
 - Require checking the FSR4 watermark to confirm the active model. Existing Steam Deck evidence is from the pre5 build and does not verify the final package on-device.
 
 [0.0.8]: https://github.com/zesming/decky-optiscaler/releases/tag/v0.0.8

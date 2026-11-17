@@ -85,7 +85,8 @@ def main():
     from optiscaler.constants import (PAYLOAD_ARCHIVE, PAYLOAD_SHA256, FSR4_BUILDS,
                                       LIVE_CONTROL_SUPPORTED, OPTIPATCHER_SHA256)
     from optiscaler.payload import sha256
-    required = {PAYLOAD_ARCHIVE, "OptiPatcher.asi", FSR4_BUILDS[0]["sources"][0]["asset"]}
+    required = {PAYLOAD_ARCHIVE, "OptiPatcher.asi",
+                *(build["sources"][0]["asset"] for build in FSR4_BUILDS)}
     if LIVE_CONTROL_SUPPORTED:
         required.add("decky_optiscaler_live.asi")
     actual = {p.name for p in (ROOT / "bin").iterdir() if p.is_file() and p.name != ".DS_Store"}
@@ -97,9 +98,10 @@ def main():
         sys.exit("OptiPatcher does not match the pinned checksum.")
     if sha256(ROOT / "bin" / PAYLOAD_ARCHIVE) != PAYLOAD_SHA256:
         sys.exit("Runtime archive does not match the pinned checksum.")
-    community = FSR4_BUILDS[0]["sources"][0]
-    if sha256(ROOT / "bin" / community["asset"]) != community["archive_sha256"]:
-        sys.exit("Community archive does not match the pinned checksum.")
+    for build in FSR4_BUILDS:
+        community = build["sources"][0]
+        if sha256(ROOT / "bin" / community["asset"]) != community["archive_sha256"]:
+            sys.exit(f"Community archive does not match the pinned checksum: {community['asset']}")
     if LIVE_CONTROL_SUPPORTED:
         from live_metadata import current
         expected = json.loads((ROOT / "defaults/live-build.json").read_text())
@@ -136,7 +138,7 @@ def main():
     print(f"  {len(entries)} files, {total / 1e6:.1f} MB uncompressed -> {size / 1e6:.1f} MB zip")
 
     # The bundled release dominates the size; call it out so it is not a surprise.
-    payload = next((r for _, r in entries if r.parts[0] == "bin"), None)
+    payload = next((r for _, r in entries if r == Path("bin") / PAYLOAD_ARCHIVE), None)
     if payload:
         print(f"  includes {payload} (OptiScaler release)")
     return archive

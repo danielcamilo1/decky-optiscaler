@@ -1758,7 +1758,7 @@ def runtime_current(target_dir):
     return digest.hexdigest() == expected
 
 
-def _replace_fsr4(target, source, recorded, enable_int8=False):
+def _replace_fsr4(target, source, recorded, enable_int8=False, fsr4_update="auto"):
     target = Path(target).resolve()
     recover_target_transactions(target)
     require_stopped_install(target)
@@ -1781,7 +1781,7 @@ def _replace_fsr4(target, source, recorded, enable_int8=False):
                 changes = {
                     "Upscalers": {"Dx12Upscaler": "fsr31", "Dx11Upscaler": "fsr31_12",
                                   "VulkanUpscaler": "fsr31_12"},
-                    "FSR": {"Fsr4Update": "auto", "Fsr4ForceEnableInt8": "1",
+                    "FSR": {"Fsr4Update": fsr4_update, "Fsr4ForceEnableInt8": "1",
                             "UpscalerIndex": "0", "Fsr4Preset": "auto"},
                 }
                 for section, values in changes.items():
@@ -1803,7 +1803,7 @@ def install_fsr4_build(target_dir, dll_path, build, logger=None, enable_int8=Fal
     recorded = {"id": build["id"], "label": build["label"],
                 "file": FFX_UPSCALER_DLL, "sha256": build["file_sha256"],
                 "reaches_fsr4_by": build["reaches_fsr4_by"]}
-    _replace_fsr4(target_dir, dll_path, recorded, enable_int8)
+    _replace_fsr4(target_dir, dll_path, recorded, enable_int8, build.get("fsr4_update", "auto"))
     return {"path": str(target_dir), "file": FFX_UPSCALER_DLL, "build": recorded}
 
 

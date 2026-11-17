@@ -633,7 +633,7 @@ async function render(name: string, element: React.ReactElement) {
   // The Deck's own row: FSR 4 here is the INT8 override, so the panel has to
   // offer it rather than hide the upscaler entirely. What choosing it does is
   // asserted in live-fields.tsx, which can drive the control.
-  console.log(`  RDNA 2 is offered the INT8 preset: ${gd.host.textContent!.includes("FSR 4.1.1b — Steam Deck")}`);
+  console.log(`  RDNA 2 is offered the INT8 preset: ${gd.host.textContent!.includes("FSR 4.1.2 Lite — community")}`);
   // Driving the running game is the Quick Access panel's job; this page is for
   // setting a game up, so it must not offer the live switch at all.
   console.log(`  settings tab has no live upscaler switch: ${!gd.host.textContent!.includes("Switch now")}`);
@@ -771,7 +771,7 @@ async function render(name: string, element: React.ReactElement) {
   // version the released SDK reports.
   console.log(`  the FSR 4 build in the folder is named: ${
     manualText.includes("Bundled (FidelityFX SDK 4.1.1)")}`);
-  console.log(`  Setup directs users to the combined Deck preset: ${manualText.includes("FSR 4.1.1b — Steam Deck")}`);
+  console.log(`  Setup directs users to the combined Deck preset: ${manualText.includes("FSR 4.1.2 Lite — community")}`);
   console.log(`  older community builds are not offered: ${!manualText.includes("Use 4.0.2")}`);
   console.log(`  the launch options are spelled out there: ${
     manualText.includes("WINEDLLOVERRIDES")}`);

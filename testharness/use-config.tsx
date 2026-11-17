@@ -324,6 +324,7 @@ async function run() {
     const snapshot = calls.find((call) => call.name === "create_restore_point");
     const buildCall = calls.find((call) => call.name === "set_fsr4_build");
     assert.ok(snapshot && buildCall && calls.indexOf(snapshot) < calls.indexOf(buildCall), "Basic FSR4 must snapshot before replacing files");
+    assert.equal(buildCall.args[1], "4.1.2-lite-exact-20261105", "Basic selects the pinned latest community build");
     assert.equal(snapshot.args[2], launchOptions, "the snapshot must receive Steam's current launch string");
     assert.deepEqual(getTargetLiveRecord(dir8).restartKeys, [], "a stopped-game FSR change leaves no restart warning");
     assert.equal(getTargetLiveRecord(dir8).live, null, "a stopped-game FSR change clears its old live receipt");

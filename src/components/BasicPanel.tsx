@@ -31,6 +31,8 @@ import {
   runningBackend,
   supportsInt8Override,
   supportsOfficialInt8,
+  isRdna2Apu,
+  STEAM_DECK_FSR4_BUILD_ID,
   supportsMultiplier,
   usesFfxFrameGen,
   usesFfxUpscaler,
@@ -389,7 +391,10 @@ export function BasicPanel({
   // in it is the other way round: the upgrade path is what reaches FSR 4, and
   // the INT8 preset is the one that does nothing.
   const fsr4Selected = upscalerPreset?.id === "fsr4";
-  const int8Selected = upscalerPreset?.id === "fsr4-int8";
+  const int8Selected = values.Upscalers?.Dx12Upscaler?.toLowerCase() === "fsr31" &&
+    values.FSR?.Fsr4ForceEnableInt8 === "1" && values.FSR?.UpscalerIndex === "0";
+  const int8PresetMatches = upscalerPreset?.id === "fsr4-int8" &&
+    fsr4Build === STEAM_DECK_FSR4_BUILD_ID;
   const int8Route = needsForcedInt8(gpu) && !supportsOfficialInt8(ffx) &&
     (fsr4Build === "4.1.1b" || supportsInt8Override(ffx));
   const liveReady = currentLiveContext(reportedLive, bindingTarget) !== null;
@@ -410,7 +415,7 @@ export function BasicPanel({
         upscalerPreset?.id === "dlss" ||
         !gpu?.vendor ||
         gpu.vendor === "nvidia") &&
-      (preset.id !== "fsr4-int8" || needsForcedInt8(gpu) || int8Selected)
+      (preset.id !== "fsr4-int8" || isRdna2Apu(gpu) || fsr4Build === STEAM_DECK_FSR4_BUILD_ID)
   );
 
   const needsInt8 = fsr4Selected && int8Route;
@@ -474,7 +479,7 @@ export function BasicPanel({
           context: choice.context,
         })),
       }
-    : ffxVersionOptions(undefined, ffxUpsOption, ffxVersionName(ffx));
+    : ffxVersionOptions(undefined, ffxUpsOption, fsr4Build === STEAM_DECK_FSR4_BUILD_ID ? "4.1.2 Lite Exact (community)" : ffxVersionName(ffx));
   const ffxUpsSelected = ffxUpsOption ? effectiveValue(values, ffxUpsOption) : "0";
   const ffxUpsFixed = ffxUpsChoices.options.length < 2;
 
@@ -944,7 +949,9 @@ export function BasicPanel({
           <ValueDropdown
             label="Override upscaler with"
             description={hint(
-              upscalerPreset?.description ?? "Replaces whichever upscaler the game asks for."
+              int8Selected && !int8PresetMatches
+                ? "Existing INT8 configuration. Use Installed Files to review or restore this game's upscaler."
+                : upscalerPreset?.description ?? "Replaces whichever upscaler the game asks for."
             )}
             disabled={busy}
             bottomSeparator="standard"
@@ -958,13 +965,13 @@ export function BasicPanel({
             selected={
               switchSelectionNeedsRefresh && picked && !int8RestartOnly
                 ? `stale:${picked}`
-                : int8Selected && fsr4Build !== "4.1.1b"
+                : int8Selected && !int8PresetMatches
                   ? "manual-int8"
                   : upscalerPreset?.id ?? rawUpscaler
             }
             describe={(code) => code.startsWith("stale:")
               ? `Previous choice: ${UPSCALER_PRESETS.find((preset) => preset.id === code.slice(6))?.label ?? code.slice(6)} (refresh and choose again)`
-              : code === "manual-int8" ? "FSR 4 INT8 (manual)" : curatedLabel("Upscalers.Dx12Upscaler", code) ?? code}
+              : code === "manual-int8" ? (fsr4Build === "4.1.1b" ? "FSR 4.1.1b (legacy)" : "FSR 4 INT8 (manual)") : curatedLabel("Upscalers.Dx12Upscaler", code) ?? code}
             onPick={(id) => {
               const preset = UPSCALER_PRESETS.find((p) => p.id === id);
               if (!preset) return;
@@ -1208,21 +1215,21 @@ export function BasicPanel({
 
         {installingFsr4 || fsr4Error ? (
           <PanelSectionRow>
-            <Notice tone={fsr4Error ? "error" : "info"} title={fsr4Error ? "FSR 4 setup failed" : "Setting up FSR 4.1.1b…"}>
+            <Notice tone={fsr4Error ? "error" : "info"} title={fsr4Error ? "FSR 4 setup failed" : "Setting up community FSR 4.1.2 Lite…"}>
               {fsr4Error ?? "Downloading and enabling the Steam Deck upscaler."}
             </Notice>
           </PanelSectionRow>
         ) : null}
-        {int8Selected && fsr4Build !== "4.1.1b" ? (
+        {int8Selected && !int8PresetMatches ? (
           <PanelSectionRow>
             <Notice tone="info" title="Manual INT8 settings">
-              Select FSR 4.1.1b — Steam Deck to install the RDNA2 ghosting fix.
+              The current file or settings do not match the complete community Lite preset. Review the installed upscaler; to use the official path, restore the bundled DLL first.
             </Notice>
           </PanelSectionRow>
         ) : needsInt8 || ffxUpsNeedsInt8 ? (
           <PanelSectionRow>
             <Notice tone="info" title="FSR 4 on Steam Deck">
-              Select FSR 4.1.1b — Steam Deck to install the RDNA2 build and enable INT8.
+              Official 4.1.2 is bundled. Restore the bundled upscaler and select FSR 3.X/4; recognized RDNA2 APUs can also try the experimental community Lite preset.
             </Notice>
           </PanelSectionRow>
         ) : fsr4Selected && !compact ? (

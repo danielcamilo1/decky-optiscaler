@@ -222,7 +222,26 @@ FSR4_BUNDLED_FILE_SHA256 = (
     "aad4fccccb29084a655f9a4f9f613bd22c8c03fb4a0f8840148cc6543b4ccace"
 )
 FSR4_BUNDLED_FILE_BYTES = 57664272
+FSR4_STEAM_DECK_BUILD_ID = "4.1.2-lite-exact-20261105"
 FSR4_BUILDS = [
+    {
+        "id": FSR4_STEAM_DECK_BUILD_ID,
+        "label": "4.1.2 Lite Exact (community, RDNA2 APU)",
+        "note": "Experimental community Lite model; PE resource remains 4.1.1. "
+                "Not a measured improvement over 4.1.1b on this device.",
+        "sources": [{
+            "repo": "zgauthier2000/fsr4-shader-performance-overrides",
+            "tag": "dll-2026-11-05",
+            "asset": "fsr4.1.2-igpu-cyboman-rdna2-2026-11-05.7z",
+            "archive_sha256": "da7c7681bffe7ac60a01e859d5b107900d963557793ef67ddcfd03a832e1c03f",
+        }],
+        "archive_path": "4.1.2l-exact/amd_fidelityfx_upscaler_dx12.dll",
+        "fsr4_update": "true",
+        "file": "amd_fidelityfx_upscaler_dx12.dll",
+        "file_sha256": "f991d06a8b800ed3e01b95696333c842c3de590aec7d2e6b2340c4e583d84ef4",
+        "file_bytes": 39608832,
+        "reaches_fsr4_by": "int8",
+    },
     {
         "id": "4.1.1b",
         "label": "4.1.1b (INT8, RDNA 2 ghosting fix)",
