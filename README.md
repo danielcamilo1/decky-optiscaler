@@ -1,6 +1,6 @@
-# Decky OptiScaler — Phantom Blade Zero
+# Decky OptiScaler
 
-A fork of [Decky OptiScaler](https://github.com/danielcamilo1/decky-optiscaler) for **Phantom Blade Zero + FSR 4 on Steam Deck**. It manages per-game files, configuration, launch options and restoration from Decky Loader. It is independent of the OptiScaler project.
+A [Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader) plugin for installing, configuring and monitoring OptiScaler per game from Steam Deck Game Mode. It manages per-game files, configuration, launch options and restoration, with setup guidance for Phantom Blade Zero and other games. It is independent of the OptiScaler project.
 
 This package contains:
 
@@ -51,9 +51,9 @@ The native bridge uses the final 0.9.5 source references and PDB-backed profile.
 
 ## Credits
 
-- [Original Decky plugin](https://github.com/danielcamilo1/decky-optiscaler) by its original authors.
+- Decky OptiScaler authors and contributors.
 - [OptiScaler](https://github.com/optiscaler/OptiScaler) and its wiki contributors.
 - [fsr4xyz](https://github.com/the3rdparty1917/fsr4xyz) community RDNA2 fix.
 - [Decky Framegen](https://github.com/xXJSONDeruloXx/Decky-Framegen) and [Decky LSFG-VK](https://github.com/xXJSONDeruloXx/decky-lsfg-vk) for the upstream deployment/UI references.
 
-This fork's changes were developed with Codex. Automated synthetic validation is reported separately from physical device testing.
+These changes were developed with Codex. Automated synthetic validation is reported separately from physical device testing.

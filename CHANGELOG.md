@@ -15,7 +15,7 @@ The first formal 0.0.8 release bundles the complete official OptiScaler 0.9.5 pa
 - Keep **FSR 4.1.1b — Steam Deck** as an explicit optional community preset. Existing selections are preserved during upgrades and are not silently changed to the official upscaler.
 - Require checking the FSR4 watermark to confirm the active model. Existing Steam Deck evidence is from the pre5 build and does not verify the final package on-device.
 
-[0.0.8]: https://github.com/zesming/decky-optiscaler/releases/tag/v0.0.8
+[0.0.8]: https://github.com/danielcamilo1/decky-optiscaler/releases/tag/v0.0.8
 
 ## 0.0.8-pbz.3 (experimental)
 
