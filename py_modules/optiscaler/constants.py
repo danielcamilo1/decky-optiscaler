@@ -1,8 +1,8 @@
 """Shared constants for the Decky OptiScaler plugin."""
 
-OPTISCALER_VERSION = "0.9.4"
-PAYLOAD_ARCHIVE = "OptiScaler-0.9.4.7z"
-PAYLOAD_SHA256 = "575cb4df866116093df75af607e37fd70e10f5163e0f23fd5c804142e80ef0ad"
+OPTISCALER_VERSION = "0.9.5"
+PAYLOAD_ARCHIVE = "Optiscaler_0.9.5-final.20261116.7z"
+PAYLOAD_SHA256 = "77e3ed76bed04e1fb32bacb5a72799ff172f3da22ed5231c0cf3e84fe6761662"
 
 INI_NAME = "OptiScaler.ini"
 LOG_NAME = "OptiScaler.log"
@@ -133,6 +133,8 @@ PAYLOAD_FILES = [
     "amd_fidelityfx_framegeneration_dx12.dll",
     "amd_fidelityfx_upscaler_dx12.dll",
     "amd_fidelityfx_vk.dll",
+    "amd_fidelityfx_upscaler_vk.dll",
+    "amd_fidelityfx_framegeneration_vk.dll",
     "dlssg_to_fsr3_amd_is_better.dll",
     "fakenvapi.dll",
     "fakenvapi.ini",
@@ -184,7 +186,7 @@ EXE_NAME_BLACKLIST = {
 }
 
 # FSR4 comes from amd_fidelityfx_upscaler_dx12.dll (the FidelityFX SDK), which
-# IS bundled in the OptiScaler release — 4.1.1 in v0.9.4. amdxcffx64.dll is the
+# IS bundled in the OptiScaler release — 4.1.2 in v0.9.5. amdxcffx64.dll is the
 # alternative, driver-provided FSR4 source; OptiScaler only falls back to it when
 # the SDK does not supply the effect. It is optional, not required.
 FSR4_SUPPORT_FILES = ["amdxcffx64.dll", "amdxc64.dll"]
@@ -217,9 +219,9 @@ FSR4_BUNDLED_BUILD_ID = "bundled"
 #: The released SDK build, identified by hash like any other. Not downloadable:
 #: it is already in bin/ and is what "reinstall" and "restore" put back.
 FSR4_BUNDLED_FILE_SHA256 = (
-    "d0dcccc74a43c44ba435b7a369b456e0970d8a4464e4bd683119b374f2c9fb46"
+    "aad4fccccb29084a655f9a4f9f613bd22c8c03fb4a0f8840148cc6543b4ccace"
 )
-FSR4_BUNDLED_FILE_BYTES = 28761864
+FSR4_BUNDLED_FILE_BYTES = 57664272
 FSR4_BUILDS = [
     {
         "id": "4.1.1b",
@@ -259,3 +261,28 @@ STEAM_ROOTS = [
     ".steam/root",
     ".var/app/com.valvesoftware.Steam/data/Steam",
 ]
+
+# Live control is built for one reviewed OptiScaler ABI. This flag describes
+# the code shipped by the plugin; whether one game can use it is determined
+# from that game's manifest, runtime, installed ASI and matching live heartbeat.
+LIVE_CONTROL_SUPPORTED = True
+LIVE_CONTROL_REASON = None
+LIVE_SCHEMA = 7
+LIVE_BUILD_ID = "decky-live-095-v1"
+LIVE_PROFILE_ID = "optiscaler-0.9.5-90d9568"
+LIVE_SOURCE_COMMIT = "90d9568d576d93ebb2d6c1c207596d21e9900651"
+LIVE_CORE_SHA256 = "e2300905b2b7e6e14c8c4b02c0c555c4582fafc92a2e36e117ce027b7e259d59"
+LIVE_PROFILE_FILE = "live-profile.json"
+LIVE_BUILD_FILE = "live-build.json"
+LIVE_OPTISCALER_VERSION = "0.9.5"
+LEGACY_LIVE_ASI_SHA256 = "ca4db054e42864a4bf754a18dc6288e7b9be888e24d119916ddedaef3c5de207"
+UPGRADE_LIVE_ASI_SHA256 = (
+    "a70d492e677cd366cfbb774f249102a0f1d2e100a0079be10ff2f3ed985dcc13",
+    "58ed07a85bd6dc23bb48082015ccbf27c53b7339d39e406e36335d1215ac9ec5",
+)
+RUNTIME_DLL_SHA256 = LIVE_CORE_SHA256
+# Core from the former pinned 0.9.4 support archive (SHA-256 575cb4df…ef0ad).
+UPGRADE_RUNTIME_HASHES = {
+    "0.9.4": "fbfb6676b829dad7e020fb830586a16aa0ec6add78016db48ef12e2ae1803231",
+    "0.9.5-pre5": "bd6fe5e7defdf7520ecd7a45eb3b5fe173d70551af5ad4a21b2837dd5d2e8a28",
+}

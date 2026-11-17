@@ -184,6 +184,10 @@ async def run():
         print("\nSchema generation")
         from optiscaler.schema_generated import OPTIONS  # noqa: E402
         by_id = {(o["section"], o["key"]): o for o in OPTIONS}
+        int8 = by_id[("FSR", "Fsr4ForceEnableInt8")]
+        check("automatic INT8 model retains its GPU-dependent default",
+              int8["default"] == "3 for AMD APUs, 0 for others"
+              and int8["options"] == ["0", "1", "2", "3"])
         multiplier = by_id[("XeFG", "InterpolationCount")]
         check("frame multiplier is a 2X/3X/4X choice, not a toggle",
               multiplier["type"] == "enum" and multiplier["options"] == ["1", "2", "3"],
@@ -215,7 +219,8 @@ async def run():
         check("backup folder created", stash.is_dir(), stash.name)
         check("game's own FidelityFX dll set aside",
               (stash / "amd_fidelityfx_upscaler_dx12.dll").is_file())
-        check("game's own Licenses folder set aside", (stash / "Licenses").is_dir())
+        check("game's own license remains available while OptiScaler is installed",
+              (target / "Licenses" / "game.txt").read_text() == "GAME LICENSE")
         check("OptiScaler's FidelityFX dll actually replaced it",
               (target / "amd_fidelityfx_upscaler_dx12.dll").read_bytes() != game_upscaler)
 
@@ -357,12 +362,20 @@ async def run():
             {"section": "FrameGen", "key": "FGOutput", "value": "NOT_A_VALUE"},
             {"section": "Sharpness", "key": "Sharpness", "value": "9.9"},
         ])
-        check("valid changes applied", len(write["applied"]) == 3, write["applied"])
+        check("a rejected batch applies nothing", not write["ok"] and write["applied"] == [])
+        check("a rejected batch leaves every original byte intact",
+              (target / "OptiScaler.ini").read_text(encoding="utf-8") == before)
         check("invalid enum rejected",
               any(r["key"] == "FGOutput" for r in write["rejected"]))
         check("out-of-range float rejected",
               any(r["key"] == "Sharpness" for r in write["rejected"]))
 
+        write = await service.write_config(str(target), [
+            {"section": "FrameGen", "key": "Enabled", "value": "true"},
+            {"section": "FrameGen", "key": "FGInput", "value": "fsrfg"},
+            {"section": "Upscalers", "key": "Dx12Upscaler", "value": "fsr31"},
+        ])
+        check("valid changes applied", write["ok"] and len(write["applied"]) == 3, write)
         after_ini = IniFile(target / "OptiScaler.ini")
         values = after_ini.to_dict()
         check("values persisted",
@@ -560,402 +573,44 @@ async def run():
         shutil.rmtree(root, ignore_errors=True)
 
 
-def _accepts(field, value):
-    try:
-        field.encode(value)
-        return True
-    except (TypeError, ValueError):
-        return False
-
-
-def check_live_control():
-    """The live-control channel: field mapping, wire format, install/removal.
-
-    The mapping check matters most -- the ASI writes into OptiScaler's memory at
-    offsets derived from the member names listed here, so a name that no longer
-    exists in the generated mirror would be a silent no-op at best.
-    """
-    import json
-    import re
-    from optiscaler import live
-
-    print("\nLive in-game control")
-
-    mirror = ROOT / "asi" / "generated" / "config_mirror.h"
-    check("generated config mirror exists", mirror.is_file())
-    known = set(re.findall(r"^    X\((\w+),", mirror.read_text(), re.M)) if mirror.is_file() else set()
-    missing = sorted(f.member for f in live.LIVE_FIELDS.values() if f.member not in known)
-    check("every live field exists in the generated mirror", not missing, missing)
-
-    ini_map = json.loads((ROOT / "py_modules" / "optiscaler" / "live_fields.json").read_text())["fields"]
-    mismatched = sorted(
-        key for key, field in live.LIVE_FIELDS.items()
-        if ini_map.get(key, {}).get("member") != field.member
-    )
-    check("every live field maps to the ini key OptiScaler reads it from",
-          not mismatched, mismatched)
-
-    # 0.9.4 keeps the upscaler ids as plain strings in Config and State, so they
-    # go over the wire verbatim -- but only ids OptiScaler actually knows.
-    check("upscaler ids are passed through unchanged",
-          live.LIVE_FIELDS["Upscalers.Dx12Upscaler"].encode("fsr31") == "fsr31")
-    check("the dx11-on-12 id is a distinct backend",
-          live.LIVE_FIELDS["Upscalers.Dx11Upscaler"].encode("fsr31_12") == "fsr31_12")
-    check("an id OptiScaler does not know is refused",
-          not _accepts(live.LIVE_FIELDS["Upscalers.Dx12Upscaler"], "ffx"))
-
-    root = Path(tempfile.mkdtemp(prefix="optiscaler-live-"))
-    try:
-        target = root / "game"
-        target.mkdir()
-        state = live.status(str(target))
-        check("no live channel before install", not state["attached"] and state["state"] == "absent")
-
-        fake_asi = root / "fake.asi"
-        fake_asi.write_bytes(b"MZ fake")
-        check("asi installs into the plugins folder",
-              live.install_asi(str(target), fake_asi)["ok"]
-              and (target / "plugins" / live.ASI_NAME).is_file())
-
-        result = live.apply_changes(str(target), [
-            {"section": "FrameGen", "key": "Enabled", "value": "true"},
-            {"section": "Upscalers", "key": "Dx12Upscaler", "value": "fsr31"},
-            {"section": "Hotfix", "key": "DisableOverlays", "value": "true"},
-        ])
-        body = (target / live.CMD_FILE).read_text()
-        check("live-settable keys are sent", result["applied"] == ["FGEnabled"],
-              result["applied"])
-        check("restart-only keys are reported as deferred",
-              result["deferred"] == ["Hotfix.DisableOverlays"], result["deferred"])
-        # The overlay's own upscaler switch is two writes: the id into
-        # State::newBackend, then every backend marked changed. Writing Config
-        # alone would change nothing until the next launch.
-        check("an upscaler change asks for the live backend switch",
-              "backend fsr31" in body and result["backend_change"]
-              and result["backend"] == "fsr31", body)
-        check("command file is the documented wire format",
-              body.splitlines()[1:3] == ["backend fsr31", "set FGEnabled bool 1"],
-              body.splitlines())
-        # The overlay's "Change Upscaler" writes State::newBackend and leaves
-        # Config alone until OptiScaler has rebuilt the feature; it also refuses
-        # to act when newBackend already equals the Config value. Pushing the
-        # new id into Config first is therefore how a switch turns into a no-op,
-        # which is exactly what "frame generation moves, the upscaler does not"
-        # looked like. The ini still records the choice for the next launch.
-        check("the config upscaler is not written alongside the switch",
-              "set Dx12Upscaler" not in body, body)
-
-        # The FFX frame generator goes over its own verb, because the ASI has
-        # to write Config *and* raise two State flags; a plain field write
-        # would leave the new index sitting in Config doing nothing until the
-        # next launch. This is the one live setting where Config is the target.
-        fg = live.apply_changes(str(target), [
-            {"section": live.FFX_FG_SECTION, "key": live.FFX_FG_KEY, "value": "1"},
-        ])
-        fg_body = (target / live.CMD_FILE).read_text()
-        check("an ffx fg version change is sent as its own command",
-              fg_body.splitlines()[1] == "fgindex 1" and fg["fg_change"],
-              fg_body.splitlines())
-        check("it is not also sent as a plain field write",
-              "set FfxFGIndex" not in fg_body, fg_body)
-        check("an index OptiScaler could not have is refused rather than clamped",
-              not _accepts(live.LIVE_FIELDS[live.FFX_FG_ID], "99")
-              and not _accepts(live.LIVE_FIELDS[live.FFX_FG_ID], "-1"))
-        check("an unset ffx fg version is left for the next launch",
-              live.apply_changes(str(target), [
-                  {"section": live.FFX_FG_SECTION, "key": live.FFX_FG_KEY,
-                   "value": "auto"}])["deferred"] == [live.FFX_FG_ID])
-
-        # The FSR version travels the same way and for the same reason one
-        # step out: the index is read when the *upscaler* builds its context,
-        # so what makes it take effect now is the feature being rebuilt.
-        ups = live.apply_changes(str(target), [
-            {"section": live.FFX_UPSCALER_SECTION, "key": live.FFX_UPSCALER_KEY,
-             "value": "2"},
-        ])
-        ups_body = (target / live.CMD_FILE).read_text()
-        check("an ffx upscaler version change is sent as its own command",
-              ups_body.splitlines()[1] == "ffxupscaler 2" and ups["ffx_upscaler_change"],
-              ups_body.splitlines())
-        check("it is not also sent as a plain field write",
-              "set FfxUpscalerIndex" not in ups_body, ups_body)
-        check("an index this game could not have is refused rather than clamped",
-              not _accepts(live.LIVE_FIELDS[live.FFX_UPSCALER_ID], "99")
-              and not _accepts(live.LIVE_FIELDS[live.FFX_UPSCALER_ID], "-1"))
-
-        # Both are answered by one rebuild, and the rebuild reads the index --
-        # so the index has to be written before the rebuild is asked for. A
-        # preset that picks the backend *and* the version sends both at once.
-        both = live.apply_changes(str(target), [
-            {"section": "Upscalers", "key": "Dx12Upscaler", "value": "fsr31"},
-            {"section": live.FFX_UPSCALER_SECTION, "key": live.FFX_UPSCALER_KEY,
-             "value": "0"},
-        ])
-        both_body = (target / live.CMD_FILE).read_text()
-        check("the version is written before the switch that rebuilds on it",
-              both_body.splitlines()[1:3] == ["ffxupscaler 0", "backend fsr31"],
-              both_body.splitlines())
-        check("and both are reported", both["backend_change"] and both["ffx_upscaler_change"])
-
-        # DX12 and DX11 name the same upscaler differently; only one id can go
-        # into newBackend, and DX12 is the one that wins.
-        multi = live.apply_changes(str(target), [
-            {"section": "Upscalers", "key": "Dx11Upscaler", "value": "fsr31_12"},
-            {"section": "Upscalers", "key": "Dx12Upscaler", "value": "fsr31"},
-        ])
-        check("the dx12 id wins when several apis are set at once",
-              multi["backend"] == "fsr31", multi["backend"])
-
-        check("a change with nothing live-settable sends nothing",
-              live.apply_changes(str(target), [
-                  {"section": "Hotfix", "key": "DisableOverlays", "value": "true"}])["sent"] is False)
-
-        live.remove_asi(str(target))
-        check("removal takes the asi and its control files",
-              not (target / "plugins" / live.ASI_NAME).exists()
-              and not (target / live.CMD_FILE).exists()
-              and not (target / "plugins").exists())
-    finally:
-        shutil.rmtree(root, ignore_errors=True)
-
-
-def check_live_diagnostics():
-    """The three separate reasons live control can be silently absent.
-
-    "Not connected" on its own is useless to the user, and each of these has a
-    different fix: the plugin is missing, OptiScaler is not set to load plugins
-    at all (it defaults to off), or it loaded and could not find what it needed.
-    """
-    import tempfile
-    from optiscaler import live
-
-    print("\nLive control diagnostics")
-    root = Path(tempfile.mkdtemp(prefix="optiscaler-diag-"))
-    try:
-        target = root / "game"
-        target.mkdir()
-
-        check("no ini means the load switch is unknown", live.load_enabled(str(target)) is None)
-        (target / "OptiScaler.ini").write_text("[Plugins]\nLoadAsiPlugins=auto\n")
-        check("the switch defaults to off, and is reported as off",
-              live.load_enabled(str(target)) is False)
-        (target / "OptiScaler.ini").write_text("[Plugins]\nLoadAsiPlugins=true\n")
-        check("the switch is seen once it is on", live.load_enabled(str(target)) is True)
-        # It must not match the same key in another section.
-        (target / "OptiScaler.ini").write_text("[Menu]\nLoadAsiPlugins=true\n")
-        check("the switch is only read from the Plugins section",
-              live.load_enabled(str(target)) is False)
-
-        check("no log means it is unknown whether OptiScaler loaded it",
-              live.loaded_by_optiscaler(str(target)) is None)
-        (target / "OptiScaler.log").write_text("[info] Checking C:\\game\\plugins for *.asi\n")
-        check("a searched-but-empty plugins folder is reported as not loaded",
-              live.loaded_by_optiscaler(str(target)) is False)
-        (target / "OptiScaler.log").write_text(
-            f"[info] Loaded: C:\\game\\plugins\\{live.ASI_NAME}\n")
-        check("OptiScaler's own log confirms the load",
-              live.loaded_by_optiscaler(str(target)) is True)
-
-        # The heartbeat is what makes staleness mean "the game is gone" rather
-        # than "nobody changed a setting recently".
-        check("the staleness window is short enough to track a live game",
-              live.STATUS_STALE_SECONDS <= 30, live.STATUS_STALE_SECONDS)
-
-        status_file = target / live.STATUS_FILE
-        status_file.write_text(
-            "schema 2\nstatus ready\nseq 1\nconfig 0x1\nstate 0x2\nbackends 0x3\n"
-            "newbackend 0x4\nfps 40.4\nfg_enabled 1\ndx12_upscaler fsr31\n"
-            "pending_backend \nerror \n")
-        report = live.status(str(target))
-        check("a fresh heartbeat reads as attached", report["attached"] and report["ready"])
-        check("frame rate is carried through", report["fps"] == 40.4, report["fps"])
-        check("frame generation state is carried through", report["fg_enabled"] is True)
-        check("the live upscaler is carried through",
-              report["upscaler"]["dx12"] == "fsr31", report["upscaler"])
-        check("upscaler switching needs both halves present",
-              report["can_switch_upscaler"])
-
-        old = time.time() - (live.STATUS_STALE_SECONDS + 30)
-        os.utime(status_file, (old, old))
-        check("a stale heartbeat reads as gone", not live.status(str(target))["attached"])
-
-        # A status file from an older in-game plugin has none of the new fields.
-        status_file.write_text("schema 1\nstatus ready\nseq 1\nbackends 0x0\nerror \n")
-        legacy = live.status(str(target))
-        check("an older status file degrades instead of breaking",
-              legacy["fps"] is None and legacy["fg_enabled"] is None
-              and not legacy["can_switch_upscaler"])
-
-        # How many upscalers OptiScaler has registered is the difference
-        # between "wait, the game has not made one yet" and "the backend list
-        # could not be read", and the two need different advice.
-        status_file.write_text(
-            "schema 3\nstatus ready\nseq 1\nconfig 0x1\nstate 0x2\nbackends 0x3\n"
-            "newbackend 0x4\nbackend_entries 0\nframes 12000\nfps 60.0\nerror \n")
-        none_yet = live.status(str(target))
-        check("no registered upscaler means no live switch",
-              none_yet["backend_entries"] == 0 and not none_yet["can_switch_upscaler"])
-        check("the raw frame counter is carried through for diagnostics",
-              none_yet["frames"] == 12000, none_yet["frames"])
-
-        status_file.write_text(
-            "schema 3\nstatus ready\nseq 1\nconfig 0x1\nstate 0x2\nbackends 0x3\n"
-            "newbackend 0x4\nbackend_entries -1\nerror \n")
-        unreadable = live.status(str(target))
-        check("an unreadable count is unknown, not zero",
-              unreadable["backend_entries"] is None and unreadable["can_switch_upscaler"])
-
-        sent = live.switch_backend(str(target), "fsr31")
-        body = (target / live.CMD_FILE).read_text().splitlines()
-        check("the explicit switch sends just the backend command",
-              sent["ok"] and body[1] == "backend fsr31", body)
-        check("the explicit switch refuses an unknown id",
-              not live.switch_backend(str(target), "ffx")["ok"])
-    finally:
-        shutil.rmtree(root, ignore_errors=True)
-
-
 def check_reported_folder():
-    """The folder the in-game plugin reports, against the one being managed.
-
-    The plugin reports a Windows path and Proton's drive letters are what make
-    this more than a string compare. ``Z:`` is the filesystem root, so that case
-    shares a tail outright -- but a library on the SD card gets its own letter,
-    and ``S:\\steamapps\\common\\...`` shares no tail at all with
-    ``/run/media/.../steamapps/common/...``. A healthy install on a card
-    therefore reported itself as writing to the wrong folder, in a warning that
-    told the user to reinstall something that was working.
-    """
+    """Resolve real per-prefix Wine mappings, never guess from path suffixes."""
     from optiscaler.live import _same_dir
 
     print("\nThe folder the in-game plugin reports")
-    check("a library on the SD card matches through its drive letter",
-          _same_dir("S:\\steamapps\\common\\Expedition 33\\Sandfall\\Binaries\\Win64",
-                    "/run/media/mmcblk0p1/steamapps/common/Expedition 33/"
-                    "Sandfall/Binaries/Win64") is True)
-    check("and so does internal storage, where Z: is the root",
-          _same_dir("Z:\\home\\deck\\.steam\\steam\\steamapps\\common\\Game\\Bin",
-                    "/home/deck/.steam/steam/steamapps/common/Game/Bin") is True)
-    check("a genuinely different game is still a mismatch",
-          _same_dir("S:\\steamapps\\common\\Other\\Binaries\\Win64",
-                    "/run/media/mmcblk0p1/steamapps/common/Expedition 33/"
-                    "Sandfall/Binaries/Win64") is False)
-    # Whole components only: "Win64" is every Unreal game's last folder, and
-    # one shared name is not a shared path.
-    check("one shared folder name is not a match",
-          _same_dir("S:\\somewhere\\Win64", "/games/Expedition 33/Win64") is False)
-    check("a path that says nothing gives no answer",
-          _same_dir("", "/games/x") is None)
-
-
-def check_asi_staleness():
-    """A game keeps the in-game plugin it was set up with, for ever.
-
-    Updating the Decky plugin copies a new ASI into ``bin/`` and nothing else:
-    every game still holds the build it was set up with, which attaches,
-    heartbeats and answers exactly like a current one -- it simply has nothing
-    to say about fields added since. That is indistinguishable from a feature
-    that was never built, which is precisely how it was reported.
-    """
-    import tempfile
-    from optiscaler import live
-
-    print("\nAn out-of-date in-game plugin")
-    root = Path(tempfile.mkdtemp(prefix="optiscaler-asi-"))
-    try:
-        target = root / "game"
-        (target / live.PLUGIN_SUBDIR).mkdir(parents=True)
-        shipped = root / "bin" / live.ASI_NAME
-        shipped.parent.mkdir()
-        shipped.write_bytes(b"MZ" + b"new" * 40)
-
-        check("nothing to compare against is unknown, not out of date",
-              live.asi_current(str(target), None) is None)
-        check("and neither is a game that has no plugin at all",
-              live.asi_current(str(target), str(shipped)) is None)
-
-        installed = live.asi_path(str(target))
-        installed.write_bytes(b"MZ" + b"old" * 40)
-        check("a same-sized older build is still caught",
-              live.asi_current(str(target), str(shipped)) is False)
-        installed.write_bytes(b"MZ" + b"old" * 10)
-        check("so is one of a different size",
-              live.asi_current(str(target), str(shipped)) is False)
-        installed.write_bytes(shipped.read_bytes())
-        check("the shipped build compares equal",
-              live.asi_current(str(target), str(shipped)) is True)
-
-        # The shipped bytes are cached against the source file's stat, so a
-        # rebuilt ASI has to invalidate it -- otherwise every game reads as
-        # current for the rest of the session.
-        import os
-        shipped.write_bytes(b"MZ" + b"newer" * 40)
-        os.utime(shipped, ns=(0, 0))
-        check("a rebuilt plugin is noticed rather than served from the cache",
-              live.asi_current(str(target), str(shipped)) is False)
-
-        report = live.status(str(target), str(shipped))
-        check("and the status report carries the answer",
-              report["asi_current"] is False, report["asi_current"])
-        check("a report asked without a source says nothing either way",
-              live.status(str(target))["asi_current"] is None)
-    finally:
-        shutil.rmtree(root, ignore_errors=True)
-
-
-def check_asi_reporting():
-    """The in-game plugin has to report what the panel needs to explain itself.
-
-    Both of these exist because their absence was indistinguishable from a
-    working plugin: a frame counter that never moves reads as "measuring" for
-    ever, and an empty backend list reads as a switch that simply did nothing.
-    """
-    print("\nASI reporting")
-    source = (ROOT / "asi" / "live.cpp").read_text(encoding="utf-8")
-    check("the status file carries the backend count", '"backend_entries %d\\n"' in source)
-    check("the status file carries the raw frame counter", '"frames %llu\\n"' in source)
-    check("a counter that never moves triggers a search for one that does",
-          "SearchFrameCounter" in source and "if (g_fps <= 0.0) SearchFrameCounter();" in source)
-    check("the search only ever reads", "g_frameCount = (uint64_t*)" in source
-          and "*g_frameCount =" not in source)
-    # The FFX FG list is the game's own answer, and the flag pointer is how the
-    # panel tells "cannot change it now" from "did not change it".
-    check("the status file carries the ffx fg version list",
-          '"ffx_fg_versions %s\\n"' in source)
-    check("the status file says whether the fg flags were found",
-          '"fgflags %p\\n"' in source)
-    check("the status file carries the configured ffx fg index",
-          '"fg_index %d\\n"' in source)
-    # The FSR version list is the only place the exact version is written down;
-    # the backend id says "fsr31" for every FSR from 2.3.4 to 4.1.1.
-    check("the status file carries the ffx upscaler version list",
-          '"ffx_upscaler_versions %s\\n"' in source)
-    check("the status file carries the configured ffx upscaler index",
-          '"ffx_upscaler_index %d\\n"' in source)
-    # Two frame rates need two measurements. Both are read-only, and both are
-    # sampled at the worker's own rate rather than once a heartbeat, because
-    # each slot holds one frame's interval and not an average.
-    check("the status file carries both frame intervals",
-          '"rendered_ms %.3f\\n"' in source and '"presented_ms %.3f\\n"' in source)
-    check("the frame intervals are sampled every tick, not every heartbeat",
-          source.count("SampleFrameTimes();") >= 2, source.count("SampleFrameTimes();"))
-    check("the frame intervals are only ever read",
-          "const double* rendered" in source and "*g_frameTimes.rendered =" not in source)
-    check("an implausible interval is dropped rather than averaged in",
-          "if (!PlausibleInterval(value)) continue;" in source
-          and "return ms > 0.05 && ms < 2000.0;" in source)
-    # The declared offset produced nothing at all on a real Deck while the
-    # counter eight bytes in front of the same table was correct, so there has
-    # to be a way back from a mirror whose arithmetic is wrong.
-    check("a pair that never reports is searched for instead",
-          "if (g_renderedMs <= 0.0 && g_presentedMs <= 0.0) SearchFrameTimes();" in source)
-    check("and the search identifies an interval rather than accepting any double",
-          "static bool FrameTimeAnchor(double now, double before, double expected)" in source
-          and "ratio > 0.65 && ratio < 1.35" in source)
-    check("two separate intervals are a refusal, not a choice",
-          "refusing to guess" in source)
-    check("the search is read-only and gives up rather than running for ever",
-          "g_ftDone = true;" in source and "FT_MAX_ROUNDS" in source)
+    with tempfile.TemporaryDirectory(prefix="decky-live-folders-") as tmp:
+        root = Path(tmp).resolve()
+        prefix = root / "prefix"
+        devices = prefix / "dosdevices"
+        devices.mkdir(parents=True)
+        card = root / "sdcard"
+        internal = root / "internal"
+        wanted = card / "steamapps/common/Expedition 33/Sandfall/Binaries/Win64"
+        other = card / "steamapps/common/Other/Binaries/Win64"
+        shared_tail = card / "somewhere/Win64"
+        internal_game = internal / "steamapps/common/Game/Bin"
+        for directory in (wanted, other, shared_tail, internal_game):
+            directory.mkdir(parents=True)
+        (devices / "s:").symlink_to(card, target_is_directory=True)
+        # This deliberate non-root Z: mapping proves the implementation uses
+        # dosdevices rather than assuming that every prefix maps Z: to /.
+        (devices / "z:").symlink_to(internal, target_is_directory=True)
+        check("a library on the SD card matches through its actual drive mapping",
+              _same_dir(r"S:\steamapps\common\Expedition 33\Sandfall\Binaries\Win64",
+                        wanted, str(prefix)) is True)
+        check("internal storage also follows its actual Z mapping",
+              _same_dir(r"Z:\steamapps\common\Game\Bin",
+                        internal_game, str(prefix)) is True)
+        check("a genuinely different existing game is a mismatch",
+              _same_dir(r"S:\steamapps\common\Other\Binaries\Win64",
+                        wanted, str(prefix)) is False)
+        check("one shared folder name is not a match",
+              _same_dir(r"S:\somewhere\Win64", wanted, str(prefix)) is False)
+        check("a path without a verified prefix gives no answer",
+              _same_dir(r"S:\steamapps\common\Expedition 33\Sandfall\Binaries\Win64",
+                        wanted) is None)
+        check("a path that says nothing gives no answer",
+              _same_dir("", wanted, str(prefix)) is None)
 
 
 def check_live_frame_rates():
@@ -1504,7 +1159,7 @@ def check_wiki_transport():
     attempts = []
 
     def stalls_once(request, timeout, context, binary=False):
-        attempts.append(socket_mod.getaddrinfo)
+        attempts.append((socket_mod.getaddrinfo, wiki_mod._force_ipv4.get()))
         if len(attempts) == 1:
             raise urllib.error.URLError(TimeoutError("timed out"))
         return "| Game | Compatibility |\n|---|---|\n| [X](X) | OK |\n"
@@ -1515,9 +1170,9 @@ def check_wiki_transport():
         check("a stalled connection is retried rather than given up on",
               body.startswith("| Game"), len(attempts))
         check("and the retry is the one that forces IPv4",
-              attempts[1] is not attempts[0])
+              attempts[1][1] is True and attempts[0][1] is False)
         check("the resolver is put back afterwards",
-              socket_mod.getaddrinfo is attempts[0])
+              socket_mod.getaddrinfo is attempts[0][0] and not wiki_mod._force_ipv4.get())
 
         # A server that answered is not retried: asking again says the same.
         attempts.clear()
@@ -1587,8 +1242,8 @@ def check_version_pin():
         return
     text = ref.read_text(encoding="utf-8")
     check("vendored headers name the shipped OptiScaler version",
-          f"v{constants.OPTISCALER_VERSION}" in text,
-          f"want v{constants.OPTISCALER_VERSION} in SOURCE_COMMIT.txt")
+          json.loads((ROOT / "defaults/live-profile.json").read_text())["source_commit"] in text,
+          "want the exact bundled core commit in SOURCE_COMMIT.txt")
     check("the shipped archive matches the pinned version",
           constants.OPTISCALER_VERSION in constants.PAYLOAD_ARCHIVE,
           constants.PAYLOAD_ARCHIVE)
@@ -1616,7 +1271,7 @@ def check_version_pin():
         check("every mirrored member still exists in the vendored header",
               not absent, absent[:5])
 
-    # 0.9.4-specific: the upscaler ids are strings, not the enum master uses.
+    # The pinned release core stores upscaler IDs as strings.
     check("the vendored build stores upscalers as strings",
           "CustomOptional<std::string, SoftDefault> Dx12Upscaler" in config_h)
 
@@ -1672,13 +1327,12 @@ def check_asi_wide_formats():
     wide = re.findall(r'L"((?:[^"\\]|\\.)*)"', source)
     offenders = [text for text in wide if re.search(r"%[-+ #0-9.]*s", text)]
     check("no wide format string passes a path through %s", not offenders, offenders[:3])
-    check("the status file reports the folder the plugin chose",
-          '"dir %s\\n"' in source)
-    check("control paths are built without printf", "JoinPath(g_statusPath" in source)
 
     built = ROOT / "bin" / "decky_optiscaler_live.asi"
-    check("the built plugin is present", built.is_file())
-    if built.is_file():
+    from optiscaler.constants import LIVE_CONTROL_SUPPORTED, LIVE_SCHEMA
+    check("a compiled ASI exists only for a validated ABI",
+          built.is_file() if LIVE_CONTROL_SUPPORTED else not built.exists())
+    if LIVE_CONTROL_SUPPORTED and built.is_file():
         data = built.read_bytes()
         check("the built plugin is a windows dll", data[:2] == b"MZ")
         # If a wide format ever comes back, so does this import.
@@ -1686,268 +1340,6 @@ def check_asi_wide_formats():
               b"__stdio_common_vfwprintf" not in data)
         check("the built plugin still exports what OptiScaler calls",
               b"InitializeASI" in data)
-
-
-def check_asi_backend_layout():
-    """The ASI's model of State::changeBackend must match the vendored headers.
-
-    This is the check the upscaler switch did not have, and its absence cost
-    the feature entirely. The first implementation looked for "a vector-shaped
-    triple with 0.8f somewhere in the following 80 bytes" and kept the last
-    match -- but unordered_dense's table holds *two* vectors, m_values and
-    m_buckets, and m_buckets is both within that window and later. Every run
-    latched onto m_buckets, so State::newBackend was searched for 24 bytes past
-    where it lives, never validated, and the plugin reported "newBackend not
-    located; cannot switch upscaler" for the whole session. Frame generation
-    went on working, which is why it read as "the upscaler switch is broken"
-    rather than as a discovery failure.
-
-    So: the layout is mirrored in live.cpp with static_asserts (the compiler
-    checks those at build time), and what is checked here is that the vendored
-    headers still say what the mirror assumes.
-    """
-    print("\nASI backend map layout")
-    ref = ROOT / "asi" / "optiscaler_ref"
-    source = (ROOT / "asi" / "live.cpp").read_text(encoding="utf-8")
-
-    ud = ref / "unordered_dense.h"
-    check("the pinned unordered_dense header is vendored", ud.is_file())
-    if ud.is_file():
-        text = ud.read_text(encoding="utf-8")
-        # Only detail::table -- segmented_vector, declared earlier in the same
-        # header, has members of its own that would otherwise be picked up.
-        body = text[text.index("class table :"):]
-        # The member order is the layout: m_values first (so the map's address
-        # is its value vector's address), m_buckets second, then the load
-        # factor the mirror anchors on and the shift count it cross-checks.
-        members = re.findall(
-            r"^\s+(?:value_container_type|bucket_container_type|size_t|float|Hash|KeyEqual|uint8_t)"
-            r"\s+(m_\w+)",
-            body, re.M)
-        check("the table's member order is the one live.cpp mirrors",
-              members[:6] == ["m_values", "m_buckets", "m_max_bucket_capacity",
-                              "m_max_load_factor", "m_hash", "m_equal"],
-              members[:6])
-        check("m_shifts is the table's last member", "m_shifts" in members[6:7], members[:8])
-        check("the default load factor is still 0.8",
-              "default_max_load_factor = 0.8F" in text)
-        check("the initial shift count is still 64 - 2",
-              "initial_shifts = 64 - 2" in text)
-        check("the default bucket is still two uint32s",
-              re.search(r"struct standard\s*\{[^}]*uint32_t m_dist_and_fingerprint;"
-                        r"[^}]*uint32_t m_value_idx;", text, re.S) is not None)
-
-    state_h = (ref / "State.h").read_text(encoding="utf-8")
-    # newBackend is located as "one table past changeBackend", and frameCount as
-    # the eight bytes in front of it. Both are declaration-order facts.
-    order = re.search(
-        r"UINT64 frameCount = 0;\s*"
-        r"(?://[^\n]*\n\s*)*"
-        r"ankerl::unordered_dense::map<unsigned int, bool> changeBackend;\s*"
-        r"std::string newBackend",
-        state_h)
-    check("frameCount, changeBackend and newBackend are still declared together",
-          order is not None)
-
-    # The mirror itself. These are compiled as static_asserts, so their presence
-    # is what matters; the build fails if any of them stops holding.
-    for text, why in (
-        ("sizeof(ud_table) == 64", "the table size newBackend's offset depends on"),
-        ("offsetof(ud_table, m_max_load_factor) == 56", "the load-factor anchor"),
-        ("offsetof(ud_table, m_buckets) == 24", "the bucket vector"),
-        ("sizeof(backend_entry) == 8", "the pair stride the overlay walks"),
-        ("offsetof(backend_entry, changed) == 4", "the bool the switch writes"),
-    ):
-        check(f"live.cpp pins {why}", f"static_assert({text}," in source, text)
-
-    # The regression itself: identification must not go back to hunting for a
-    # constant in a window, and newBackend must be part of identifying the map
-    # rather than something guessed at afterwards.
-    check("the load factor is checked at its exact offset, not scanned for",
-          "t->m_max_load_factor != kMaxLoadFactor" in source)
-    check("newBackend is what tells changeBackend from State's other maps",
-          "return LooksLikeNewBackend((const msvc_string*) (t + 1));" in source)
-    check("locating the map and the string is one indivisible step",
-          "g_newBackend = found.newBackend;" in source)
-
-
-def _state_members():
-    """The members `class State` declares, in order, from the vendored header.
-
-    Declaration order is layout order, which is the whole basis for the mirrors
-    in live.cpp: a member inserted, removed or reordered upstream moves every
-    offset after it. Functions and the private tail are skipped; everything else
-    that ends in a semicolon at class scope is a member.
-    """
-    text = (ROOT / "asi" / "optiscaler_ref" / "State.h").read_text(encoding="utf-8")
-    body = text[text.index("class State"):]
-    body = body[:body.index("\n  private:")]
-    names = []
-    for raw in body.splitlines():
-        if not raw.startswith("    ") or raw.startswith("     "):
-            continue
-        line = raw.strip()
-        if not line.endswith(";") or "(" in line:
-            continue
-        if line.startswith(("//", "static", "using", "typedef", "return", "friend")):
-            continue
-        head = re.split(r"\s*=|\s*\{", line)[0].rstrip(";").strip()
-        tokens = re.findall(r"[A-Za-z_]\w*", head)
-        if tokens:
-            names.append(tokens[-1])
-    return names
-
-
-def _mirror_members(source, name):
-    """The members of one `struct <name>` in live.cpp, in declaration order."""
-    start = source.index(f"struct {name} {{")
-    body = source[start:source.index("\n};", start)]
-    return re.findall(r"^    [\w:*<>, ]+?\s(\w+)(?:\[\d+\])?;\s*(?://.*)?$", body, re.M)
-
-
-def check_asi_state_layout():
-    """The ASI's model of State must match the vendored header, member for member.
-
-    Two things are located by walking out from an object the scan can identify:
-    State::FGchanged and State::SCchanged, 21 and 20 bytes in front of
-    CapturedHudlesses, and State::ffxFGVersionNames, a computed distance past
-    changeBackend. Both distances come from the compiler, out of structs in
-    live.cpp that mirror the declaration runs -- so what has to be checked here
-    is that the header still declares those runs the way the mirrors say.
-
-    This matters more than the offsets themselves: FGchanged is written to. A
-    member inserted upstream would move it, every static_assert would still
-    hold (they are about the mirror, not the header), and the plugin would set a
-    byte in the middle of something else. The version pin makes that impossible
-    in a shipped build; this makes it impossible to miss when the pin moves.
-    """
-    print("\nASI State layout")
-    source = (ROOT / "asi" / "live.cpp").read_text(encoding="utf-8")
-    declared = _state_members()
-    check("State's members can be read out of the vendored header",
-          len(declared) > 100, len(declared))
-
-    for struct in ("state_head", "state_fg_block", "state_tail"):
-        mirrored = _mirror_members(source, struct)
-        check(f"live.cpp declares a {struct} mirror", bool(mirrored), mirrored)
-        if not mirrored:
-            continue
-        if mirrored[0] not in declared:
-            check(f"{struct} starts at a member State still has", False, mirrored[0])
-            continue
-        at = declared.index(mirrored[0])
-        # The run has to match exactly: a member inserted anywhere inside it
-        # shifts everything the mirror computes an offset for.
-        check(f"{struct} mirrors State's declaration run exactly",
-              declared[at:at + len(mirrored)] == mirrored,
-              declared[at:at + len(mirrored)])
-
-    # The mirrors reproduce sizes as well as order, so the few declarations
-    # whose *type* the offsets depend on are pinned here too.
-    state_h = (ROOT / "asi" / "optiscaler_ref" / "State.h").read_text(encoding="utf-8")
-    for text, why in (
-        ("bool FGchanged = false;", "the flag the FFX FG switch raises"),
-        ("bool SCchanged = false;", "the flag that makes the context rebuild"),
-        ("size_t FGcapturedResourceCount = false;", "the one non-bool in that run"),
-        ("ankerl::unordered_dense::map<void*, CapturedHudlessInfo> CapturedHudlesses;",
-         "the table the flags are found relative to"),
-        ("uint64_t NVNGX_ApplicationId = 1337;", "the value that confirms that table"),
-        ("std::vector<const char*> ffxFGVersionNames {};", "the FFX FG version names"),
-        ("std::vector<uint64_t> ffxFGVersionIds {};", "the ids declared beside them"),
-        ("std::vector<const char*> ffxUpscalerVersionNames {};",
-         "the FSR versions, the only place the exact one is written down"),
-        ("std::vector<uint64_t> ffxUpscalerVersionIds {};",
-         "the ids declared beside those"),
-        ("std::deque<double> upscaleTimes;", "the first deque the tail steps over"),
-        ("std::deque<double> frameTimes;", "the second"),
-        ("double lastFGFrameTime = 0.0;", "the frame-generation hook's interval"),
-        ("double presentFrameTime = 0.0;", "the wrapped swapchain's interval"),
-    ):
-        check(f"State still declares {why}", text in state_h, text)
-
-    check("captured_hudless_info is still a counter, a UINT and a bool",
-          re.search(r"typedef struct CapturedHudlessInfo\s*\{\s*UINT64 usageCount[^}]*"
-                    r"UINT captureInfo[^}]*bool enabled", state_h, re.S) is not None)
-
-    # Compiled assertions; their presence is what matters, the build enforces them.
-    for text, why in (
-        ("offsetof(state_head, DeviceAdapterNames) == 104", "where the search for the table starts"),
-        ("FG_BLOCK_OFF(FGchanged) == -21", "how far in front of the table the flag sits"),
-        ("FG_BLOCK_OFF(SCchanged) == -20", "the flag beside it"),
-        ("FG_BLOCK_OFF(NVNGX_ApplicationId) == 72", "the value that confirms the table"),
-        ("offsetof(state_tail, ffxFGVersionNames) == 256", "where the version list sits"),
-        ("offsetof(state_tail, ffxUpscalerVersionNames) == 208",
-         "where the FSR version list sits"),
-        ("offsetof(state_tail, lastFGFrameTime) == 400", "where the frame intervals sit"),
-        ("sizeof(msvc_deque_raw) == 32", "the width of the deques the tail steps over"),
-        ("sizeof(hudless_entry) == 24", "the stride the table's elements are checked at"),
-    ) :
-        check(f"live.cpp pins {why}", f"static_assert({text}," in source, text)
-
-    # The flags are written, so identification has to be unambiguous or refused.
-    check("an ambiguous table means the flags stay unlocated",
-          "if (matches != 1) {" in source, "FindFgFlags")
-    check("the search is bounded by two objects already identified",
-          "offsetof(state_head, DeviceAdapterNames) + sizeof(ud_table)" in source
-          and "unsigned char* last = (unsigned char*) map->table;" in source)
-    check("nothing is written when the flags were not found",
-          'snprintf(g_error, sizeof(g_error),\n                 "FGchanged/SCchanged not located' in source)
-
-    # The overlay's own "Change FG" button is what this copies; if OptiScaler
-    # ever stops doing all three writes, so should we.
-    menu = (ROOT / "asi" / "optiscaler_ref" / "menu_common.cpp").read_text(encoding="utf-8")
-    check("the overlay's Change FG button is still config, then both flags",
-          re.search(r'ImGui::Button\("Change FG"\).*?config->FfxFGIndex = _ffxFGIndex;\s*'
-                    r'state\.FGchanged = true;\s*state\.SCchanged = true;', menu, re.S) is not None)
-    # And the same for the FFX upscaler, whose button is the ordinary upscaler
-    # switch pointed at the backend that is already running: the index into
-    # Config, then a rebuild. This plugin leaves newBackend empty instead of
-    # naming the current backend, because ChangeFeature reads that as "use
-    # whatever Config holds for this API" -- which is the same rebuild by a
-    # route that cannot pick the wrong graphics API.
-    check("the overlay's FFX Change Upscaler is still config, then a rebuild",
-          re.search(r'ImGui::Button\("Change Upscaler"\).*?'
-                    r'config->FfxUpscalerIndex = _ffxUpscalerIndex;\s*'
-                    r'state\.newBackend = currentBackend;\s*'
-                    r'MARK_ALL_BACKENDS_CHANGED\(\);', menu, re.S) is not None)
-    # What lets this plugin leave newBackend alone: every provider reads an
-    # empty one as "use Config", and clears it again after a rebuild, so an
-    # empty one is also the normal resting state.
-    for provider in ("Dx12", "Dx11", "Vk"):
-        text = (ROOT / "asi" / "optiscaler_ref" / f"FeatureProvider_{provider}.cpp") \
-            .read_text(encoding="utf-8")
-        check(f"an empty newBackend still means \u201cuse Config\u201d on {provider}",
-              'State::Instance().newBackend == ""' in text)
-        check(f"and {provider} still clears it once the rebuild succeeded",
-              'State::Instance().newBackend = "";' in text)
-
-    config_cpp = (ROOT / "asi" / "optiscaler_ref" / "Config.cpp").read_text(encoding="utf-8")
-    check("FfxFGIndex is still the ini's [FSR] FGIndex",
-          'FfxFGIndex.set_from_config(readInt("FSR", "FGIndex"))' in config_cpp)
-    check("FfxUpscalerIndex is still the ini's [FSR] UpscalerIndex",
-          'FfxUpscalerIndex.set_from_config(readInt("FSR", "UpscalerIndex"))' in config_cpp)
-
-    # There are two intervals and one counter, and which hook writes which is
-    # deliberately *not* relied on: reading these two files says presentFrameTime
-    # is the presented side, and on a real Deck running FSR-FG the numbers said
-    # the opposite. What is checked here is only that both writers still exist
-    # and that the counter still moves with one of them -- `live._frame_rates`
-    # works out which from the values themselves.
-    swapchain = (ROOT / "asi" / "optiscaler_ref" / "wrapped_swapchain.cpp") \
-        .read_text(encoding="utf-8")
-    check("presentFrameTime is still timed in the wrapped swapchain",
-          "State::Instance().presentFrameTime = ftDelta;" in swapchain)
-    check("and the frame counter still ticks beside it",
-          "State::Instance().frameCount = _frameCounter;" in swapchain)
-    fg_hooks = (ROOT / "asi" / "optiscaler_ref" / "FG_Hooks.cpp").read_text(encoding="utf-8")
-    check("lastFGFrameTime is still timed in the frame-generation hook",
-          "State::Instance().lastFGFrameTime = ftDelta;" in fg_hooks
-          and "State::Instance().FGPresentIsCalled = true;" in fg_hooks)
-    # OptiScaler's own overlay derives the pair the same way round this now
-    # does: one measured rate, and the other from a ratio.
-    menu = (ROOT / "asi" / "optiscaler_ref" / "menu_common.cpp").read_text(encoding="utf-8")
-    check("the overlay still shows one rate divided into two",
-          "frameRate / (float) (fg->GetInterpolatedFrameCount() + 1)" in menu)
 
 
 def check_auto_plan():
@@ -1970,6 +1362,10 @@ def check_auto_plan():
         base.update(recommendation)
         return autoplan.build(base)
 
+    method_settings = plan_for(detail={"Settings": "[FrameGen] FGInput=dlssg, FGOutput=fsrfg"})
+    check("explicit wiki FG method stays outside ordinary automatic settings",
+          not any(item["section"] == "FrameGen" and item["key"] in ("FGInput", "FGOutput")
+                  for item in method_settings["settings"]))
     check("no match means no plan", not autoplan.build({"matched": False})["available"])
     check("no recommendation at all is survivable", not autoplan.build(None)["available"])
 
@@ -2226,10 +1622,9 @@ def check_reframework():
         root = Path(tmp)
         game = root / "game"
         game.mkdir()
-        payload = root / "payload"
-        payload.mkdir()
-        (payload / "OptiScaler.dll").write_bytes(b"OptiScaler" + b"\0" * (5 << 20))
-        (payload / INI_NAME).write_text("[Upscalers]\nDx12Upscaler=auto\n")
+        from optiscaler.payload import Payload
+        from optiscaler.constants import PAYLOAD_ARCHIVE
+        payload = Payload(ROOT / "bin" / PAYLOAD_ARCHIVE, root / "runtime").ensure()
         source = root / "ref"
         source.mkdir()
         (source / REFRAMEWORK_DLL).write_bytes(b"the REFramework build")
@@ -2258,10 +1653,9 @@ def check_reframework():
         root = Path(tmp)
         game = root / "game"
         game.mkdir()
-        payload = root / "payload"
-        payload.mkdir()
-        (payload / "OptiScaler.dll").write_bytes(b"OptiScaler" + b"\0" * (5 << 20))
-        (payload / INI_NAME).write_text("[Upscalers]\nDx12Upscaler=auto\n")
+        from optiscaler.payload import Payload
+        from optiscaler.constants import PAYLOAD_ARCHIVE
+        payload = Payload(ROOT / "bin" / PAYLOAD_ARCHIVE, root / "runtime").ensure()
         installer.install(str(game), str(payload), "dxgi.dll", False)
         source = root / "ref"
         source.mkdir()
@@ -2652,15 +2046,15 @@ def check_option_validation():
     presets = {
         "fsr4": [("Upscalers", "Dx12Upscaler", "fsr31"), ("Upscalers", "Dx11Upscaler", "fsr31_12"),
                  ("Upscalers", "VulkanUpscaler", "fsr31_12"), ("FSR", "Fsr4Update", "true"),
-                 ("FSR", "UpscalerIndex", "0"), ("FSR", "Fsr4ForceEnableInt8", "false")],
+                 ("FSR", "UpscalerIndex", "0"), ("FSR", "Fsr4ForceEnableInt8", "auto")],
         "fsr4-int8": [("Upscalers", "Dx12Upscaler", "fsr31"),
                       ("Upscalers", "Dx11Upscaler", "fsr31_12"),
                       ("Upscalers", "VulkanUpscaler", "fsr31_12"),
-                      ("FSR", "Fsr4Update", "auto"), ("FSR", "Fsr4ForceEnableInt8", "true"),
+                      ("FSR", "Fsr4Update", "auto"), ("FSR", "Fsr4ForceEnableInt8", "1"),
                       ("FSR", "UpscalerIndex", "0")],
         "fsr31": [("Upscalers", "Dx12Upscaler", "fsr31"), ("Upscalers", "Dx11Upscaler", "fsr31"),
                   ("Upscalers", "VulkanUpscaler", "fsr31"), ("FSR", "Fsr4Update", "false"),
-                  ("FSR", "UpscalerIndex", "1"), ("FSR", "Fsr4ForceEnableInt8", "false")],
+                  ("FSR", "UpscalerIndex", "1"), ("FSR", "Fsr4ForceEnableInt8", "0")],
         "xess": [("Upscalers", "Dx12Upscaler", "xess"), ("Upscalers", "Dx11Upscaler", "xess_12"),
                  ("Upscalers", "VulkanUpscaler", "xess")],
     }
@@ -2670,19 +2064,62 @@ def check_option_validation():
         check(f"every key the {name} preset writes is accepted", not bad, bad)
 
 
+def check_live_bridge_contract():
+    """Check the distributed ABI contract; native behavior runs in Windows tests."""
+    from optiscaler import live
+    from optiscaler.constants import LIVE_CONTROL_SUPPORTED, LIVE_SCHEMA
+    from live_metadata import current
+    print("\nPinned native live bridge")
+    profile = json.loads((ROOT / "defaults/live-profile.json").read_text())
+    metadata = json.loads((ROOT / "defaults/live-build.json").read_text())
+    runtime = json.loads((ROOT / "defaults/runtime-manifest.json").read_text())
+    check("the bridge has an explicitly supported profile", LIVE_CONTROL_SUPPORTED and profile["schema"] == LIVE_SCHEMA)
+    check("the ABI profile names the bundled core", profile["core_sha256"] == runtime["runtime"]["dll_sha256"]
+          and profile["source_commit"] == runtime["runtime"]["commit"])
+    check("bridge binary and source identities match the build record", current() == metadata)
+    expected = {
+        "FrameGen.Enabled": "FGEnabled", "OptiFG.HUDFix": "FGHUDFix",
+        "FrameGen.DebugView": "FGDebugView", "OptiFG.MakeDepthCopy": "FGMakeDepthCopy",
+        "OptiFG.HUDFixExtended": "FGHUDFixExtended", "XeFG.InterpolationCount": "FGXeFGInterpolationCount",
+        "FSR.FGIndex": "FfxFGIndex", "FSR.UpscalerIndex": "FfxUpscalerIndex",
+        "Upscalers.Dx11Upscaler": "Dx11Upscaler", "Upscalers.Dx12Upscaler": "Dx12Upscaler",
+        "Upscalers.VulkanUpscaler": "VulkanUpscaler", "Sharpness.OverrideSharpness": "OverrideSharpness",
+        "Sharpness.Sharpness": "Sharpness", "Menu.ShowFps": "ShowFps",
+    }
+    check("all original fourteen live keys remain available", set(live.LIVE_FIELDS) == set(expected)
+          and set(profile["live_keys"]) == set(expected))
+    ini_map = json.loads((ROOT / "py_modules/optiscaler/live_fields.json").read_text())["fields"]
+    for key, member in expected.items():
+        check(f"{key} addresses the intended native member", live.LIVE_FIELDS[key].member == member
+              and ini_map.get(key, {}).get("member") == member)
+    facts = json.loads((ROOT / "asi/optiscaler_ref/pdb_layout.json").read_text())
+    assertions = (ROOT / "asi/generated/pdb_assertions.h").read_text()
+    members = set(re.findall(r"offsetof\(Config,\s*(\w+)\)", assertions))
+    # The writable-field table excludes the three plain path/string members.
+    # The compiled PDB assertions cover the complete object, including those.
+    check("the release mirror checks all 300 independently pinned members",
+          len(members) == 300 and members == set(facts["classes"]["Config"]["fields"]))
+    with tempfile.TemporaryDirectory(prefix="optiscaler-live-contract-") as temporary:
+        target = Path(temporary)
+        (target / live.STATUS_FILE).write_text("status ready\nschema 5\nseq 123\n")
+        state = live.status(target)
+        check("an old heartbeat cannot attach or grant writes", not state.get("attached")
+              and not state.get("ready") and not state.get("can_switch_upscaler"))
+        result = live.apply_changes(target, [{"section": "Menu", "key": "ShowFps", "value": "true"}])
+        check("no native session means no command and no confirmation", not result.get("sent")
+              and not result.get("confirmed") and not (target / live.CMD_FILE).exists())
+
+
 def main():
     logging.basicConfig(level=logging.ERROR)
     asyncio.run(run())
-    check_live_control()
-    check_live_diagnostics()
+    check_live_bridge_contract()
+    check_live_frame_rates()
     check_remembered_choices()
     check_launch_record()
     check_launch_options_read()
     check_non_steam_shortcut()
-    check_asi_reporting()
-    check_asi_staleness()
     check_reported_folder()
-    check_live_frame_rates()
     check_wiki_failure_reporting()
     check_wiki_cache()
     check_wiki_transport()
@@ -2690,8 +2127,6 @@ def main():
     check_version_pin()
     check_optipatcher()
     check_asi_wide_formats()
-    check_asi_backend_layout()
-    check_asi_state_layout()
     check_auto_plan()
     check_reframework()
     check_prose_is_not_a_specification()

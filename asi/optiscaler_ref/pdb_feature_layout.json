@@ -1,0 +1,1492 @@
+{
+  "pdb_guid": "0d15e219-e646-4c8a-a03a-f682cbeff6e6",
+  "pdb_sha256": "73edcdda3e1bbd35f593f84f92d7d7b8a39f71f6802266ff3c98e25511fd214f",
+  "live_apply_proofs": {
+    "feature_version": {
+      "type_index": "0x7fd2",
+      "size": 12,
+      "fields": [
+        [
+          "major",
+          0,
+          "0x75"
+        ],
+        [
+          "minor",
+          4,
+          "0x75"
+        ],
+        [
+          "patch",
+          8,
+          "0x75"
+        ]
+      ],
+      "record_hex": "0515000080020000000000000000000000000000666561747572655f76657273696f6e002e3f4155666561747572655f76657273696f6e404000"
+    },
+    "dlss_feature_version": {
+      "member": "_version",
+      "member_offset": 8,
+      "member_type_index": "0x7fd2",
+      "derived_classes": {
+        "DLSSFeatureDx11": {
+          "class_size": 256,
+          "dlss_base_offset": 56,
+          "interface_offset": 96,
+          "base_type_hex": "0415000080020000000000000000000000000000444c535346656174757265002e3f4156444c535346656174757265404000"
+        },
+        "DLSSFeatureDx12": {
+          "class_size": 248,
+          "dlss_base_offset": 48,
+          "interface_offset": 88,
+          "base_type_hex": "0415000080020000000000000000000000000000444c535346656174757265002e3f4156444c535346656174757265404000"
+        },
+        "DLSSFeatureVk": {
+          "class_size": 272,
+          "dlss_base_offset": 72,
+          "interface_offset": 112,
+          "base_type_hex": "0415000080020000000000000000000000000000444c535346656174757265002e3f4156444c535346656174757265404000"
+        }
+      },
+      "source": "Matching PDB TPI field lists and LF_BCLASS records; see pdb_layout.json and backend_types for the matching class, Config, and State layouts."
+    }
+  },
+  "classes": {
+    "IFGFeature_Dx12": {
+      "size": 1856,
+      "fields": {
+        "_copyCommandList": 16,
+        "_copyCommandAllocator": 48,
+        "_device": 80,
+        "_swapChain": 88,
+        "_gameCommandQueue": 96,
+        "_hwnd": 104,
+        "_releasingSwapchain": 112,
+        "_fgFramePresentId": 120,
+        "_lastFGFramePresentId": 128,
+        "_scCommandList": 136,
+        "_scCommandAllocator": 168,
+        "_scCommandListResetted": 200,
+        "_uiCommandList": 208,
+        "_uiCommandAllocator": 240,
+        "_uiCommandListResetted": 272,
+        "_uiAllocatorFenceValues": 280,
+        "_uiFenceValue": 312,
+        "_uiFence": 320,
+        "_uiFenceEvent": 328,
+        "_frameResources": 336,
+        "_resourceCopy": 592,
+        "_resourceMutex": 848,
+        "_mvFlip": 880,
+        "_depthFlip": 888,
+        "_hudlessCompare": 896,
+        "_renderUI": 904
+      },
+      "symbols": {
+        "??_7IFGFeature_Dx12@@6B0@@": {
+          "rva": "0x176d888",
+          "col_rva": "0x17f7428",
+          "offset": 0,
+          "cd_offset": 0,
+          "signature": 1
+        },
+        "??_7IFGFeature_Dx12@@6BIFGFeature@@@": {
+          "rva": "0x176d8f0",
+          "col_rva": "0x17f74d0",
+          "offset": 920,
+          "cd_offset": 4,
+          "signature": 1
+        }
+      }
+    },
+    "IFeature": {
+      "size": 160,
+      "fields": {
+        "_isInited": 8,
+        "_featureFlags": 12,
+        "_initFlags": 16,
+        "_perfQualityValue": 24,
+        "_jitterInfo": 32,
+        "_initParameters": 96,
+        "_handle": 104,
+        "_sharpness": 112,
+        "_hasColor": 116,
+        "_hasDepth": 117,
+        "_hasMV": 118,
+        "_hasTM": 119,
+        "_accessToReactiveMask": 120,
+        "_hasExposure": 121,
+        "_hasOutput": 122,
+        "_renderWidth": 124,
+        "_renderHeight": 128,
+        "_targetWidth": 132,
+        "_targetHeight": 136,
+        "_displayWidth": 140,
+        "_displayHeight": 144,
+        "_frameCount": 148,
+        "_featureFrozen": 152,
+        "_moduleLoaded": 153
+      },
+      "symbols": {
+        "??_7IFeature@@6B@": {
+          "rva": "0x1796fe8",
+          "col_rva": "0x17f8ac8",
+          "offset": 0,
+          "cd_offset": 0,
+          "signature": 1
+        }
+      }
+    },
+    "IFGFeature": {
+      "size": 936,
+      "fields": {
+        "_jitterX": 8,
+        "_jitterY": 24,
+        "_mvScaleX": 40,
+        "_mvScaleY": 56,
+        "_cameraNear": 72,
+        "_cameraFar": 88,
+        "_cameraVFov": 104,
+        "_cameraAspectRatio": 120,
+        "_cameraPosition": 136,
+        "_cameraUp": 184,
+        "_cameraRight": 232,
+        "_cameraForward": 280,
+        "_meterFactor": 328,
+        "_ftDelta": 344,
+        "_interpolationWidth": 376,
+        "_interpolationHeight": 408,
+        "_interpolationLeft": 424,
+        "_interpolationTop": 456,
+        "_reset": 488,
+        "_frameCount": 504,
+        "_lastDispatchedFrame": 512,
+        "_lastFGFrame": 520,
+        "_waitingNewFrameData": 528,
+        "_framesToInterpolate": 532,
+        "_isActive": 536,
+        "_targetFrame": 544,
+        "_constants": 552,
+        "_resourceReady": 568,
+        "_resourceFrame": 824,
+        "_noHudless": 888,
+        "_noUi": 892,
+        "_noDistortionField": 896,
+        "_waitingExecute": 900,
+        "streamlineRiid": 904,
+        "Mutex": 920
+      },
+      "symbols": {
+        "??_7IFGFeature@@6B@": {
+          "rva": "0x1781d38",
+          "col_rva": "0x17f8050",
+          "offset": 0,
+          "cd_offset": 0,
+          "signature": 1
+        }
+      }
+    },
+    "FSR2Feature212": {
+      "size": 66488,
+      "fields": {
+        "_lastFrameTime": 16,
+        "_lastWidth": 24,
+        "_lastHeight": 28,
+        "_context": 32,
+        "_contextDesc": 66176
+      },
+      "symbols": {
+        "??_7FSR2Feature212@@6B0@@": {
+          "rva": "0x17b6958",
+          "col_rva": "0x17fcd70",
+          "offset": 0,
+          "cd_offset": 0,
+          "signature": 1
+        },
+        "??_7FSR2Feature212@@6BIFeature@@@": {
+          "rva": "0x17b69d8",
+          "col_rva": "0x17fcd48",
+          "offset": 66328,
+          "cd_offset": 4,
+          "signature": 1
+        }
+      }
+    },
+    "FSR2FeatureVkOnDx12_212": {
+      "size": 67528,
+      "fields": {
+        "_baseInit": 67272
+      },
+      "symbols": {
+        "??_8FSR2FeatureVkOnDx12_212@@7BIFeature_Vk@@@": {
+          "rva": "0x17b71c8",
+          "values": [
+            -8,
+            -176,
+            0,
+            968
+          ]
+        },
+        "??_8FSR2FeatureVkOnDx12_212@@7BIFeature_VkwDx12@@@": {
+          "rva": "0x17b71d0",
+          "values": [
+            0,
+            968,
+            1136,
+            0
+          ]
+        },
+        "??_7FSR2FeatureVkOnDx12_212@@6BFSR2Feature212@@@": {
+          "rva": "0x17b71c0",
+          "col_rva": "0x17fd480",
+          "offset": 0,
+          "cd_offset": 0,
+          "signature": 1
+        },
+        "??_8FSR2FeatureVkOnDx12_212@@7B@": {
+          "rva": "0x17b7208",
+          "values": [
+            -8,
+            67280,
+            67448,
+            0
+          ]
+        },
+        "??_7FSR2FeatureVkOnDx12_212@@6BIFeature@@@": {
+          "rva": "0x17b7190",
+          "col_rva": "0x17fd458",
+          "offset": 67288,
+          "cd_offset": 4,
+          "signature": 1
+        },
+        "??_7FSR2FeatureVkOnDx12_212@@6BIFeature_Vk@@@": {
+          "rva": "0x17b71e8",
+          "col_rva": "0x17fd430",
+          "offset": 67456,
+          "cd_offset": 4,
+          "signature": 1
+        }
+      }
+    },
+    "DLSSDFeatureDx11": {
+      "size": 256,
+      "fields": {},
+      "symbols": {
+        "??_8DLSSDFeatureDx11@@7BIFeature_Dx11@@@": {
+          "rva": "0x17b41d8",
+          "values": [
+            -8,
+            88,
+            -2122333224,
+            1
+          ]
+        },
+        "??_7DLSSDFeatureDx11@@6BIFeature_Dx11@@@": {
+          "rva": "0x17b41e8",
+          "col_rva": "0x17fc3d8",
+          "offset": 0,
+          "cd_offset": 0,
+          "signature": 1
+        },
+        "??_8DLSSDFeatureDx11@@7BDLSSDFeature@@@": {
+          "rva": "0x17b41d0",
+          "values": [
+            0,
+            40,
+            -8,
+            88
+          ]
+        },
+        "??_7DLSSDFeatureDx11@@6B@": {
+          "rva": "0x17b4200",
+          "col_rva": "0x17fc398",
+          "offset": 96,
+          "cd_offset": 4,
+          "signature": 1
+        }
+      }
+    },
+    "DLSSDFeatureVk": {
+      "size": 272,
+      "fields": {},
+      "symbols": {
+        "??_7DLSSDFeatureVk@@6B@": {
+          "rva": "0x17b49d0",
+          "col_rva": "0x17fc678",
+          "offset": 112,
+          "cd_offset": 4,
+          "signature": 1
+        },
+        "??_8DLSSDFeatureVk@@7BDLSSDFeature@@@": {
+          "rva": "0x17b4a18",
+          "values": [
+            0,
+            40,
+            1397967940,
+            0
+          ]
+        },
+        "??_8DLSSDFeatureVk@@7BIFeature_Vk@@@": {
+          "rva": "0x17b4a10",
+          "values": [
+            -8,
+            104,
+            0,
+            40
+          ]
+        },
+        "??_7DLSSDFeatureVk@@6BIFeature_Vk@@@": {
+          "rva": "0x17b4a00",
+          "col_rva": "0x17fc6a0",
+          "offset": 0,
+          "cd_offset": 0,
+          "signature": 1
+        }
+      }
+    },
+    "DLSSFeatureDx11": {
+      "size": 256,
+      "fields": {},
+      "symbols": {
+        "??_7DLSSFeatureDx11@@6B@": {
+          "rva": "0x17b57c8",
+          "col_rva": "0x17fc7e0",
+          "offset": 96,
+          "cd_offset": 4,
+          "signature": 1
+        },
+        "??_8DLSSFeatureDx11@@7BDLSSFeature@@@": {
+          "rva": "0x17b5810",
+          "values": [
+            0,
+            40,
+            1397967940,
+            1952539974
+          ]
+        },
+        "??_7DLSSFeatureDx11@@6BIFeature_Dx11@@@": {
+          "rva": "0x17b57f8",
+          "col_rva": "0x17fc808",
+          "offset": 0,
+          "cd_offset": 0,
+          "signature": 1
+        },
+        "??_8DLSSFeatureDx11@@7BIFeature_Dx11@@@": {
+          "rva": "0x17b5808",
+          "values": [
+            -8,
+            88,
+            0,
+            40
+          ]
+        }
+      }
+    },
+    "DLSSFeatureVk": {
+      "size": 272,
+      "fields": {},
+      "symbols": {
+        "??_7DLSSFeatureVk@@6B@": {
+          "rva": "0x17b5bb0",
+          "col_rva": "0x17fc9b0",
+          "offset": 112,
+          "cd_offset": 4,
+          "signature": 1
+        },
+        "??_8DLSSFeatureVk@@7BIFeature_Vk@@@": {
+          "rva": "0x17b5bf0",
+          "values": [
+            -8,
+            104,
+            0,
+            40
+          ]
+        },
+        "??_7DLSSFeatureVk@@6BIFeature_Vk@@@": {
+          "rva": "0x17b5be0",
+          "col_rva": "0x17fc9d8",
+          "offset": 0,
+          "cd_offset": 0,
+          "signature": 1
+        },
+        "??_8DLSSFeatureVk@@7BDLSSFeature@@@": {
+          "rva": "0x17b5bf8",
+          "values": [
+            0,
+            40,
+            1397967940,
+            1952539974
+          ]
+        }
+      }
+    },
+    "FSR2FeatureDx12": {
+      "size": 66544,
+      "fields": {},
+      "symbols": {
+        "??_8FSR2FeatureDx12@@7BFSR2Feature@@@": {
+          "rva": "0x17b6f20",
+          "values": [
+            -8,
+            66376,
+            0,
+            0
+          ]
+        },
+        "??_7FSR2FeatureDx12@@6BFSR2Feature@@@": {
+          "rva": "0x17b6eb0",
+          "col_rva": "0x17fd1e8",
+          "offset": 0,
+          "cd_offset": 0,
+          "signature": 1
+        },
+        "??_7FSR2FeatureDx12@@6BIFeature@@@": {
+          "rva": "0x17b6e68",
+          "col_rva": "0x17fd238",
+          "offset": 66384,
+          "cd_offset": 4,
+          "signature": 1
+        },
+        "??_8FSR2FeatureDx12@@7BIFeature_Dx12@@@": {
+          "rva": "0x17b6f18",
+          "values": [
+            -8,
+            48,
+            -8,
+            66376
+          ]
+        },
+        "??_7FSR2FeatureDx12@@6BIFeature_Dx12@@@": {
+          "rva": "0x17b6e98",
+          "col_rva": "0x17fd1c0",
+          "offset": 66328,
+          "cd_offset": 0,
+          "signature": 1
+        }
+      }
+    },
+    "FSR2FeatureDx12_212": {
+      "size": 66536,
+      "fields": {},
+      "symbols": {
+        "??_7FSR2FeatureDx12_212@@6BIFeature@@@": {
+          "rva": "0x17b6ec0",
+          "col_rva": "0x17fd148",
+          "offset": 66376,
+          "cd_offset": 4,
+          "signature": 1
+        },
+        "??_8FSR2FeatureDx12_212@@7BFSR2Feature212@@@": {
+          "rva": "0x17b6e58",
+          "values": [
+            -8,
+            66368,
+            -2122329544,
+            1
+          ]
+        },
+        "??_8FSR2FeatureDx12_212@@7BIFeature_Dx12@@@": {
+          "rva": "0x17b6f10",
+          "values": [
+            -8,
+            48,
+            -8,
+            48
+          ]
+        },
+        "??_7FSR2FeatureDx12_212@@6BIFeature_Dx12@@@": {
+          "rva": "0x17b6ef0",
+          "col_rva": "0x17fd170",
+          "offset": 66320,
+          "cd_offset": 0,
+          "signature": 1
+        },
+        "??_7FSR2FeatureDx12_212@@6BFSR2Feature212@@@": {
+          "rva": "0x17b6f08",
+          "col_rva": "0x17fd210",
+          "offset": 0,
+          "cd_offset": 0,
+          "signature": 1
+        }
+      }
+    },
+    "FSR31FeatureDx12": {
+      "size": 376,
+      "fields": {
+        "_autoExposure": 192,
+        "_customAutoExposure": 200
+      },
+      "symbols": {
+        "??_7FSR31FeatureDx12@@6BFSR31Feature@@@": {
+          "rva": "0x17ba340",
+          "col_rva": "0x17fd8d0",
+          "offset": 0,
+          "cd_offset": 0,
+          "signature": 1
+        },
+        "??_7FSR31FeatureDx12@@6BIFeature_Dx12@@@": {
+          "rva": "0x17ba360",
+          "col_rva": "0x17fd8f8",
+          "offset": 144,
+          "cd_offset": 0,
+          "signature": 1
+        },
+        "??_8FSR31FeatureDx12@@7BIFeature_Dx12@@@": {
+          "rva": "0x17ba350",
+          "values": [
+            -8,
+            64,
+            -2122327816,
+            1
+          ]
+        },
+        "??_8FSR31FeatureDx12@@7BFSR31Feature@@@": {
+          "rva": "0x17ba348",
+          "values": [
+            -8,
+            208,
+            -8,
+            64
+          ]
+        },
+        "??_7FSR31FeatureDx12@@6BIFeature@@@": {
+          "rva": "0x17ba378",
+          "col_rva": "0x17fd8a8",
+          "offset": 216,
+          "cd_offset": 4,
+          "signature": 1
+        }
+      }
+    },
+    "XeSSFeatureDx12": {
+      "size": 264,
+      "fields": {},
+      "symbols": {
+        "??_8XeSSFeatureDx12@@7BXeSSFeature@@@": {
+          "rva": "0x17b6e08",
+          "values": [
+            0,
+            56,
+            -2122329824,
+            1
+          ]
+        },
+        "??_7XeSSFeatureDx12@@6B@": {
+          "rva": "0x17b6e18",
+          "col_rva": "0x17fd120",
+          "offset": 104,
+          "cd_offset": 4,
+          "signature": 1
+        },
+        "??_7XeSSFeatureDx12@@6BIFeature_Dx12@@@": {
+          "rva": "0x17b6e48",
+          "col_rva": "0x17fd198",
+          "offset": 0,
+          "cd_offset": 0,
+          "signature": 1
+        },
+        "??_8XeSSFeatureDx12@@7BIFeature_Dx12@@@": {
+          "rva": "0x17b6e00",
+          "values": [
+            -8,
+            96,
+            0,
+            56
+          ]
+        }
+      }
+    },
+    "FSRFG_Dx12": {
+      "size": 2144,
+      "fields": {
+        "_swapChainContext": 8,
+        "_fgContext": 16,
+        "_lastHudlessFormat": 24,
+        "_usingHudlessFormat": 28,
+        "_version": 32,
+        "_linkedHudlesDesc": 44,
+        "_maxRenderWidth": 48,
+        "_maxRenderHeight": 52,
+        "_hudCopy": 56,
+        "_hudlessTransfer": 88,
+        "_hudlessCopyResource": 120,
+        "_uiTransfer": 152,
+        "_uiCopyResource": 184,
+        "_fgCommandList": 216,
+        "_fgCommandAllocator": 248
+      },
+      "symbols": {
+        "??_8FSRFG_Dx12@@7BIFGFeature_Dx12@@@": {
+          "rva": "0x1781d90",
+          "values": [
+            -8,
+            -952,
+            0,
+            288
+          ]
+        },
+        "??_7FSRFG_Dx12@@6BIFGFeature_Dx12@@@": {
+          "rva": "0x176d7c0",
+          "col_rva": "0x17f4078",
+          "offset": 1232,
+          "cd_offset": 4,
+          "signature": 1
+        },
+        "??_8FSRFG_Dx12@@7B0@@": {
+          "rva": "0x1781d98",
+          "values": [
+            0,
+            288,
+            1232,
+            0
+          ]
+        },
+        "??_7FSRFG_Dx12@@6BIFGFeature@@@": {
+          "rva": "0x176d828",
+          "col_rva": "0x17f40a0",
+          "offset": 288,
+          "cd_offset": 4,
+          "signature": 1
+        }
+      }
+    },
+    "XeFG_Dx12": {
+      "size": 1912,
+      "fields": {
+        "_swapChainContext": 8,
+        "_fgContext": 16,
+        "_width": 24,
+        "_height": 28,
+        "_infiniteDepth": 32,
+        "_haveHudless": 33,
+        "_uiComposition": 35,
+        "_depthInvert": 40
+      },
+      "symbols": {
+        "??_7XeFG_Dx12@@6BIFGFeature_Dx12@@@": {
+          "rva": "0x1781c58",
+          "col_rva": "0x17f8000",
+          "offset": 1000,
+          "cd_offset": 4,
+          "signature": 1
+        },
+        "??_8XeFG_Dx12@@7B0@@": {
+          "rva": "0x1781d20",
+          "values": [
+            0,
+            56,
+            1000,
+            0
+          ]
+        },
+        "??_8XeFG_Dx12@@7BIFGFeature_Dx12@@@": {
+          "rva": "0x1781d18",
+          "values": [
+            -8,
+            -952,
+            0,
+            56
+          ]
+        },
+        "??_7XeFG_Dx12@@6BIFGFeature@@@": {
+          "rva": "0x1781cc0",
+          "col_rva": "0x17f8028",
+          "offset": 56,
+          "cd_offset": 4,
+          "signature": 1
+        }
+      }
+    },
+    "FSR31Feature": {
+      "size": 312,
+      "fields": {
+        "_lastFrameTime": 16,
+        "_lastWidth": 24,
+        "_lastHeight": 28,
+        "_name": 32,
+        "_context": 64,
+        "_contextDesc": 72,
+        "_velocity": 120,
+        "_reactiveScale": 124,
+        "_shadingScale": 128,
+        "_accAddPerFrame": 132,
+        "_minDisOccAcc": 136
+      },
+      "symbols": {
+        "??_7FSR31Feature@@6BIFeature@@@": {
+          "rva": "0x17b8698",
+          "col_rva": "0x17fd5c0",
+          "offset": 152,
+          "cd_offset": 4,
+          "signature": 1
+        },
+        "??_7FSR31Feature@@6B0@@": {
+          "rva": "0x17b8688",
+          "col_rva": "0x17fd598",
+          "offset": 0,
+          "cd_offset": 0,
+          "signature": 1
+        }
+      }
+    },
+    "FSR31FeatureVkOn12": {
+      "size": 1352,
+      "fields": {
+        "_baseInit": 1096
+      },
+      "symbols": {
+        "??_8FSR31FeatureVkOn12@@7B@": {
+          "rva": "0x1796f28",
+          "values": [
+            -8,
+            1104,
+            1272,
+            0
+          ]
+        },
+        "??_7FSR31FeatureVkOn12@@6BIFeature@@@": {
+          "rva": "0x1796f48",
+          "col_rva": "0x17f89c8",
+          "offset": 1112,
+          "cd_offset": 4,
+          "signature": 1
+        },
+        "??_8FSR31FeatureVkOn12@@7BIFeature_Vk@@@": {
+          "rva": "0x1796f20",
+          "values": [
+            -8,
+            -176,
+            -8,
+            1104
+          ]
+        },
+        "??_7FSR31FeatureVkOn12@@6BFSR31Feature@@@": {
+          "rva": "0x1796f90",
+          "col_rva": "0x17f8a40",
+          "offset": 0,
+          "cd_offset": 0,
+          "signature": 1
+        },
+        "??_8FSR31FeatureVkOn12@@7BIFeature_VkwDx12@@@": {
+          "rva": "0x1796f34",
+          "values": [
+            0,
+            968,
+            1136,
+            -2122348088
+          ]
+        },
+        "??_7FSR31FeatureVkOn12@@6BIFeature_Vk@@@": {
+          "rva": "0x1796f78",
+          "col_rva": "0x17f89f0",
+          "offset": 1280,
+          "cd_offset": 4,
+          "signature": 1
+        }
+      }
+    },
+    "DLSSDFeature": {
+      "size": 200,
+      "fields": {
+        "_version": 8,
+        "_dlssdHandle": 20,
+        "_p_dlssdHandle": 24
+      },
+      "symbols": {
+        "??_7DLSSDFeature@@6B@": {
+          "rva": "0x17b3dd8",
+          "col_rva": "0x17fc270",
+          "offset": 40,
+          "cd_offset": 4,
+          "signature": 1
+        }
+      }
+    },
+    "DLSSDFeatureDx12": {
+      "size": 248,
+      "fields": {},
+      "symbols": {
+        "??_8DLSSDFeatureDx12@@7BDLSSDFeature@@@": {
+          "rva": "0x17b46c0",
+          "values": [
+            0,
+            40,
+            -8,
+            80
+          ]
+        },
+        "??_7DLSSDFeatureDx12@@6B@": {
+          "rva": "0x17b4698",
+          "col_rva": "0x17fc590",
+          "offset": 88,
+          "cd_offset": 4,
+          "signature": 1
+        },
+        "??_8DLSSDFeatureDx12@@7BIFeature_Dx12@@@": {
+          "rva": "0x17b46c8",
+          "values": [
+            -8,
+            80,
+            1196316238,
+            1869762648
+          ]
+        },
+        "??_7DLSSDFeatureDx12@@6BIFeature_Dx12@@@": {
+          "rva": "0x17b4680",
+          "col_rva": "0x17fc568",
+          "offset": 0,
+          "cd_offset": 0,
+          "signature": 1
+        }
+      }
+    },
+    "DLSSFeature": {
+      "size": 200,
+      "fields": {
+        "_version": 8,
+        "_dlssHandle": 20,
+        "_p_dlssHandle": 24
+      },
+      "symbols": {
+        "??_7DLSSFeature@@6B@": {
+          "rva": "0x17b5520",
+          "col_rva": "0x17fc720",
+          "offset": 40,
+          "cd_offset": 4,
+          "signature": 1
+        }
+      }
+    },
+    "DLSSFeatureDx12": {
+      "size": 248,
+      "fields": {},
+      "symbols": {
+        "??_8DLSSFeatureDx12@@7BDLSSFeature@@@": {
+          "rva": "0x17b5b54",
+          "values": [
+            0,
+            40,
+            0,
+            -2122331960
+          ]
+        },
+        "??_7DLSSFeatureDx12@@6B@": {
+          "rva": "0x17b5b68",
+          "col_rva": "0x17fc8c8",
+          "offset": 88,
+          "cd_offset": 4,
+          "signature": 1
+        },
+        "??_7DLSSFeatureDx12@@6BIFeature_Dx12@@@": {
+          "rva": "0x17b5b98",
+          "col_rva": "0x17fc8f0",
+          "offset": 0,
+          "cd_offset": 0,
+          "signature": 1
+        },
+        "??_8DLSSFeatureDx12@@7BIFeature_Dx12@@@": {
+          "rva": "0x17b5b4c",
+          "values": [
+            -8,
+            80,
+            0,
+            40
+          ]
+        }
+      }
+    },
+    "FSR2Feature": {
+      "size": 66496,
+      "fields": {
+        "_lastFrameTime": 16,
+        "_lastWidth": 24,
+        "_lastHeight": 28,
+        "_context": 32,
+        "_contextDesc": 66176
+      },
+      "symbols": {
+        "??_7FSR2Feature@@6BIFeature@@@": {
+          "rva": "0x17b6a18",
+          "col_rva": "0x17fce88",
+          "offset": 66336,
+          "cd_offset": 4,
+          "signature": 1
+        },
+        "??_7FSR2Feature@@6B0@@": {
+          "rva": "0x17b6a70",
+          "col_rva": "0x17fceb0",
+          "offset": 0,
+          "cd_offset": 0,
+          "signature": 1
+        }
+      }
+    },
+    "FSR2FeatureDx11": {
+      "size": 66648,
+      "fields": {
+        "bufferColor": 66384,
+        "bufferDepth": 66416,
+        "bufferVelocity": 66448
+      },
+      "symbols": {
+        "??_8FSR2FeatureDx11@@7BFSR2Feature@@@": {
+          "rva": "0x17be480",
+          "values": [
+            -8,
+            66480,
+            0,
+            0
+          ]
+        },
+        "??_7FSR2FeatureDx11@@6BFSR2Feature@@@": {
+          "rva": "0x17be478",
+          "col_rva": "0x17fe058",
+          "offset": 0,
+          "cd_offset": 0,
+          "signature": 1
+        },
+        "??_8FSR2FeatureDx11@@7BIFeature_Dx11@@@": {
+          "rva": "0x17be468",
+          "values": [
+            -8,
+            152,
+            -2122325928,
+            1
+          ]
+        },
+        "??_7FSR2FeatureDx11@@6BIFeature_Dx11@@@": {
+          "rva": "0x17be428",
+          "col_rva": "0x17fe008",
+          "offset": 66328,
+          "cd_offset": 0,
+          "signature": 1
+        },
+        "??_7FSR2FeatureDx11@@6BIFeature@@@": {
+          "rva": "0x17be440",
+          "col_rva": "0x17fe030",
+          "offset": 66488,
+          "cd_offset": 4,
+          "signature": 1
+        }
+      }
+    },
+    "FSR2FeatureDx11on12": {
+      "size": 67168,
+      "fields": {
+        "_baseInit": 66928
+      },
+      "symbols": {
+        "??_8FSR2FeatureDx11on12@@7B@": {
+          "rva": "0x17b6a00",
+          "values": [
+            -8,
+            66936,
+            67104,
+            0
+          ]
+        },
+        "??_7FSR2FeatureDx11on12@@6BFSR2Feature@@@": {
+          "rva": "0x17b6a48",
+          "col_rva": "0x17fce60",
+          "offset": 0,
+          "cd_offset": 0,
+          "signature": 1
+        },
+        "??_7FSR2FeatureDx11on12@@6BIFeature_Dx11@@@": {
+          "rva": "0x17b6978",
+          "col_rva": "0x17fcd98",
+          "offset": 67112,
+          "cd_offset": 4,
+          "signature": 1
+        },
+        "??_8FSR2FeatureDx11on12@@7BIFeature_Dx11wDx12@@@": {
+          "rva": "0x17b6a58",
+          "values": [
+            0,
+            616,
+            784,
+            0
+          ]
+        },
+        "??_7FSR2FeatureDx11on12@@6BIFeature@@@": {
+          "rva": "0x17b6990",
+          "col_rva": "0x17fcdc0",
+          "offset": 66944,
+          "cd_offset": 4,
+          "signature": 1
+        },
+        "??_8FSR2FeatureDx11on12@@7BIFeature_Dx11@@@": {
+          "rva": "0x17b6a50",
+          "values": [
+            -8,
+            -176,
+            0,
+            616
+          ]
+        }
+      }
+    },
+    "FSR2FeatureDx11on12_212": {
+      "size": 67160,
+      "fields": {
+        "_baseInit": 66920
+      },
+      "symbols": {
+        "??_8FSR2FeatureDx11on12_212@@7BIFeature_Dx11wDx12@@@": {
+          "rva": "0x17b69b8",
+          "values": [
+            0,
+            616,
+            784,
+            -8
+          ]
+        },
+        "??_8FSR2FeatureDx11on12_212@@7BIFeature_Dx11@@@": {
+          "rva": "0x17b6948",
+          "values": [
+            -8,
+            -176,
+            -2122330768,
+            1
+          ]
+        },
+        "??_7FSR2FeatureDx11on12_212@@6BIFeature@@@": {
+          "rva": "0x17b6910",
+          "col_rva": "0x17fce10",
+          "offset": 66936,
+          "cd_offset": 4,
+          "signature": 1
+        },
+        "??_8FSR2FeatureDx11on12_212@@7B@": {
+          "rva": "0x17b69c4",
+          "values": [
+            -8,
+            66928,
+            67096,
+            -2122330808
+          ]
+        },
+        "??_7FSR2FeatureDx11on12_212@@6BIFeature_Dx11@@@": {
+          "rva": "0x17b68f8",
+          "col_rva": "0x17fcde8",
+          "offset": 67104,
+          "cd_offset": 4,
+          "signature": 1
+        },
+        "??_7FSR2FeatureDx11on12_212@@6BFSR2Feature212@@@": {
+          "rva": "0x17b6940",
+          "col_rva": "0x17fce38",
+          "offset": 0,
+          "cd_offset": 0,
+          "signature": 1
+        }
+      }
+    },
+    "FSR31FeatureDx11": {
+      "size": 2098120,
+      "fields": {
+        "bufferColor": 200,
+        "bufferDepth": 232,
+        "bufferVelocity": 264,
+        "_upscalerContext": 296,
+        "_upscalerContextDesc": 2097448
+      },
+      "symbols": {
+        "??_7FSR31FeatureDx11@@6BIFeature_Dx11@@@": {
+          "rva": "0x17b9060",
+          "col_rva": "0x17fd680",
+          "offset": 144,
+          "cd_offset": 0,
+          "signature": 1
+        },
+        "??_7FSR31FeatureDx11@@6BFSR31Feature@@@": {
+          "rva": "0x17b9050",
+          "col_rva": "0x17fd6d0",
+          "offset": 0,
+          "cd_offset": 0,
+          "signature": 1
+        },
+        "??_8FSR31FeatureDx11@@7BFSR31Feature@@@": {
+          "rva": "0x17b9070",
+          "values": [
+            -8,
+            2097952,
+            -8,
+            2097808
+          ]
+        },
+        "??_7FSR31FeatureDx11@@6BIFeature@@@": {
+          "rva": "0x17b9020",
+          "col_rva": "0x17fd6a8",
+          "offset": 2097960,
+          "cd_offset": 4,
+          "signature": 1
+        },
+        "??_8FSR31FeatureDx11@@7BIFeature_Dx11@@@": {
+          "rva": "0x17b9078",
+          "values": [
+            -8,
+            2097808,
+            861033286,
+            1634027057
+          ]
+        }
+      }
+    },
+    "FSR31FeatureDx11on12": {
+      "size": 984,
+      "fields": {
+        "_baseInit": 744
+      },
+      "symbols": {
+        "??_8FSR31FeatureDx11on12@@7B@": {
+          "rva": "0x17b993c",
+          "values": [
+            -8,
+            752,
+            920,
+            0
+          ]
+        },
+        "??_7FSR31FeatureDx11on12@@6BIFeature_Dx11@@@": {
+          "rva": "0x17b9908",
+          "col_rva": "0x17fd6f8",
+          "offset": 928,
+          "cd_offset": 4,
+          "signature": 1
+        },
+        "??_7FSR31FeatureDx11on12@@6BFSR31Feature@@@": {
+          "rva": "0x17b9920",
+          "col_rva": "0x17fd720",
+          "offset": 0,
+          "cd_offset": 0,
+          "signature": 1
+        },
+        "??_7FSR31FeatureDx11on12@@6BIFeature@@@": {
+          "rva": "0x17b98d8",
+          "col_rva": "0x17fd748",
+          "offset": 760,
+          "cd_offset": 4,
+          "signature": 1
+        },
+        "??_8FSR31FeatureDx11on12@@7BIFeature_Dx11wDx12@@@": {
+          "rva": "0x17b9928",
+          "values": [
+            0,
+            616,
+            784,
+            -8
+          ]
+        },
+        "??_8FSR31FeatureDx11on12@@7BIFeature_Dx11@@@": {
+          "rva": "0x17b9934",
+          "values": [
+            -8,
+            -176,
+            -8,
+            752
+          ]
+        }
+      }
+    },
+    "XeSSFeature_Dx11": {
+      "size": 288,
+      "fields": {
+        "_version": 8,
+        "_xessContext": 40,
+        "_xessInitFlags": 48,
+        "dumpCount": 52
+      },
+      "symbols": {
+        "??_8XeSSFeature_Dx11@@7B0@@": {
+          "rva": "0x17edcf0",
+          "values": [
+            0,
+            64,
+            232,
+            0
+          ]
+        },
+        "??_8XeSSFeature_Dx11@@7BIFeature_Dx11@@@": {
+          "rva": "0x17edcd0",
+          "values": [
+            -8,
+            -176,
+            -2122322536,
+            1
+          ]
+        },
+        "??_7XeSSFeature_Dx11@@6BIFeature@@@": {
+          "rva": "0x17edca8",
+          "col_rva": "0x17fed70",
+          "offset": 64,
+          "cd_offset": 4,
+          "signature": 1
+        },
+        "??_7XeSSFeature_Dx11@@6BIFeature_Dx11@@@": {
+          "rva": "0x17edce0",
+          "col_rva": "0x17fed98",
+          "offset": 232,
+          "cd_offset": 4,
+          "signature": 1
+        }
+      }
+    },
+    "XeSSFeature": {
+      "size": 216,
+      "fields": {
+        "_localPipeline": 8,
+        "_localBufferHeap": 16,
+        "_localTextureHeap": 24,
+        "_xessContext": 32,
+        "_xessInitFlags": 40,
+        "dumpCount": 44
+      },
+      "symbols": {
+        "??_7XeSSFeature@@6B@": {
+          "rva": "0x17ed668",
+          "col_rva": "0x17fed28",
+          "offset": 56,
+          "cd_offset": 4,
+          "signature": 1
+        }
+      }
+    },
+    "XeSSFeatureDx11on12": {
+      "size": 888,
+      "fields": {
+        "_baseInit": 648
+      },
+      "symbols": {
+        "??_8XeSSFeatureDx11on12@@7B@": {
+          "rva": "0x17ee2b0",
+          "values": [
+            0,
+            664,
+            832,
+            0
+          ]
+        },
+        "??_7XeSSFeatureDx11on12@@6B@": {
+          "rva": "0x17ee288",
+          "col_rva": "0x17fee00",
+          "offset": 664,
+          "cd_offset": 4,
+          "signature": 1
+        },
+        "??_7XeSSFeatureDx11on12@@6BIFeature_Dx11@@@": {
+          "rva": "0x17ee270",
+          "col_rva": "0x17fee28",
+          "offset": 832,
+          "cd_offset": 4,
+          "signature": 1
+        },
+        "??_8XeSSFeatureDx11on12@@7BIFeature_Dx11wDx12@@@": {
+          "rva": "0x17ee25c",
+          "values": [
+            0,
+            616,
+            784,
+            -2122322392
+          ]
+        },
+        "??_8XeSSFeatureDx11on12@@7BIFeature_Dx11@@@": {
+          "rva": "0x17ee254",
+          "values": [
+            -8,
+            -176,
+            0,
+            616
+          ]
+        }
+      }
+    },
+    "FSR2FeatureVk": {
+      "size": 66576,
+      "fields": {
+        "_velocityConvert": 66400
+      },
+      "symbols": {
+        "??_7FSR2FeatureVk@@6BIFeature@@@": {
+          "rva": "0x17b7280",
+          "col_rva": "0x17fd4d0",
+          "offset": 66416,
+          "cd_offset": 4,
+          "signature": 1
+        },
+        "??_7FSR2FeatureVk@@6BFSR2Feature@@@": {
+          "rva": "0x17b72c8",
+          "col_rva": "0x17fd520",
+          "offset": 0,
+          "cd_offset": 0,
+          "signature": 1
+        },
+        "??_8FSR2FeatureVk@@7BIFeature_Vk@@@": {
+          "rva": "0x17b72d0",
+          "values": [
+            -8,
+            80,
+            844256070,
+            1952539974
+          ]
+        },
+        "??_7FSR2FeatureVk@@6BIFeature_Vk@@@": {
+          "rva": "0x17b72b0",
+          "col_rva": "0x17fd4f8",
+          "offset": 66328,
+          "cd_offset": 0,
+          "signature": 1
+        },
+        "??_8FSR2FeatureVk@@7BFSR2Feature@@@": {
+          "rva": "0x17b7270",
+          "values": [
+            -8,
+            66408,
+            -2122328880,
+            1
+          ]
+        }
+      }
+    },
+    "FSR2FeatureVk212": {
+      "size": 66568,
+      "fields": {
+        "_velocityConvert": 66392
+      },
+      "symbols": {
+        "??_7FSR2FeatureVk212@@6BFSR2Feature212@@@": {
+          "rva": "0x17b7268",
+          "col_rva": "0x17fd570",
+          "offset": 0,
+          "cd_offset": 0,
+          "signature": 1
+        },
+        "??_8FSR2FeatureVk212@@7BIFeature_Vk@@@": {
+          "rva": "0x17b71f8",
+          "values": [
+            -8,
+            80,
+            -8,
+            66400
+          ]
+        },
+        "??_7FSR2FeatureVk212@@6BIFeature@@@": {
+          "rva": "0x17b7220",
+          "col_rva": "0x17fd4a8",
+          "offset": 66408,
+          "cd_offset": 4,
+          "signature": 1
+        },
+        "??_8FSR2FeatureVk212@@7BFSR2Feature212@@@": {
+          "rva": "0x17b7200",
+          "values": [
+            -8,
+            66400,
+            -8,
+            67280
+          ]
+        },
+        "??_7FSR2FeatureVk212@@6BIFeature_Vk@@@": {
+          "rva": "0x17b7250",
+          "col_rva": "0x17fd548",
+          "offset": 66320,
+          "cd_offset": 0,
+          "signature": 1
+        }
+      }
+    },
+    "FSR31FeatureVk": {
+      "size": 416,
+      "fields": {
+        "_configure": 216,
+        "_dispatch": 224,
+        "_destroyContext": 232,
+        "_velocityConvert": 240
+      },
+      "symbols": {
+        "??_7FSR31FeatureVk@@6BFSR31Feature@@@": {
+          "rva": "0x17babd0",
+          "col_rva": "0x17fda08",
+          "offset": 0,
+          "cd_offset": 0,
+          "signature": 1
+        },
+        "??_7FSR31FeatureVk@@6BIFeature_Vk@@@": {
+          "rva": "0x17babf0",
+          "col_rva": "0x17fd9b8",
+          "offset": 144,
+          "cd_offset": 0,
+          "signature": 1
+        },
+        "??_7FSR31FeatureVk@@6BIFeature@@@": {
+          "rva": "0x17bac08",
+          "col_rva": "0x17fd9e0",
+          "offset": 256,
+          "cd_offset": 4,
+          "signature": 1
+        },
+        "??_8FSR31FeatureVk@@7BFSR31Feature@@@": {
+          "rva": "0x17babd8",
+          "values": [
+            -8,
+            248,
+            -8,
+            104
+          ]
+        },
+        "??_8FSR31FeatureVk@@7BIFeature_Vk@@@": {
+          "rva": "0x17babe0",
+          "values": [
+            -8,
+            104,
+            -2122327624,
+            1
+          ]
+        }
+      }
+    },
+    "XeSSFeature_Vk": {
+      "size": 304,
+      "fields": {
+        "_version": 8,
+        "_xessContext": 40,
+        "_xessInitFlags": 48,
+        "dumpCount": 52
+      },
+      "symbols": {
+        "??_8XeSSFeature_Vk@@7BIFeature_Vk@@@": {
+          "rva": "0x17f185c",
+          "values": [
+            -8,
+            -176,
+            0,
+            -2122321968
+          ]
+        },
+        "??_8XeSSFeature_Vk@@7B0@@": {
+          "rva": "0x17f1850",
+          "values": [
+            0,
+            64,
+            232,
+            -8
+          ]
+        },
+        "??_7XeSSFeature_Vk@@6BIFeature@@@": {
+          "rva": "0x17f1870",
+          "col_rva": "0x17fefd0",
+          "offset": 64,
+          "cd_offset": 4,
+          "signature": 1
+        },
+        "??_7XeSSFeature_Vk@@6BIFeature_Vk@@@": {
+          "rva": "0x17f1840",
+          "col_rva": "0x17feff8",
+          "offset": 232,
+          "cd_offset": 4,
+          "signature": 1
+        }
+      }
+    }
+  }
+}

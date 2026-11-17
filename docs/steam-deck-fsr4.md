@@ -1,50 +1,11 @@
-# Steam Deck FSR 4.1.1b
+# Steam Deck FSR 4.1.2
 
-Close the game, install OptiScaler through the plugin if needed, and select
-**FSR 4.1.1b — Steam Deck** under Basic → Override upscaler with. The first use
-requires a download (about 3.5 MB); later games reuse the verified cached DLL.
-Download or validation failure leaves the previous DLL and settings intact.
+Use the [PBZ guide](phantom-blade-zero.md) for installation, required game settings, validation and complete restoration.
 
-This option installs the community `amd_fidelityfx_upscaler_dx12.dll` from
-[the3rdparty1917/fsr4xyz 4.1.1b](https://github.com/the3rdparty1917/fsr4xyz/releases/tag/4.1.1b).
-The release describes an RDNA2 ghosting fix. Archive and DLL SHA-256 values are
-pinned in the plugin. The SDK's version resource still says 4.1.1, so Setup
-identifies the build by its bytes instead of relying on that version string.
+The complete official OptiScaler 0.9.5 package includes FFX SDK 2.4 and FSR 4.1.2, with official RDNA2 and selected APU support (some APUs are excluded). The core recognizes the Steam Deck APU path; automatic APU model selection defaults to model 3 Lite. File presence and saved settings do not prove which model is active on a Steam Deck; verify the in-game watermark. The package also keeps the separately verified community **4.1.1b INT8 RDNA2 ghosting fix** as an optional, explicitly selected preset.
 
-The plugin still bundles OptiScaler runtime **0.9.4**, including the original
-SDK **4.1.1**. OptiScaler Client **1.0.7** is a separate management application;
-it is not required or installed by this plugin.
+For the official path, select **FSR 3.X/4** in **Settings → Basic**. It sets `Fsr4ForceEnableInt8=auto` and `Fsr4Update=true`; OptiScaler chooses the supported model, with APU automatic selection defaulting to model 3 Lite. No community INT8 override is needed for the official RDNA2/APU support. The optional community preset uses its own bundled DLL and is selected explicitly.
 
-## Settings and verification
+To use the community path on Steam Deck, select **FSR 4.1.1b — Steam Deck** in **Settings → Basic**. The choice is unchanged from earlier plugin versions and is never forced during an upgrade. To return to the official path, use **Installed Files & FSR 4 → Restore bundled upscaler**, then select **FSR 3.X/4** in Basic. Frame-generation settings remain user-controlled. **Restore previous install** restores the full previous snapshot; **Remove** restores the earliest original game files and recorded launch options.
 
-The option selects the FidelityFX backend (`fsr31` for DX12), sets
-`Fsr4ForceEnableInt8=true`, `UpscalerIndex=0`, and resets `Fsr4Update` and
-`Fsr4Preset` to `auto`. DX11/Vulkan select the existing DX12 bridge backend.
-INT8 initialization requires a fresh game launch. Per-game compatibility still
-applies; the preset cannot add upscaler inputs to an unsupported game.
-
-Launch the game and use its supported upscaler input (for example XeSS in the
-Cyberpunk setup tested here). Enable the FSR watermark in OptiScaler to confirm
-`FSR4-I8`; plain FSR3 indicates fallback. Setup identifies the installed patch,
-while the watermark identifies the model actually running.
-
-This is experimental community support for RDNA2. Evaluate motion/ghosting,
-image quality and base frame rate in the same scene before and after enabling.
-It does not fix or enable FSR4 frame generation. You may keep FSR3 frame generation
-with FSR4 upscaling; test stability separately. Avoid modified DLLs in games whose
-anti-cheat forbids them.
-
-## Switching back
-
-Choose FSR 3.X or another upscaler in Basic settings to change the active backend.
-The community DLL stays installed for later use. To remove the patch, close the
-game and choose **Restore bundled upscaler** in Setup. This keeps settings intact;
-INT8 configured by hand or retained after restore is labelled **FSR 4 INT8 (manual)**.
-
-Reinstall preserves a verified community DLL. If that DLL is missing or altered,
-reinstall stops with repair instructions instead of silently replacing the patch.
-Select the Steam Deck option again to repair it, or restore the bundled DLL.
-Uninstall restores the game's original backed-up files, not the OptiScaler SDK.
-
-The source release and pinned hashes should be reviewed before updating to a new
-community build. Older 4.0.2 community variants are outside this feature's scope.
+The [matching live bridge](live-control.md) can apply supported per-frame settings, backends and available FFX-version changes after a confirmed game response. Model/provider selection, INT8 and loader changes still require restarting the game. Check the watermark for `FSR4`, `FSR4-i8`, `FSR4-i8-2` or `FSR4L-i8`; `FSR3` means the game fell back instead of using FSR4. The existing Steam Deck evidence comes from the earlier pre5 build, not this final package.

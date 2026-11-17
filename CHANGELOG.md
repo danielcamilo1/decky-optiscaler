@@ -1,7 +1,48 @@
 # Changelog
 
+## [0.0.8] - 2026-11-17
+
+The first formal 0.0.8 release bundles the complete official OptiScaler 0.9.5 package.
+
+### Added
+
+- Official FFX SDK 2.4 and FSR 4.1.2, with official support for RDNA2 and some APUs.
+- Automatic upgrades for recognized managed 0.9.4 and 0.9.5-pre5 installs, preserving the INI, installed components, launch options and a restore snapshot.
+- A live-control bridge calibrated against the 0.9.5 core and PDB, retaining all 14 live controls.
+
+### Changed
+
+- Keep **FSR 4.1.1b — Steam Deck** as an explicit optional community preset. Existing selections are preserved during upgrades and are not silently changed to the official upscaler.
+- Require checking the FSR4 watermark to confirm the active model. Existing Steam Deck evidence is from the pre5 build and does not verify the final package on-device.
+
+[0.0.8]: https://github.com/zesming/decky-optiscaler/releases/tag/v0.0.8
+
+## 0.0.8-pbz.3 (experimental)
+
+- Automatically upgrade recognized managed 0.9.4 installs when opened with the game closed, preserving settings and taking a restore point; respect explicit rollback.
+- Keep Setup notes aligned with the wiki, preserve explicit nofg choices, and show the wiki FG path only when frame generation is enabled.
+
+## 0.0.8-pbz.2 (experimental)
+
+- Adapt the complete native live-control scope to the pinned pre5 core, including backend and dynamic FFX selection.
+- Separate saved settings, session-bound configuration requests and observed runtime state; reject stale version selections.
+- Preserve snapshot and Remove recovery for the bridge, loader configuration and control files.
+- Report connection readiness and unknown telemetry accurately; retain restart requirements for model/provider and startup settings.
+
+## 0.0.8-pbz.1 (experimental)
+
+- Pin the official 0.9.5-pre5 core and community FSR4.1.1b archive; surface PBZ's version, executable folder and 100% output-scale requirements.
+- Add an explicit Steam Deck / LSFG experiment, pre-experiment restore points, and full removal of new experiment resources.
+- Preserve original INI/files, user launch wrappers and component ownership; recover failed file transactions.
+- Correct automatic-setting refresh, failed optimistic writes and cross-game async state; strengthen behavior assertions.
+- Disable the incompatible 0.9.4 live ASI. Settings require restarting the game.
+- Verify Gaming Mode loading and real snapshot/Remove/reinstall recovery on one OLED; restore the exact managed configuration and retain the user's saves. No measured FPS or long-session stability claim is made.
+- Keep PBZ's special target/version rules per game, including explicitly selected wiki identities for renamed shortcuts, while preserving generic plans for other games.
+
+
 Newest first. Each release ships `Decky OptiScaler.zip` for Decky Loader's
-*Install from URL* (Developer mode), and bundles **OptiScaler 0.9.4**.
+*Install from URL* (Developer mode). The experimental 0.0.8-pbz entries above
+document earlier builds; historical releases below bundle **0.9.4**.
 
 ## [Unreleased]
 

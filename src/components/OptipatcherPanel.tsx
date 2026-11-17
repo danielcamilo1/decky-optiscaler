@@ -12,7 +12,15 @@ import { Notice } from "./Common";
  * DXGI. Games differ on whether they need it, so it stays opt-in rather than
  * being installed for everyone.
  */
-export function OptipatcherPanel({ targetDir }: { targetDir: string }) {
+export function OptipatcherPanel({
+  targetDir,
+  onBeforeMutation,
+  onChanged,
+}: {
+  targetDir: string;
+  onBeforeMutation?: () => Promise<void> | void;
+  onChanged?: () => Promise<void> | void;
+}) {
   const [status, setStatus] = useState<OptipatcherStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -35,8 +43,10 @@ export function OptipatcherPanel({ targetDir }: { targetDir: string }) {
     setBusy(true);
     setError(null);
     try {
+      await onBeforeMutation?.();
       const result = await installOptipatcher(targetDir, enabled);
       if (!result.ok) setError(result.error ?? "Could not change OptiPatcher");
+      else await onChanged?.();
       await refresh();
     } catch (exc) {
       setError(String(exc));

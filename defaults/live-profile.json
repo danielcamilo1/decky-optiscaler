@@ -1,0 +1,417 @@
+{
+  "schema": 7,
+  "profile_id": "optiscaler-0.9.5-90d9568",
+  "build_id": "decky-live-095-v1",
+  "source_commit": "90d9568d576d93ebb2d6c1c207596d21e9900651",
+  "core_sha256": "e2300905b2b7e6e14c8c4b02c0c555c4582fafc92a2e36e117ce027b7e259d59",
+  "pe": {
+    "machine": 34404,
+    "timestamp": 1794854869,
+    "size_of_image": 26124288
+  },
+  "rsds": {
+    "guid": "0d15e219-e646-4c8a-a03a-f682cbeff6e6",
+    "guid_bytes": "19e2150d46e68a4ca03af682cbeff6e6",
+    "age": 1
+  },
+  "sizes": {
+    "config": 6672,
+    "state": 2640,
+    "deque_double": 40
+  },
+  "rva": {
+    "config_pointer": 25827960,
+    "state_instance": 25772064,
+    "menu_inited": 25815512,
+    "fsr31_version": 25690352
+  },
+  "state_offsets": {
+    "api": 828,
+    "swapchainApi": 832,
+    "frameCount": 848,
+    "changeBackend": 856,
+    "newBackend": 920,
+    "FGchanged": 371,
+    "SCchanged": 372,
+    "ClearCapturedHudlesses": 456,
+    "ffxUpscalerVersionNames": 1064,
+    "ffxUpscalerVersionIds": 1088,
+    "ffxFGVersionNames": 1112,
+    "ffxFGVersionIds": 1136,
+    "lastFGFrameTime": 1288,
+    "presentFrameTime": 1296,
+    "currentFeature": 1736,
+    "currentFG": 1744,
+    "currentFGSwapchain": 1776,
+    "currentD3D11AdepterDesc": 2104,
+    "activeFgInput": 224,
+    "activeFgOutput": 228,
+    "FGLastFrame": 192,
+    "xefgMaxInterpolationCount": 968,
+    "isShuttingDown": 1656,
+    "workingMode": 1188,
+    "gameQuirks": 176,
+    "realExclusiveFullscreen": 1576,
+    "isHdrActive": 1584,
+    "currentSwapchainDesc": 2424
+  },
+  "feature_offsets": {
+    "is_inited": 8,
+    "frame_count": 148,
+    "frozen": 152,
+    "render_width": 124,
+    "display_width": 140
+  },
+  "hook": {
+    "render_menu": {
+      "rva": 1992560,
+      "prologue": "48895c2408488974241048897c241855"
+    },
+    "detour_begin": {
+      "rva": 3712160,
+      "prologue": "4883ec38833df5915001007407b8dd10"
+    },
+    "detour_abort": {
+      "rva": 3711824,
+      "prologue": "4883ec68e8da47f6ff39054193500174"
+    },
+    "detour_commit": {
+      "rva": 3712272,
+      "prologue": "4883ec2833c9e8050000004883c428c3"
+    },
+    "detour_attach": {
+      "rva": 3709520,
+      "prologue": "488954241048894c24084883ec3848c7"
+    },
+    "detour_update_thread": {
+      "rva": 3713472,
+      "prologue": "48894c24084883ec48833dd48c500100"
+    }
+  },
+  "limits": {
+    "command_bytes": 4096,
+    "operations": 32,
+    "versions": 16,
+    "backend_entries": 256,
+    "frame_stale_ms": 3000,
+    "callback_timeout_ms": 15000
+  },
+  "live_keys": [
+    "FrameGen.Enabled",
+    "OptiFG.HUDFix",
+    "FrameGen.DebugView",
+    "OptiFG.MakeDepthCopy",
+    "OptiFG.HUDFixExtended",
+    "XeFG.InterpolationCount",
+    "FSR.FGIndex",
+    "FSR.UpscalerIndex",
+    "Upscalers.Dx11Upscaler",
+    "Upscalers.Dx12Upscaler",
+    "Upscalers.VulkanUpscaler",
+    "Sharpness.OverrideSharpness",
+    "Sharpness.Sharpness",
+    "Menu.ShowFps"
+  ],
+  "fg_offsets": {
+    "dx12_subobject": 1232,
+    "virtual_base": 288,
+    "dx12_vtable_rva": 24565776,
+    "virtual_vtable_rva": 24565880,
+    "dx12_vbtable_rva": 24649456,
+    "root_vbtable_rva": 24649464,
+    "fg_context": 16,
+    "swapchain_context": 8,
+    "version": 32,
+    "is_active": 824,
+    "frame_count": 792
+  },
+  "xefg_offsets": {
+    "dx12_subobject": 1000,
+    "virtual_base": 56,
+    "dx12_vtable_rva": 24649144,
+    "virtual_vtable_rva": 24649248,
+    "dx12_vbtable_rva": 24649336,
+    "root_vbtable_rva": 24649344,
+    "fg_context": 16,
+    "swapchain_context": 8,
+    "is_active": 592,
+    "frame_count": 560
+  },
+  "backend_types": [
+    {
+      "api": 1,
+      "code": "xess",
+      "class_name": "XeSSFeature_Dx11",
+      "interface_vtable_rva": 25091344,
+      "physical_offset": 64,
+      "cd_offset": 4,
+      "symbol": "??_7XeSSFeature_Dx11@@6BIFeature@@@",
+      "col_offset": 64,
+      "col_cd_offset": 4
+    },
+    {
+      "api": 1,
+      "code": "xess_12",
+      "class_name": "XeSSFeatureDx11on12",
+      "interface_vtable_rva": 25092832,
+      "physical_offset": 664,
+      "cd_offset": 4,
+      "symbol": "??_7XeSSFeatureDx11on12@@6B@",
+      "col_offset": 664,
+      "col_cd_offset": 4
+    },
+    {
+      "api": 1,
+      "code": "fsr21_12",
+      "class_name": "FSR2FeatureDx11on12_212",
+      "interface_vtable_rva": 24865296,
+      "physical_offset": 66936,
+      "cd_offset": 4,
+      "symbol": "??_7FSR2FeatureDx11on12_212@@6BIFeature@@@",
+      "col_offset": 66936,
+      "col_cd_offset": 4
+    },
+    {
+      "api": 1,
+      "code": "fsr22",
+      "class_name": "FSR2FeatureDx11",
+      "interface_vtable_rva": 24896872,
+      "physical_offset": 66488,
+      "cd_offset": 4,
+      "symbol": "??_7FSR2FeatureDx11@@6BIFeature@@@",
+      "col_offset": 66488,
+      "col_cd_offset": 4
+    },
+    {
+      "api": 1,
+      "code": "fsr22_12",
+      "class_name": "FSR2FeatureDx11on12",
+      "interface_vtable_rva": 24865424,
+      "physical_offset": 66944,
+      "cd_offset": 4,
+      "symbol": "??_7FSR2FeatureDx11on12@@6BIFeature@@@",
+      "col_offset": 66944,
+      "col_cd_offset": 4
+    },
+    {
+      "api": 1,
+      "code": "fsr31",
+      "class_name": "FSR31FeatureDx11",
+      "interface_vtable_rva": 24875296,
+      "physical_offset": 2097960,
+      "cd_offset": 4,
+      "symbol": "??_7FSR31FeatureDx11@@6BIFeature@@@",
+      "col_offset": 2097960,
+      "col_cd_offset": 4
+    },
+    {
+      "api": 1,
+      "code": "fsr31_12",
+      "class_name": "FSR31FeatureDx11on12",
+      "interface_vtable_rva": 24877528,
+      "physical_offset": 760,
+      "cd_offset": 4,
+      "symbol": "??_7FSR31FeatureDx11on12@@6BIFeature@@@",
+      "col_offset": 760,
+      "col_cd_offset": 4
+    },
+    {
+      "api": 1,
+      "code": "dlss",
+      "class_name": "DLSSFeatureDx11",
+      "interface_vtable_rva": 24860872,
+      "physical_offset": 96,
+      "cd_offset": 4,
+      "symbol": "??_7DLSSFeatureDx11@@6B@",
+      "col_offset": 96,
+      "col_cd_offset": 4
+    },
+    {
+      "api": 1,
+      "code": "dlssd",
+      "class_name": "DLSSDFeatureDx11",
+      "interface_vtable_rva": 24855296,
+      "physical_offset": 96,
+      "cd_offset": 4,
+      "symbol": "??_7DLSSDFeatureDx11@@6B@",
+      "col_offset": 96,
+      "col_cd_offset": 4
+    },
+    {
+      "api": 2,
+      "code": "xess",
+      "class_name": "XeSSFeatureDx12",
+      "interface_vtable_rva": 24866584,
+      "physical_offset": 104,
+      "cd_offset": 4,
+      "symbol": "??_7XeSSFeatureDx12@@6B@",
+      "col_offset": 104,
+      "col_cd_offset": 4
+    },
+    {
+      "api": 2,
+      "code": "fsr21",
+      "class_name": "FSR2FeatureDx12_212",
+      "interface_vtable_rva": 24866752,
+      "physical_offset": 66376,
+      "cd_offset": 4,
+      "symbol": "??_7FSR2FeatureDx12_212@@6BIFeature@@@",
+      "col_offset": 66376,
+      "col_cd_offset": 4
+    },
+    {
+      "api": 2,
+      "code": "fsr22",
+      "class_name": "FSR2FeatureDx12",
+      "interface_vtable_rva": 24866664,
+      "physical_offset": 66384,
+      "cd_offset": 4,
+      "symbol": "??_7FSR2FeatureDx12@@6BIFeature@@@",
+      "col_offset": 66384,
+      "col_cd_offset": 4
+    },
+    {
+      "api": 2,
+      "code": "fsr31",
+      "class_name": "FSR31FeatureDx12",
+      "interface_vtable_rva": 24880248,
+      "physical_offset": 216,
+      "cd_offset": 4,
+      "symbol": "??_7FSR31FeatureDx12@@6BIFeature@@@",
+      "col_offset": 216,
+      "col_cd_offset": 4
+    },
+    {
+      "api": 2,
+      "code": "dlss",
+      "class_name": "DLSSFeatureDx12",
+      "interface_vtable_rva": 24861800,
+      "physical_offset": 88,
+      "cd_offset": 4,
+      "symbol": "??_7DLSSFeatureDx12@@6B@",
+      "col_offset": 88,
+      "col_cd_offset": 4
+    },
+    {
+      "api": 2,
+      "code": "dlssd",
+      "class_name": "DLSSDFeatureDx12",
+      "interface_vtable_rva": 24856472,
+      "physical_offset": 88,
+      "cd_offset": 4,
+      "symbol": "??_7DLSSDFeatureDx12@@6B@",
+      "col_offset": 88,
+      "col_cd_offset": 4
+    },
+    {
+      "api": 3,
+      "code": "xess",
+      "class_name": "XeSSFeature_Vk",
+      "interface_vtable_rva": 25106624,
+      "physical_offset": 64,
+      "cd_offset": 4,
+      "symbol": "??_7XeSSFeature_Vk@@6BIFeature@@@",
+      "col_offset": 64,
+      "col_cd_offset": 4
+    },
+    {
+      "api": 3,
+      "code": "fsr21",
+      "class_name": "FSR2FeatureVk212",
+      "interface_vtable_rva": 24867616,
+      "physical_offset": 66408,
+      "cd_offset": 4,
+      "symbol": "??_7FSR2FeatureVk212@@6BIFeature@@@",
+      "col_offset": 66408,
+      "col_cd_offset": 4
+    },
+    {
+      "api": 3,
+      "code": "fsr21_12",
+      "class_name": "FSR2FeatureVkOnDx12_212",
+      "interface_vtable_rva": 24867472,
+      "physical_offset": 67288,
+      "cd_offset": 4,
+      "symbol": "??_7FSR2FeatureVkOnDx12_212@@6BIFeature@@@",
+      "col_offset": 67288,
+      "col_cd_offset": 4
+    },
+    {
+      "api": 3,
+      "code": "fsr22",
+      "class_name": "FSR2FeatureVk",
+      "interface_vtable_rva": 24867712,
+      "physical_offset": 66416,
+      "cd_offset": 4,
+      "symbol": "??_7FSR2FeatureVk@@6BIFeature@@@",
+      "col_offset": 66416,
+      "col_cd_offset": 4
+    },
+    {
+      "api": 3,
+      "code": "fsr31",
+      "class_name": "FSR31FeatureVk",
+      "interface_vtable_rva": 24882440,
+      "physical_offset": 256,
+      "cd_offset": 4,
+      "symbol": "??_7FSR31FeatureVk@@6BIFeature@@@",
+      "col_offset": 256,
+      "col_cd_offset": 4
+    },
+    {
+      "api": 3,
+      "code": "fsr31_12",
+      "class_name": "FSR31FeatureVkOn12",
+      "interface_vtable_rva": 24735960,
+      "physical_offset": 1112,
+      "cd_offset": 4,
+      "symbol": "??_7FSR31FeatureVkOn12@@6BIFeature@@@",
+      "col_offset": 1112,
+      "col_cd_offset": 4
+    },
+    {
+      "api": 3,
+      "code": "dlss",
+      "class_name": "DLSSFeatureVk",
+      "interface_vtable_rva": 24861872,
+      "physical_offset": 112,
+      "cd_offset": 4,
+      "symbol": "??_7DLSSFeatureVk@@6B@",
+      "col_offset": 112,
+      "col_cd_offset": 4
+    },
+    {
+      "api": 3,
+      "code": "dlssd",
+      "class_name": "DLSSDFeatureVk",
+      "interface_vtable_rva": 24857296,
+      "physical_offset": 112,
+      "cd_offset": 4,
+      "symbol": "??_7DLSSDFeatureVk@@6B@",
+      "col_offset": 112,
+      "col_cd_offset": 4
+    }
+  ],
+  "xefg_gates": {
+    "ifg_constants_flags": 552,
+    "flags_size": 4,
+    "display_mv_bit": 1,
+    "quirk_force_render_mv_bit": 56,
+    "swapchain_format_offset": 16
+  },
+  "dlss_version": {
+    "behind_interface": 32,
+    "major_offset": 0
+  },
+  "bootstrap": {
+    "return_rva": 2791536,
+    "call_before_return": "ffd7",
+    "return_prologue": "4885db"
+  },
+  "ifg_state": {
+    "active": 536,
+    "waiting": 528,
+    "frames": 504,
+    "target": 544
+  }
+}

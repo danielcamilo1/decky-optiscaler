@@ -1,5 +1,6 @@
 import { Router } from "@decky/ui";
 import { useEffect, useState } from "react";
+import { rememberLaunchOptions } from "../launchOptionState";
 import type { RunningGame } from "../types";
 
 const POLL_MS = 4000;
@@ -159,6 +160,7 @@ export function lastPlayed(appid: string | null): number | null {
 export function setLaunchOptions(appid: number, options: string) {
   try {
     SteamClient.Apps.SetAppLaunchOptions(appid, options);
+    rememberLaunchOptions(appid, options);
     return true;
   } catch {
     return false;

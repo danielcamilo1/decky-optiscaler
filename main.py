@@ -129,17 +129,36 @@ class Plugin:
         return await self.service.set_auto_mode(game_path, enabled)
 
     async def auto_install(self, target_dir: str, game_path: str = None,
-                           name: str = None, extra_names: list = None) -> dict:
-        return await self.service.auto_install(target_dir, game_path, name, extra_names)
+                           name: str = None, extra_names: list = None, launch_options: str = None) -> dict:
+        return await self.service.auto_install(target_dir, game_path, name, extra_names, launch_options)
 
     async def apply_auto_settings(self, target_dir: str, game_path: str = None,
                                   name: str = None, extra_names: list = None) -> dict:
         return await self.service.apply_auto_settings(target_dir, game_path, name, extra_names)
 
+    async def create_restore_point(self, target_dir: str, game_path: str = None,
+                                   launch_options: str = None) -> dict:
+        return await self.service.create_restore_point(target_dir, game_path, launch_options)
+
+    async def rollback_install(self, target_dir: str, game_path: str = None) -> dict:
+        return await self.service.rollback_install(target_dir, game_path)
+
+    async def setup_deck_experiment(self, target_dir: str, game_path: str = None,
+                                    name: str = None) -> dict:
+        return await self.service.setup_deck_experiment(target_dir, game_path, name)
+
     # -- install ---------------------------------------------------------
     async def install(self, target_dir: str, filename: str = "dxgi.dll",
-                      preserve_ini: bool = True, optipatcher: bool = False) -> dict:
-        return await self.service.install(target_dir, filename, preserve_ini, optipatcher)
+                      preserve_ini: bool = True, optipatcher: bool = False,
+                      game_path: str = None, launch_options: str = None,
+                      auto_mode: bool = False) -> dict:
+        return await self.service.install(target_dir, filename, preserve_ini, optipatcher,
+                                          game_path=game_path, launch_options=launch_options,
+                                          auto_mode=auto_mode)
+
+    async def upgrade_runtime(self, target_dir: str, game_path: str,
+                              launch_options: str = None, name: str = None) -> dict:
+        return await self.service.upgrade_runtime(target_dir, game_path, launch_options, name)
 
     async def get_reframework_status(self, target_dir: str, game_path: str = None,
                                      name: str = None, extra_names: list = None) -> dict:
@@ -167,8 +186,9 @@ class Plugin:
     async def read_config(self, target_dir: str) -> dict:
         return await self.service.read_config(target_dir)
 
-    async def write_config(self, target_dir: str, changes: list) -> dict:
-        return await self.service.write_config(target_dir, changes)
+    async def write_config(self, target_dir: str, changes: list,
+                           push_live: bool = True, live_context: dict = None) -> dict:
+        return await self.service.write_config(target_dir, changes, push_live, live_context)
 
     async def reset_config(self, target_dir: str) -> dict:
         return await self.service.reset_config(target_dir)
@@ -180,8 +200,9 @@ class Plugin:
     async def install_live(self, target_dir: str) -> dict:
         return await self.service.install_live(target_dir)
 
-    async def switch_upscaler(self, target_dir: str, code: str) -> dict:
-        return await self.service.switch_upscaler(target_dir, code)
+    async def switch_upscaler(self, target_dir: str, code: str,
+                              live_context: dict = None) -> dict:
+        return await self.service.switch_upscaler(target_dir, code, live_context)
 
     async def get_live_log(self, target_dir: str, lines: int = 40) -> dict:
         return await self.service.get_live_log(target_dir, lines)

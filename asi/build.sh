@@ -11,13 +11,14 @@ out="${1:-$here/../bin/decky_optiscaler_live.asi}"
 
 command -v zig >/dev/null || { echo "zig not found (brew install zig)" >&2; exit 1; }
 
+[[ "$(zig version)" == "0.15.2" ]] || { echo "zig 0.15.2 required" >&2; exit 1; }
 python3 "$here/../scripts/generate_asi_layout.py" >/dev/null
 
 zig cc \
   -target x86_64-windows-gnu \
   -shared \
   -O2 \
-  -fno-exceptions \
+  -fno-exceptions -fno-rtti \
   -std=c++17 \
   -Wall -Wextra -Wno-unused-parameter -Wno-cast-function-type \
   -I"$here" \
@@ -32,3 +33,7 @@ outdir="$(cd "$(dirname "$out")" && pwd)"
 rm -f "$outdir/live.lib" "$outdir/$(basename "${out%.*}").pdb" "$outdir/${out##*/}.lib"
 
 echo "built $out ($(wc -c < "$out" | tr -d ' ') bytes)"
+
+if [[ "$outdir/$(basename "$out")" == "$(cd "$here/../bin" && pwd)/decky_optiscaler_live.asi" ]]; then
+  python3 "$here/../scripts/live_metadata.py"
+fi

@@ -6,6 +6,7 @@ which frame generation path came up.
 """
 
 import os
+import stat
 import re
 from pathlib import Path
 
@@ -181,7 +182,14 @@ def status(target_dir):
 
 def clear_log(target_dir):
     log_path = Path(target_dir) / LOG_NAME
-    if log_path.is_file():
-        os.truncate(log_path, 0)
+    try:
+        descriptor = os.open(log_path, os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0) | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return False
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise ValueError("OptiScaler log is not a regular file")
+        os.ftruncate(descriptor, 0)
         return True
-    return False
+    finally:
+        os.close(descriptor)

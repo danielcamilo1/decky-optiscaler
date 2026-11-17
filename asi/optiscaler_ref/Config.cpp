@@ -100,7 +100,7 @@ bool Config::Reload(std::filesystem::path iniPath)
                     FGOutput.set_from_config(FGOutput::XeFG);
             }
 
-            auto ftInput = readInt("FrameGen", "FTSource");
+            auto ftInput = readInt("FrameGen", "FTInput");
             if (ftInput.has_value() && ftInput.value() >= 0 &&
                 ftInput.value() <= (FGOutput.value_or_default() == FGOutput::XeFG ? 2 : 1))
             {
@@ -139,6 +139,7 @@ bool Config::Reload(std::filesystem::path iniPath)
             FGAsync.set_from_config(readBool("FSRFG", "AllowAsync"));
             FGUseMutexForSwapchain.set_from_config(readBool("FSRFG", "UseMutexForSwapchain"));
             FGFramePacingTuning.set_from_config(readBool("FSRFG", "FramePacingTuning"));
+            FSRFGDisableFlipMetering.set_from_config(readBool("FSRFG", "DisableFlipMetering"));
             FGFPTSafetyMarginInMs.set_from_config(readFloat("FSRFG", "FPTSafetyMarginInMs"));
             FGFPTVarianceFactor.set_from_config(readFloat("FSRFG", "FPTVarianceFactor"));
             FGFPTAllowHybridSpin.set_from_config(readBool("FSRFG", "FPTHybridSpin"));
@@ -183,8 +184,7 @@ bool Config::Reload(std::filesystem::path iniPath)
 
         {
             FGXeFGInterpolationCount.set_from_config(readInt("XeFG", "InterpolationCount"));
-            if (FGXeFGInterpolationCount.has_value() &&
-                (FGXeFGInterpolationCount.value() < 1 || FGXeFGInterpolationCount.value() > 3))
+            if (FGXeFGInterpolationCount.has_value() && FGXeFGInterpolationCount.value() < 1)
                 FGXeFGInterpolationCount.reset();
 
             FGXeFGIgnoreInitChecks.set_from_config(readBool("XeFG", "IgnoreInitChecks"));
@@ -229,7 +229,7 @@ bool Config::Reload(std::filesystem::path iniPath)
             FsrUseMaskForTransparency.set_from_config(readBool("FSR", "UseReactiveMaskForTransparency"));
             DlssReactiveMaskBias.set_from_config(readFloat("FSR", "DlssReactiveMaskBias"));
             Fsr4Update.set_from_config(readBool("FSR", "Fsr4Update"));
-            Fsr4ForceEnableInt8.set_from_config(readBool("FSR", "Fsr4ForceEnableInt8"));
+            Fsr4ForceEnableInt8.set_from_config(readInt("FSR", "Fsr4ForceEnableInt8"));
             Fsr4EnableDebugView.set_from_config(readBool("FSR", "Fsr4EnableDebugView"));
             Fsr4EnableWatermark.set_from_config(readBool("FSR", "Fsr4EnableWatermark"));
             Fsr4DoNotLoadAmdxc64.set_from_config(readBool("FSR", "Fsr4DoNotLoadAmdxc64"));
@@ -248,7 +248,7 @@ bool Config::Reload(std::filesystem::path iniPath)
             else if (FsrNonLinearSRGB.has_value() && FsrNonLinearSRGB.value())
                 FsrNonLinearPQ.reset();
 
-            if (FsrNonLinearPQ.has_value() || FsrNonLinearPQ.has_value())
+            if (FsrNonLinearPQ.value_or_default() || FsrNonLinearSRGB.value_or_default())
                 FsrNonLinearColorSpace.set_volatile_value(true);
         }
 
@@ -302,7 +302,7 @@ bool Config::Reload(std::filesystem::path iniPath)
             // Don't enable again if set false because of no nvngx found
             DLSSDRenderPresetOverride.set_from_config(readBool("DLSSD", "RenderPresetOverride"));
 
-            constexpr size_t presetCount = 6;
+            constexpr size_t presetCount = 7;
 
             if (auto setting = readInt("DLSSD", "RenderPresetForAll");
                 setting.has_value() && setting >= 0 && (setting < presetCount || setting == 0x00FFFFFF))
@@ -461,7 +461,7 @@ bool Config::Reload(std::filesystem::path iniPath)
 
             ContrastEnabled.set_from_config(readBool("CAS", "ContrastEnabled"));
             if (auto setting = readFloat("CAS", "Contrast"); setting.has_value())
-                Contrast.set_from_config(std::clamp(setting.value(), -2.0f, 2.0f));
+                Contrast.set_from_config(std::clamp(setting.value(), 0.0f, 2.0f));
 
             UseDepthAwareSharpen.set_from_config(readBool("CAS", "UseDepthAwareSharpen"));
             UseDASDepthAwareSharpen.set_from_config(readBool("CAS", "UseDASDepthAwareSharpen"));
@@ -532,8 +532,8 @@ bool Config::Reload(std::filesystem::path iniPath)
                 AnisotropyOverride.reset();
 
             AnisotropySkipPointFilter.set_from_config(readBool("Anisotropy", "SkipPointFilter"));
-            AnisotropyModifyComp.set_from_config(readBool("Anisotropy", "AFModifyComparison"));
-            AnisotropyModifyMinMax.set_from_config(readBool("Anisotropy", "AFModifyMinMax"));
+            AnisotropyModifyComp.set_from_config(readBool("Anisotropy", "ModifyComparison"));
+            AnisotropyModifyMinMax.set_from_config(readBool("Anisotropy", "ModifyMinMax"));
         }
 
         // Mipmap
@@ -567,7 +567,8 @@ bool Config::Reload(std::filesystem::path iniPath)
 
             SimulateWaitableObject.set_from_config(readBool("Hotfix", "SimulateWaitableObject"));
 
-            RoundInternalResolution.set_from_config(readInt("Hotfix", "RoundInternalResolution"));
+            if (auto setting = readInt("Hotfix", "RoundInternalResolution"); setting.has_value() && setting > 0)
+                RoundInternalResolution.set_from_config(setting);
 
             RestoreComputeSignature.set_from_config(readBool("Hotfix", "RestoreComputeSignature"));
             RestoreGraphicSignature.set_from_config(readBool("Hotfix", "RestoreGraphicSignature"));
@@ -587,7 +588,7 @@ bool Config::Reload(std::filesystem::path iniPath)
 
         // Dx11 with Dx12
         {
-            Dx11DelayedInit.set_from_config(readInt("Dx11withDx12", "UseDelayedInit"));
+            Dx11DelayedInit.set_from_config(readBool("Dx11withDx12", "UseDelayedInit"));
             DontUseNTShared.set_from_config(readBool("Dx11withDx12", "DontUseNTShared"));
         }
 
@@ -688,8 +689,8 @@ bool Config::Reload(std::filesystem::path iniPath)
             FfxVkPath.set_from_config(readWString("Libraries", "FfxVkPath"));
 
             XeSSLibrary.set_from_config(readWString("Libraries", "XeSSPath"));
-            XeSSLibrary.set_from_config(readWString("Libraries", "XeFGPath"));
-            XeSSLibrary.set_from_config(readWString("Libraries", "XeLLPath"));
+            XeFGLibrary.set_from_config(readWString("Libraries", "XeFGPath"));
+            XeLLLibrary.set_from_config(readWString("Libraries", "XeLLPath"));
             XeSSDx11Library.set_from_config(readWString("Libraries", "XeSSDx11Path"));
         }
 
@@ -842,6 +843,8 @@ bool Config::SaveIni()
                      GetBoolValue(Instance()->FGUseMutexForSwapchain.value_for_config()).c_str());
         ini.SetValue("FSRFG", "FramePacingTuning",
                      GetBoolValue(Instance()->FGFramePacingTuning.value_for_config()).c_str());
+        ini.SetValue("FSRFG", "DisableFlipMetering",
+                     GetBoolValue(Instance()->FSRFGDisableFlipMetering.value_for_config()).c_str());
         ini.SetValue("FSRFG", "FPTSafetyMarginInMs",
                      GetFloatValue(Instance()->FGFPTSafetyMarginInMs.value_for_config()).c_str());
         ini.SetValue("FSRFG", "FPTVarianceFactor",
@@ -972,7 +975,7 @@ bool Config::SaveIni()
         ini.SetValue("FSR", "Fsr4Update",
                      GetBoolValue(Instance()->Fsr4Update.value_for_config_ignore_default()).c_str());
         ini.SetValue("FSR", "Fsr4ForceEnableInt8",
-                     GetBoolValue(Instance()->Fsr4ForceEnableInt8.value_for_config_ignore_default()).c_str());
+                     GetIntValue(Instance()->Fsr4ForceEnableInt8.value_for_config_ignore_default()).c_str());
         ini.SetValue("FSR", "Fsr4Preset", GetIntValue(Instance()->Fsr4Preset.value_for_config()).c_str());
         ini.SetValue("FSR", "Fsr4EnableDebugView",
                      GetBoolValue(Instance()->Fsr4EnableDebugView.value_for_config()).c_str());
@@ -1207,8 +1210,7 @@ bool Config::SaveIni()
         ini.SetValue("Hotfix", "CheckForUpdate", GetBoolValue(Instance()->CheckForUpdate.value_for_config()).c_str());
         ini.SetValue("Hotfix", "SimulateWaitableObject",
                      GetBoolValue(Instance()->SimulateWaitableObject.value_for_config()).c_str());
-        ini.SetValue("Hotfix", "DisableOverlays",
-                     GetBoolValue(Instance()->DisableOverlays.value_for_config(true)).c_str());
+        ini.SetValue("Hotfix", "DisableOverlays", GetBoolValue(Instance()->DisableOverlays.value_for_config()).c_str());
         ini.SetValue("Hotfix", "ManualInputPolling",
                      GetBoolValue(Instance()->ManualInputPolling.value_for_config()).c_str());
 
@@ -1285,13 +1287,8 @@ bool Config::SaveIni()
 
     // Spoofing
     {
-        // Save Dxgi spoofing value only if it differs from the current GPU vendor
-        bool forceSaveDxgi = Instance()->DxgiSpoofing.has_value() &&
-                             ((State::Instance().isRunningOnNvidia && Instance()->DxgiSpoofing.value()) ||
-                              (!State::Instance().isRunningOnNvidia && !Instance()->DxgiSpoofing.value()));
 
-        ini.SetValue("Spoofing", "Dxgi",
-                     GetBoolValue(Instance()->DxgiSpoofing.value_for_config(forceSaveDxgi)).c_str());
+        ini.SetValue("Spoofing", "Dxgi", GetBoolValue(Instance()->DxgiSpoofing.value_for_config()).c_str());
         ini.SetValue("Spoofing", "DxgiFactoryWrapping",
                      GetBoolValue(Instance()->DxgiFactoryWrapping.value_for_config()).c_str());
         ini.SetValue("Spoofing", "DxgiBlacklist", Instance()->DxgiBlacklist.value_for_config_or("auto").c_str());

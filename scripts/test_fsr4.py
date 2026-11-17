@@ -134,6 +134,8 @@ class DeckFsr4Tests(unittest.TestCase):
         ini = IniFile(self.target/INI_NAME)
         ini.set('FrameGen', 'FGOutput', 'fsr3')
         ini.save()
+        point = asyncio.run(self.service.create_restore_point(str(self.target), str(self.target), ''))
+        self.assertTrue(point['ok'], point)
         self.dll = self.root/'community.dll'
         self.dll.write_bytes(b'test community DLL')
         self.build = dict(fsr4build.find('4.1.1b'),
@@ -151,11 +153,18 @@ class DeckFsr4Tests(unittest.TestCase):
         return {name: (self.target/name).read_bytes()
                 for name in [FFX_UPSCALER_DLL, INI_NAME, MANIFEST_NAME]}
 
+    def test_unowned_license_file_does_not_mark_healthy_runtime_corrupt(self):
+        user = self.target / 'Licenses/user-added.txt'
+        user.write_bytes(b'user file')
+        result = installer.verify_install(self.target, self.payload)
+        self.assertTrue(result['complete'], result)
+        self.assertEqual(user.read_bytes(), b'user file')
+
     def test_enable_verify_reinstall_restore_uninstall(self):
         self.assertTrue(self.enable()['ok'])
         config = asyncio.run(self.service.read_config(str(self.target)))
         self.assertEqual(config['fsr4_build'], '4.1.1b')
-        self.assertEqual(config['values']['FSR']['Fsr4ForceEnableInt8'], 'true')
+        self.assertEqual(config['values']['FSR']['Fsr4ForceEnableInt8'], '1')
         self.assertEqual(config['values']['FSR']['Fsr4Update'], 'auto')
         self.assertEqual(config['values']['FSR']['UpscalerIndex'], '0')
         self.assertEqual(config['values']['FrameGen']['FGOutput'], 'fsr3')

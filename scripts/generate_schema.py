@@ -107,6 +107,9 @@ def normalize_default(text):
     if not text:
         return "auto"
     t = text.strip()
+    # Conditional defaults describe runtime selection, not a constant value.
+    if re.match(r"^-?\d+(?:\.\d+)?\s+for\b.+,\s*-?\d+.*\bfor\b", t, re.IGNORECASE):
+        return t
     m = re.match(r"^(-?\d+(?:\.\d+)?)\s*[-=]", t)
     if m:
         return m.group(1)

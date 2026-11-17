@@ -21,9 +21,9 @@ from .constants import (
 #: builds are so that one code path can report either.
 BUNDLED_BUILD = {
     "id": FSR4_BUNDLED_BUILD_ID,
-    "label": "Bundled (FidelityFX SDK 4.1.1)",
-    "note": "The build the OptiScaler release ships. Reaches FSR 4 through the "
-            "INT8 override on RDNA 2.",
+    "label": "Bundled (FSR 4.1.2 / FidelityFX SDK 2.4)",
+    "note": "Official 4.1.2 upscaler with RDNA2 and APU INT8 models. "
+            "Verify the active model with the in-game watermark.",
     "file": FFX_UPSCALER_DLL,
     "file_sha256": FSR4_BUNDLED_FILE_SHA256,
     "file_bytes": FSR4_BUNDLED_FILE_BYTES,
