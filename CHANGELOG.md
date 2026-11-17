@@ -1,8 +1,20 @@
 # Changelog
 
-## [0.0.8] - 2026-11-17
+## [0.0.7.1-testing] - 2026-11-17
 
-The first formal 0.0.8 release bundles the complete official OptiScaler 0.9.5 package.
+**Pre-release — Steam Deck testers wanted.** This bundles the complete official
+OptiScaler 0.9.5 package and rebuilds live control against it (contributed in
+#8 by zesming). Every automated check passes, but **nobody has run this build
+on a real Steam Deck yet**, and live control and FSR 4 can only be proven on
+hardware. If you have a Deck, please install it and report back on #8 or in a
+new issue: which game, whether the plugin's Quick Access panel shows live
+control as connected, whether switching the upscaler and frame generation
+in-game takes effect, and whether the FSR 4 watermark appears. Crashes and
+"nothing changed on screen" reports are just as useful as successes.
+
+Installing this upgrades games already set up with 0.9.4 to 0.9.5 the first
+time you open them in the plugin (with the game closed). A restore point is
+taken first, and the game's page offers a rollback.
 
 ### Added
 
@@ -16,7 +28,7 @@ The first formal 0.0.8 release bundles the complete official OptiScaler 0.9.5 pa
 - Keep the official **FSR 3.X/4** preset on OptiScaler's automatic model path. Existing 4.1.1b installs remain identified as legacy and are not silently replaced; **Use legacy 4.1.1b** remains available as an explicit fallback from Installed Files after trying the new build. Both community switches preserve frame-generation settings.
 - Require checking the FSR4 watermark to confirm the active model. Existing Steam Deck evidence is from the pre5 build and does not verify the final package on-device.
 
-[0.0.8]: https://github.com/danielcamilo1/decky-optiscaler/releases/tag/v0.0.8
+[0.0.7.1-testing]: https://github.com/danielcamilo1/decky-optiscaler/releases/tag/v0.0.7.1-testing
 
 ## 0.0.8-pbz.3 (experimental)
 
