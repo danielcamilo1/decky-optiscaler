@@ -143,7 +143,20 @@ PAYLOAD_FILES = [
     "libxess_dx11.dll",
     "libxess_fg.dll",
 ]
-PAYLOAD_DIRS = ["D3D12_Optiscaler", "Licenses"]
+# Runtime directories copied into the game folder. The release archive also
+# carries a Licenses/ documentation folder that is not used at runtime and
+# collides case-insensitively with games shipping their own lowercase licenses/
+# directory (e.g. Trails in the Sky 1st Chapter). Keep Licenses/ in the legacy
+# constants so older manifests and backups that already recorded it still
+# recover and uninstall cleanly.
+PAYLOAD_DIRS = ["D3D12_Optiscaler"]
+LEGACY_PAYLOAD_DIRS = ["Licenses"]
+LEGACY_PAYLOAD_NESTED_FILES = (
+    "Licenses/DirectX_LICENSE.txt",
+    "Licenses/FidelityFX_v1_LICENSE.md",
+    "Licenses/FidelityFX_v2_LICENSE.md",
+    "Licenses/XeSS_LICENSE.txt",
+)
 
 # Extra files OptiScaler or its helpers create at runtime; removed on uninstall.
 RUNTIME_ARTIFACTS = [

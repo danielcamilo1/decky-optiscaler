@@ -32,6 +32,8 @@ from .constants import (
     FSR4_SUPPORT_FILES,
     INI_NAME,
     LAUNCH_RECORD_NAME,
+    LEGACY_PAYLOAD_DIRS,
+    LEGACY_PAYLOAD_NESTED_FILES,
     LOG_NAME,
     MANIFEST_NAME,
     OPTISCALER_VERSION,
@@ -67,6 +69,10 @@ TRANSACTION_INTENTS = {TRANSACTION_INTENT_NORMAL, TRANSACTION_INTENT_STOPPED,
 _TRANSACTIONS = threading.local()
 
 
+def _all_payload_dirs():
+    return (*PAYLOAD_DIRS, *LEGACY_PAYLOAD_DIRS)
+
+
 def _allowed_file_names():
     nested = _payload_nested_names()
     return (set(PROXY_FILENAMES) | set(PAYLOAD_FILES) | set(FSR4_SUPPORT_FILES)
@@ -75,11 +81,11 @@ def _allowed_file_names():
                                        *live.CONTROL_FILES,
                                        f"{live.PLUGIN_SUBDIR}/{live.ASI_NAME}",
                                        f"{live.PLUGIN_SUBDIR}/{OPTIPATCHER_NAME}"}
-            | set(nested))
+            | set(nested) | set(LEGACY_PAYLOAD_NESTED_FILES))
 
 
 def _allowed_dir_names():
-    return set(PAYLOAD_DIRS) | {"DlssOverrides", live.PLUGIN_SUBDIR}
+    return set(_all_payload_dirs()) | {"DlssOverrides", live.PLUGIN_SUBDIR}
 
 
 def _shared_dir_names():
@@ -470,13 +476,13 @@ def validate_manifest(manifest):
     if not isinstance(created_dirs, list):
         raise ValueError("OptiScaler manifest created_directories must be a list")
     for name in created_dirs:
-        if name not in set(PAYLOAD_DIRS) | {live.PLUGIN_SUBDIR}:
+        if name not in set(_all_payload_dirs()) | {live.PLUGIN_SUBDIR}:
             raise ValueError(f"OptiScaler manifest has an unsupported created directory: {name}")
     original_dirs = manifest.get("original_directories", {})
     if not isinstance(original_dirs, dict):
         raise ValueError("OptiScaler manifest original_directories must be an object")
     for name, record in original_dirs.items():
-        if name not in PAYLOAD_DIRS:
+        if name not in _all_payload_dirs():
             raise ValueError(f"OptiScaler manifest has an unsupported original directory: {name}")
         if not isinstance(record, dict) or set(record) != {"exists", "mode"} \
                 or not isinstance(record.get("exists"), bool):
@@ -824,7 +830,7 @@ def _validate_transaction_records(target, journal, records, intent=None,
         restorepoint_stage = ("/" not in name and
                               name.casefold().startswith(RESTOREPOINT_STAGING_PREFIX.casefold()))
         payload_tree_path = any(name.casefold().startswith(directory.casefold() + "/")
-                                for directory in PAYLOAD_DIRS)
+                                for directory in _all_payload_dirs())
         if (name.casefold() not in allowed_casefold
                 and _legacy_backup_target(name) is None
                 and not copy_stage and not restorepoint_stage
@@ -2757,8 +2763,8 @@ def uninstall(target_dir, remove_ini=True, logger=None):
                         removed.append(name + "/")
             # Older manifests owned the bundled trees as a whole. Remove only
             # the pinned children from those trees; never recurse over extras.
-            nested_paths = _payload_nested_names()
-            for directory in PAYLOAD_DIRS:
+            nested_paths = sorted(set(_payload_nested_names()) | set(LEGACY_PAYLOAD_NESTED_FILES))
+            for directory in _all_payload_dirs():
                 if directory not in manifest.get("dirs", []):
                     continue
                 for name in nested_paths:
@@ -2999,7 +3005,7 @@ def _backup_items(target, manifest=None):
                 _require_path_type(child, directory=False, allow_missing=False)
                 if not any(name == relative for name, _ in entries):
                     entries.append((relative, child))
-        elif item.name in PAYLOAD_DIRS:
+        elif item.name in _all_payload_dirs():
             if item.is_symlink() or not item.is_dir():
                 raise ValueError(f"invalid nested payload backup: {item}")
             # A directory containing file-level backups is a namespace, while

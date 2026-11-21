@@ -142,8 +142,8 @@ class RecoveryTests(unittest.TestCase):
 
     def test_install_refuses_root_and_nested_payload_case_aliases_without_writes(self):
         for index, relative in enumerate((
-                'LibXeSS.dll', 'Licenses/directx_license.txt',
-                'licenses/DirectX_LICENSE.txt')):
+                'LibXeSS.dll', 'D3D12_Optiscaler/d3d12core.dll',
+                'd3d12_optiscaler/D3D12Core.dll')):
             with self.subTest(relative=relative):
                 target = self.root / f'case-alias-{index}'
                 target.mkdir()
@@ -158,6 +158,30 @@ class RecoveryTests(unittest.TestCase):
                     installer.install(target, self.source)
 
                 self.assertEqual(filesystem_state(target), before)
+
+    def test_install_ignores_game_licenses_directory_and_lowercase_alias(self):
+        for index, dirname in enumerate(('licenses', 'Licenses')):
+            with self.subTest(dirname=dirname):
+                target = self.root / f'game-licenses-{index}'
+                target.mkdir()
+                (target / 'dxgi.dll').write_bytes(b'original proxy')
+                game_licenses = target / dirname
+                game_licenses.mkdir(mode=0o750)
+                notice = game_licenses / 'third_party_license.txt'
+                notice.write_bytes(b'game third-party license text')
+                before_licenses = filesystem_state(game_licenses)
+
+                result = installer.install(target, self.source)
+                self.assertEqual(result['filename'], 'dxgi.dll')
+                self.assertNotIn('Licenses', installer.read_manifest(target)['dirs'])
+                self.assertEqual(filesystem_state(game_licenses), before_licenses)
+                verify = installer.verify_install(target, self.source)
+                self.assertFalse(any('license' in item['name'].lower() for item in verify['files']))
+                self.assertFalse(any('license' in problem.lower() for problem in verify['problems']))
+
+                installer.uninstall(target)
+                self.assertEqual(filesystem_state(game_licenses), before_licenses)
+                self.assertEqual((target / 'dxgi.dll').read_bytes(), b'original proxy')
 
     def test_first_install_hard_exit_restores_nested_payload_and_reframework_original(self):
         runtime_manifest = json.loads((ROOT / 'defaults/runtime-manifest.json').read_text())
@@ -208,6 +232,7 @@ installer.install(target, source, reframework_files=[source / constants.REFRAMEW
         backup_tree = installer.backup_dir(self.game) / 'Licenses'
         backup_tree.mkdir(parents=True)
         (backup_tree / 'game.txt').write_bytes(b'old game license')
+        (self.game / 'Licenses').mkdir(parents=True, exist_ok=True)
         additions = self.game / 'Licenses' / 'third-party.txt'
         additions.write_bytes(b'new third-party file')
         manifest = installer.read_manifest(self.game)
@@ -253,6 +278,7 @@ installer.restore_backups(target)
         backup_tree = installer.backup_dir(self.game) / 'Licenses'
         backup_tree.mkdir(parents=True)
         (backup_tree / 'game.txt').write_bytes(b'older game license')
+        (self.game / 'Licenses').mkdir(parents=True, exist_ok=True)
         destination = self.game / 'Licenses' / 'game.txt'
         destination.write_bytes(b'later third-party file')
         destination.chmod(0o604)
@@ -1118,20 +1144,20 @@ with installer.target_transaction(target):
         plugins = self.game / live.PLUGIN_SUBDIR; plugins.mkdir(mode=0o750)
         community = plugins / 'community.asi'; community.write_bytes(b'user original')
         community.chmod(0o640)
-        licenses = self.game / 'Licenses'; licenses.mkdir(mode=0o710)
-        pinned = licenses / 'XeSS_LICENSE.txt'; pinned.write_bytes(b'game original license')
+        d3d12 = self.game / 'D3D12_Optiscaler'; d3d12.mkdir(mode=0o710)
+        pinned = d3d12 / 'D3D12Core.dll'; pinned.write_bytes(b'game original d3d12core')
         pinned.chmod(0o604)
-        unrelated = licenses / 'game-license.txt'; unrelated.write_bytes(b'game data')
+        unrelated = d3d12 / 'game-data.txt'; unrelated.write_bytes(b'game data')
         code = """import os,sys
 from pathlib import Path
 sys.path.insert(0, sys.argv[1])
 from optiscaler import installer
 target=Path(sys.argv[2])
 with installer.target_transaction(target, require_stopped=True):
- Path(target, 'Licenses/XeSS_LICENSE.txt').write_bytes(b'partial managed write')
+ Path(target, 'D3D12_Optiscaler/D3D12Core.dll').write_bytes(b'partial managed write')
  Path(target, 'plugins/community.asi').write_bytes(b'user edit')
  Path(target, 'plugins/new.asi').write_bytes(b'third-party addition')
- Path(target, 'Licenses/new-license.txt').write_bytes(b'third-party addition')
+ Path(target, 'D3D12_Optiscaler/new-user.txt').write_bytes(b'third-party addition')
  os._exit(81)
 """
         result = subprocess.run(
@@ -1140,15 +1166,15 @@ with installer.target_transaction(target, require_stopped=True):
         )
         self.assertEqual(result.returncode, 81, result.stderr.decode())
         installer.recover_target_transactions(self.game)
-        self.assertEqual(pinned.read_bytes(), b'game original license')
+        self.assertEqual(pinned.read_bytes(), b'game original d3d12core')
         self.assertEqual(stat.S_IMODE(pinned.stat().st_mode), 0o604)
         self.assertEqual(community.read_bytes(), b'user edit')
         self.assertEqual(stat.S_IMODE(community.stat().st_mode), 0o640)
         self.assertEqual((plugins / 'new.asi').read_bytes(), b'third-party addition')
         self.assertEqual(unrelated.read_bytes(), b'game data')
-        self.assertEqual((licenses / 'new-license.txt').read_bytes(), b'third-party addition')
+        self.assertEqual((d3d12 / 'new-user.txt').read_bytes(), b'third-party addition')
         self.assertEqual(stat.S_IMODE(plugins.stat().st_mode), 0o750)
-        self.assertEqual(stat.S_IMODE(licenses.stat().st_mode), 0o710)
+        self.assertEqual(stat.S_IMODE(d3d12.stat().st_mode), 0o710)
 
     def test_recovery_keeps_a_new_nonempty_directory_that_was_absent_at_start(self):
         code = """import os,sys
@@ -1326,14 +1352,14 @@ with installer.target_transaction(target, require_stopped=True):
 
     def test_original_empty_directories_and_permissions_survive_remove(self):
         plugins = self.game / 'plugins'; plugins.mkdir(mode=0o750)
-        licenses = self.game / 'Licenses'; licenses.mkdir(mode=0o700)
+        d3d12 = self.game / 'D3D12_Optiscaler'; d3d12.mkdir(mode=0o700)
         ini = self.game / constants.INI_NAME; ini.write_bytes(b'; original ini')
         ini.chmod(0o640); (self.game / 'dxgi.dll').chmod(0o600)
         self.install()
         installer.uninstall(self.game)
         self.assertTrue(plugins.is_dir()); self.assertEqual(list(plugins.iterdir()), [])
-        self.assertTrue(licenses.is_dir()); self.assertEqual(list(licenses.iterdir()), [])
-        for path, expected in ((plugins,0o750),(licenses,0o700),(ini,0o640),(self.game/'dxgi.dll',0o600)):
+        self.assertTrue(d3d12.is_dir()); self.assertEqual(list(d3d12.iterdir()), [])
+        for path, expected in ((plugins,0o750),(d3d12,0o700),(ini,0o640),(self.game/'dxgi.dll',0o600)):
             self.assertEqual(path.stat().st_mode & 0o777, expected, str(path))
 
     def test_rollback_preserves_untouched_candidate_user_changes(self):
@@ -1495,12 +1521,12 @@ with installer.target_transaction(target, require_stopped=True):
 
     def test_rollback_preserves_unowned_files_inside_payload_directories(self):
         self.install()
-        licenses = self.game / 'Licenses'
-        untouched = licenses / 'user.txt'; untouched.write_bytes(b'before')
+        d3d12 = self.game / 'D3D12_Optiscaler'
+        untouched = d3d12 / 'user.txt'; untouched.write_bytes(b'before')
         metadata = {'game_path': '/games/test', 'game_settings': {'target': None, 'auto': None, 'experiment': None}, 'launch_options': ''}
         restorepoint.create(self.game, metadata)
         untouched.write_bytes(b'edited by user')
-        added = licenses / 'new-user.txt'; added.write_bytes(b'new user data')
+        added = d3d12 / 'new-user.txt'; added.write_bytes(b'new user data')
         self.install(filename='winmm.dll')
         restorepoint.restore(self.game)
         self.assertEqual(untouched.read_bytes(), b'edited by user')
@@ -1639,14 +1665,14 @@ with installer.target_transaction(sys.argv[2],include_known=False):
         self.assertTrue(log.is_symlink())
 
     def test_first_install_keeps_unowned_directory_children_and_later_edits(self):
-        licenses = self.game / 'Licenses'; licenses.mkdir(mode=0o700)
-        user = licenses / 'game-license.txt'; user.write_bytes(b'game original license')
+        d3d12 = self.game / 'D3D12_Optiscaler'; d3d12.mkdir(mode=0o700)
+        user = d3d12 / 'game-data.txt'; user.write_bytes(b'game original data')
         self.install()
-        self.assertEqual(user.read_bytes(), b'game original license')
-        user.write_bytes(b'game updated license')
+        self.assertEqual(user.read_bytes(), b'game original data')
+        user.write_bytes(b'game updated data')
         installer.uninstall(self.game)
-        self.assertEqual(user.read_bytes(), b'game updated license')
-        self.assertEqual(licenses.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(user.read_bytes(), b'game updated data')
+        self.assertEqual(d3d12.stat().st_mode & 0o777, 0o700)
 
     def test_original_added_after_snapshot_is_returned_before_old_backup_restored(self):
         self.install()
@@ -1812,17 +1838,29 @@ with installer.target_transaction(sys.argv[2],include_known=False):
         self.assertFalse((self.game / 'D3D12_Optiscaler').exists())
 
     def test_preexisting_pinned_directory_file_is_restored_without_touching_other_files(self):
-        licenses = self.game / 'Licenses'; licenses.mkdir(mode=0o750)
-        pinned = licenses / 'XeSS_LICENSE.txt'; pinned.write_bytes(b'game license original')
-        unrelated = licenses / 'game-owned.txt'; unrelated.write_bytes(b'game data')
+        d3d12 = self.game / 'D3D12_Optiscaler'; d3d12.mkdir(mode=0o750)
+        pinned = d3d12 / 'D3D12Core.dll'; pinned.write_bytes(b'game d3d12core original')
+        unrelated = d3d12 / 'game-owned.txt'; unrelated.write_bytes(b'game data')
         self.install()
-        self.assertNotEqual(pinned.read_bytes(), b'game license original')
+        self.assertNotEqual(pinned.read_bytes(), b'game d3d12core original')
         self.assertEqual(unrelated.read_bytes(), b'game data')
         unrelated.write_bytes(b'game updated data')
         installer.uninstall(self.game)
-        self.assertEqual(pinned.read_bytes(), b'game license original')
+        self.assertEqual(pinned.read_bytes(), b'game d3d12core original')
         self.assertEqual(unrelated.read_bytes(), b'game updated data')
-        self.assertEqual(licenses.stat().st_mode & 0o777, 0o750)
+        self.assertEqual(d3d12.stat().st_mode & 0o777, 0o750)
+
+    def test_legacy_manifest_with_licenses_dir_still_cleans_up_optiscaler_licenses(self):
+        self.install()
+        licenses = self.game / 'Licenses'
+        licenses.mkdir()
+        (licenses / 'XeSS_LICENSE.txt').write_bytes(b'legacy optiscaler license')
+        manifest = installer.read_manifest(self.game)
+        manifest['dirs'] = [*manifest['dirs'], 'Licenses']
+        (self.game / constants.MANIFEST_NAME).write_text(json.dumps(manifest))
+        installer.uninstall(self.game)
+        self.assertFalse(licenses.exists())
+        self.assertEqual(tree(self.game), self.original)
 
     def test_running_target_is_rejected_before_mutation(self):
         before = tree(self.game)
