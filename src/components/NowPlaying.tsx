@@ -2,6 +2,7 @@ import { ButtonItem, PanelSection, PanelSectionRow } from "@decky/ui";
 import { toaster } from "@decky/api";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { resolveGame } from "../shortcuts";
+import { useAdaptiveFg } from "../hooks/useAdaptiveFg";
 import { useAutoPlan } from "../hooks/useAutoPlan";
 import { useConfig } from "../hooks/useConfig";
 import { useLiveStatus } from "../hooks/useLiveStatus";
@@ -78,6 +79,7 @@ export function NowPlaying({
   // Read-only here: whether a game is in automatic mode is decided where it is
   // set up, not mid-session over a running game.
   const { plan, auto } = useAutoPlan(detail?.path ?? null, detail?.name ?? null, installed);
+  const adaptive = useAdaptiveFg(targetDir, installed);
 
   if (!runningGame) {
     return (
@@ -177,6 +179,16 @@ export function NowPlaying({
           onLiveChanged={() => void refresh()}
           fsr4Build={config.fsr4Build}
           onEnableFsr4={config.enableFsr4}
+          adaptiveFg={adaptive.state}
+          adaptiveBusy={adaptive.saving}
+          adaptiveError={adaptive.error}
+          onAdaptiveFgChange={async (patch) => {
+            const ok = await adaptive.update(patch);
+            if (ok && patch.cap_to_target !== undefined) {
+              await config.authoritativeReload();
+            }
+            return ok;
+          }}
           onApply={config.setOptions}
         />
       )}

@@ -64,6 +64,53 @@ export interface GpuInfo {
   fsr4: "native" | "int8" | "experimental" | "unsupported" | "unknown";
 }
 
+export interface DisplayInfo {
+  available: boolean;
+  refresh_hz: number | null;
+  exact_hz: number | null;
+  source: "xrandr" | "drm" | null;
+  connector: string | null;
+}
+
+export interface AdaptiveFgConfig {
+  enabled: boolean;
+  match_refresh_rate: boolean;
+  target_fps: number;
+  max_multiplier: 2 | 3 | 4;
+  allow_1x: boolean;
+  cap_to_target: boolean;
+}
+
+export interface AdaptiveFgResolved {
+  effective_target_fps: number;
+  target_source: "display" | "manual";
+  display_refresh_hz: number | null;
+  display_source: string | null;
+  fallback_used: boolean;
+}
+
+export interface AdaptiveFgState {
+  config: AdaptiveFgConfig;
+  display: DisplayInfo;
+  resolved: AdaptiveFgResolved;
+}
+
+export interface AdaptiveFgLiveStatus extends AdaptiveFgResolved {
+  enabled: boolean;
+  active: boolean;
+  reason: string;
+  max_multiplier: number;
+  max_supported_multiplier: number;
+  min_supported_multiplier: number;
+  current_multiplier: number | null;
+  desired_multiplier: number | null;
+  smoothed_base_fps: number | null;
+  last_action: string | null;
+  last_changed_at: number | null;
+  last_apply_ok?: boolean;
+  error?: string | null;
+}
+
 export interface FfxUpscalerInfo {
   present: boolean;
   name: string;
@@ -160,6 +207,7 @@ export interface GameDetail {
   wiki_entry: string | null;
   fsr4_sources: Fsr4Source[];
   gpu: GpuInfo;
+  display?: DisplayInfo;
   target: string;
   target_is_saved: boolean;
   /** Backend-confirmed canonical PBZ.exe folder, null if missing. */
@@ -603,6 +651,8 @@ export interface LiveStatus {
   native_dir?: string | null;
   /** Whether that is the folder being managed. false means it is writing where nobody reads. */
   dir_matches?: boolean | null;
+  /** Adaptive frame-generation controller telemetry when Adaptive FG is enabled. */
+  adaptive_fg?: AdaptiveFgLiveStatus | null;
 }
 
 /** Outcome of pushing a config write into the running game. */

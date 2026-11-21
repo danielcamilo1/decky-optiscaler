@@ -6,7 +6,7 @@ import stat
 import time
 from pathlib import Path
 
-from . import autoplan, constants, fsr4build, gameprofiles, installer, live, monitor, reframework, restorepoint, steam
+from . import adaptive_fg, autoplan, constants, fsr4build, gameprofiles, installer, live, monitor, reframework, restorepoint, steam
 from .constants import (
     DEFAULT_PROXY,
     LIVE_CONTROL_SUPPORTED,
@@ -24,7 +24,7 @@ from .inifile import IniFile
 from .payload import Payload
 from .schema import SCHEMA, valid as _valid
 from .settings import Settings
-from .sysinfo import gpu_info
+from .sysinfo import display_info, gpu_info
 from .wiki import WikiClient
 
 
@@ -48,6 +48,7 @@ class OptiScalerService:
         )
         self._payload_lock = asyncio.Lock()
         self._mutation_lock = asyncio.Lock()
+        self._adaptive = adaptive_fg.AdaptiveFgController()
         # Background wiki refreshes in flight, by key. Answers come from cache
         # and the network never sits in front of one; this is what keeps the
         # cache current behind them, single-flight so a page opened three times
@@ -393,6 +394,7 @@ class OptiScalerService:
                 "wiki_entry": pinned_wiki_entry,
                 "fsr4_sources": installer.find_fsr4_sources(self.home),
                 "gpu": gpu_info(),
+                "display": display_info(),
                 "path": str(path),
                 "name": name or path.name,
                 "target": target,
@@ -973,6 +975,8 @@ class OptiScalerService:
                                 preferences_changed = True
                             elif before_hold is not None:
                                 self.settings.set_pref(hold_key, None)
+                            self.settings.set_pref(_adaptive_fg_key(target_dir), None)
+                            self._adaptive.reset(Path(target_dir).resolve())
                     except Exception:
                         if preferences_changed:
                             self.settings.restore_game(game_path, before,
@@ -1329,11 +1333,127 @@ class OptiScalerService:
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
+    async def get_display_info(self):
+        """Detect the active display refresh rate (Hz) for display-matched targets."""
+        return await self._run(display_info)
+
+    def _adaptive_config(self, target_dir):
+        saved = self.settings.get_pref(_adaptive_fg_key(target_dir))
+        return adaptive_fg.normalize_config(saved)
+
+    async def get_adaptive_fg(self, target_dir):
+        """Return per-game Adaptive FG settings, display Hz, and resolved target."""
+        def work():
+            cfg = self._adaptive_config(target_dir)
+            disp = display_info()
+            resolved = adaptive_fg.resolve_target_fps(cfg, disp)
+            return {
+                "config": cfg,
+                "display": disp,
+                "resolved": resolved,
+            }
+
+        return await self._run(work)
+
+    async def set_adaptive_fg(self, target_dir, patch):
+        """Save per-game Adaptive FG settings and optionally sync FramerateLimit."""
+        try:
+            if not isinstance(patch, dict):
+                raise ValueError("Adaptive FG settings must be an object.")
+            async with self._mutation_lock:
+                def work():
+                    current = self._adaptive_config(target_dir)
+                    updated = adaptive_fg.normalize_config(patch, base=current)
+                    disp = display_info()
+                    resolved = adaptive_fg.resolve_target_fps(updated, disp)
+                    self.settings.set_pref(_adaptive_fg_key(target_dir), updated)
+                    if not updated["enabled"]:
+                        self._adaptive.reset(Path(target_dir).resolve())
+
+                    # Sync OptiScaler's [Framerate] FramerateLimit when cap_to_target
+                    # is enabled, or reset it to auto when explicitly turned off.
+                    cap_changed = (
+                        updated["cap_to_target"] != current["cap_to_target"]
+                        or (updated["cap_to_target"] and updated["enabled"] != current["enabled"])
+                        or (updated["cap_to_target"] and updated["enabled"] and (
+                            updated["target_fps"] != current["target_fps"]
+                            or updated["match_refresh_rate"] != current["match_refresh_rate"]
+                        ))
+                    )
+                    limit_written = None
+                    if cap_changed and installer.read_manifest(target_dir) and installer.runtime_current(target_dir):
+                        limit_value = (
+                            str(resolved["effective_target_fps"])
+                            if (updated["enabled"] and updated["cap_to_target"])
+                            else "auto"
+                        )
+                        with self._config_transaction(target_dir):
+                            written = self._write_config_sync(
+                                target_dir,
+                                [{"section": "Framerate", "key": "FramerateLimit", "value": limit_value}],
+                                push_live=False,
+                            )
+                            if not written.get("ok") or written.get("rejected"):
+                                raise ValueError(written.get("error") or "Could not update FramerateLimit")
+                        limit_written = limit_value
+
+                    return {
+                        "ok": True,
+                        "config": updated,
+                        "display": disp,
+                        "resolved": resolved,
+                        "framerate_limit": limit_written,
+                    }
+
+                return await self._run(work)
+        except Exception as exc:
+            self.log.exception("set_adaptive_fg failed for %s", target_dir)
+            return {"ok": False, "error": str(exc)}
+
     async def get_live_status(self, target_dir):
         """Whether settings can currently be changed without a restart."""
         source = self.live_asi_path()
         report = await self._run(live.status, target_dir, source, self.plugin_dir)
         report["asi_available"] = source is not None
+
+        cfg = self._adaptive_config(target_dir)
+        if cfg["enabled"]:
+            disp = await self._run(display_info)
+            fg_output = "auto"
+            xefg_count = 1
+            ini_path = Path(target_dir) / INI_NAME
+            if ini_path.is_file():
+                try:
+                    ini = IniFile(ini_path)
+                    fg_output = str(ini.get("FrameGen", "FGOutput", "auto"))
+                    raw_count = str(ini.get("XeFG", "InterpolationCount", "1")).strip()
+                    if raw_count.isdigit():
+                        xefg_count = int(raw_count)
+                except OSError:
+                    pass
+            adaptive_status, changes = self._adaptive.evaluate(
+                Path(target_dir).resolve(),
+                cfg,
+                report,
+                display=disp,
+                fg_output=fg_output,
+                current_xefg_count=xefg_count,
+            )
+            if changes:
+                live_context = {
+                    "target": str(Path(target_dir).resolve()),
+                    "session": report.get("session"),
+                    "active_api": report.get("active_api"),
+                    "capability_generation": report.get("capability_generation"),
+                    "directory_generation": report.get("directory_generation"),
+                }
+                applied = await self.write_config(
+                    target_dir, changes, push_live=True, live_context=live_context
+                )
+                adaptive_status["last_apply_ok"] = bool(applied.get("ok"))
+                if not applied.get("ok"):
+                    adaptive_status["error"] = applied.get("error")
+            report["adaptive_fg"] = adaptive_status
         return report
 
     async def install_live(self, target_dir):
@@ -1411,6 +1531,10 @@ def _experiment_key(game_path):
 
 def _runtime_hold_key(target_dir):
     return f"runtime-upgrade-hold:{Path(target_dir).resolve()}"
+
+
+def _adaptive_fg_key(target_dir):
+    return f"adaptive_fg:{Path(target_dir).resolve()}"
 
 
 def _keeps_no_framegen(target_dir):

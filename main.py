@@ -194,6 +194,15 @@ class Plugin:
         return await self.service.reset_config(target_dir)
 
     # -- monitoring ------------------------------------------------------
+    async def get_display_info(self) -> dict:
+        return await self.service.get_display_info()
+
+    async def get_adaptive_fg(self, target_dir: str) -> dict:
+        return await self.service.get_adaptive_fg(target_dir)
+
+    async def set_adaptive_fg(self, target_dir: str, patch: dict) -> dict:
+        return await self.service.set_adaptive_fg(target_dir, patch)
+
     async def get_live_status(self, target_dir: str) -> dict:
         return await self.service.get_live_status(target_dir)
 
