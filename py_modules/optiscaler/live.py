@@ -548,6 +548,15 @@ def _manifest_identity(target_dir, source, plugin_root=None):
         return False, "The install manifest is missing or invalid.", info, False
     if not manifest:
         return False, "Set up this game with the plugin before using live control.", info, False
+    if manifest.get("anr_fg") and manifest["anr_fg"].get("enabled"):
+        return (
+            False,
+            "Live control is unavailable while Apex Neural Rendering (ANR FG) is active "
+            f"(ANR uses OptiScaler {constants.ANR_OPTISCALER_COMMIT}). Disable ANR FG in "
+            "Setup to restore OptiScaler 0.9.5 and live control.",
+            info,
+            False,
+        )
     if not installer.runtime_current(target_dir):
         return False, "This game does not have the pinned OptiScaler core.", info, False
     install_base_ready = bool(info and profile)

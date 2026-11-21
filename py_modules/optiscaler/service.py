@@ -6,7 +6,7 @@ import stat
 import time
 from pathlib import Path
 
-from . import autoplan, constants, fsr4build, gameprofiles, installer, live, monitor, reframework, restorepoint, steam
+from . import anr, autoplan, constants, fsr4build, gameprofiles, installer, live, monitor, reframework, restorepoint, steam
 from .constants import (
     DEFAULT_PROXY,
     LIVE_CONTROL_SUPPORTED,
@@ -403,6 +403,7 @@ class OptiScalerService:
                 "install": info,
                 "launch_option": installer.launch_option(info["filename"] or DEFAULT_PROXY),
                 "reframework": reframework.status(target),
+                "anr": anr.status(target),
                 "writable": os.access(target, os.W_OK) if Path(target).is_dir() else False,
             }
 
@@ -1327,6 +1328,44 @@ class OptiScalerService:
                     return {"ok": True, "installed": bool(enabled)}
                 return await self._run(work)
         except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def anr_cache(self):
+        """Cache directory for verified Apex Neural Rendering (ANR FG) archives."""
+        return self.runtime_dir / "anr"
+
+    async def get_anr_status(self, target_dir):
+        """Report whether ANR FG is installed and verified for one game folder."""
+        return await self._run(anr.status, target_dir)
+
+    async def install_anr_fg(self, target_dir):
+        """Download, verify, and enable ANR FG for one managed game install."""
+        try:
+            async with self._mutation_lock:
+                await self._run(installer.require_stopped_install, target_dir)
+                if not await self._run(installer.runtime_current, target_dir):
+                    raise ValueError("Upgrade this game's OptiScaler runtime before enabling ANR FG.")
+                package = await self._run(anr.fetch, self.anr_cache(), self.log)
+                # Re-check inside installer: the game may have started during download.
+                result = await self._run(installer.install_anr_fg, target_dir, package, self.log)
+            return {"ok": True, **result}
+        except Exception as exc:
+            self.log.exception("ANR FG install failed for %s", target_dir)
+            return {"ok": False, "error": str(exc)}
+
+    async def remove_anr_fg(self, target_dir):
+        """Disable ANR FG and restore official OptiScaler 0.9.5 and live control."""
+        try:
+            payload_root = await self.ensure_payload()
+            live_source = self.live_asi_path()
+            async with self._mutation_lock:
+                result = await self._run(
+                    installer.remove_anr_fg, target_dir, payload_root,
+                    live_source, self.plugin_dir, self.log,
+                )
+            return {"ok": True, **result}
+        except Exception as exc:
+            self.log.exception("ANR FG removal failed for %s", target_dir)
             return {"ok": False, "error": str(exc)}
 
     async def get_live_status(self, target_dir):

@@ -30,6 +30,7 @@ export const UPSCALER_LABELS: Record<string, string> = {
 export const FG_INPUT_LABELS: Record<string, string> = {
   nofg: "No Frame Generation",
   nukems: "Nukem's DLSSG",
+  nvngxfg: "NVNGX FG",
   fsrfg: "FSR 3.1 FG",
   dlssg: "DLSSG via Streamline",
   xefg: "XeFG",

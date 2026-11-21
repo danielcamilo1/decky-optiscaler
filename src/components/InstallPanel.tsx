@@ -23,6 +23,7 @@ import {
 import { PREF_INSTALL_LAUNCH, isRemembering, recall, remember } from "../prefs";
 import { useAutoPlan } from "../hooks/useAutoPlan";
 import type { GameDetail, LiveStatus, PayloadStatus } from "../types";
+import { AnrPanel } from "./AnrPanel";
 import { KeyValue, Mono, Notice, Pill } from "./Common";
 import { Fsr4Panel } from "./Fsr4Panel";
 import { LivePanel } from "./LivePanel";
@@ -591,6 +592,16 @@ export function InstallPanel({ detail, status, appid, live, running, onBeforeMut
       {detail.install.installed ? (
         <OptipatcherPanel
           targetDir={detail.install.path}
+          onBeforeMutation={beforeManagedMutation}
+          onChanged={onChanged}
+        />
+      ) : null}
+
+      {detail.install.installed ? (
+        <AnrPanel
+          targetDir={detail.install.path}
+          running={running}
+          readOnly={!runtimeCurrent}
           onBeforeMutation={beforeManagedMutation}
           onChanged={onChanged}
         />

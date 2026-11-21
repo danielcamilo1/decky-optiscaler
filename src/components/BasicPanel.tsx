@@ -26,6 +26,7 @@ import {
   ffxFgChanges,
   ffxUpscalerChanges,
   frameGenEnabled,
+  isAnrFgActive,
   isFfxBackend,
   needsForcedInt8,
   runningBackend,
@@ -699,21 +700,28 @@ export function BasicPanel({
    * are the ones worth reaching first, and a control that cannot act yet is not
    * one of them.
    */
+  const anrFgActive = isAnrFgActive(values);
   const methodControls = (
     <>
       <PanelSectionRow>
         <ValueDropdown
           label="Method"
-          description={hint(fgPreset?.description ?? "Choose which frame generator to use.")}
+          description={hint(
+            anrFgActive
+              ? "Apex Neural Rendering (ANR FG) replaces NVIDIA DLSS Frame Generation. Manage or disable it in Setup → Manual setup."
+              : fgPreset?.description ?? "Choose which frame generator to use."
+          )}
           disabled={busy || !fgOn}
           bottomSeparator={automatic && fgOn && plannedFg ? "none" : "standard"}
           options={FG_PRESETS.map((preset) => ({ data: preset.id, label: preset.label }))}
           // A wiki plan writes the pair the entry names, which is a stronger
           // statement than any preset and need not be one of them.
-          selected={fgPreset?.id ?? `${rawFgInput} \u2192 ${rawFgOutput}`}
-          describe={() =>
-            `${curatedLabel("FrameGen.FGInput", rawFgInput) ?? rawFgInput} \u2192 ` +
-            `${curatedLabel("FrameGen.FGOutput", rawFgOutput) ?? rawFgOutput}`
+          selected={anrFgActive ? "anr-fg" : fgPreset?.id ?? `${rawFgInput} \u2192 ${rawFgOutput}`}
+          describe={(code) =>
+            code === "anr-fg"
+              ? "ANR FG (Apex Neural Rendering)"
+              : `${curatedLabel("FrameGen.FGInput", rawFgInput) ?? rawFgInput} \u2192 ` +
+                `${curatedLabel("FrameGen.FGOutput", rawFgOutput) ?? rawFgOutput}`
           }
           onPick={(id) => {
             const preset = FG_PRESETS.find((p) => p.id === id);

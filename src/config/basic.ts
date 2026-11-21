@@ -470,8 +470,20 @@ export function liveUpscalerLabel(live: LiveStatus | null | undefined): string |
 export const MULTIPLIER_SECTION = "XeFG";
 export const MULTIPLIER_KEY = "InterpolationCount";
 
+export const ANR_PROVIDER_NAME = "Apex Neural Rendering FG";
+
+export function isAnrFgActive(values: ConfigValues): boolean {
+  return (
+    get(values, "FrameGen", "FGInput") === "nvngxfg" &&
+    get(values, "FrameGen", "FGNvngxReplacement") === ANR_PROVIDER_NAME.toLowerCase()
+  );
+}
+
 export function frameGenEnabled(values: ConfigValues): boolean {
-  return get(values, "FrameGen", "Enabled") === "true";
+  const enabled = get(values, "FrameGen", "Enabled");
+  if (enabled === "true") return true;
+  // ANR FG sets Enabled=auto so OptiScaler follows the game's in-game DLSS FG toggle.
+  return isAnrFgActive(values) && isAuto(enabled);
 }
 
 export function activeFgPreset(values: ConfigValues): Preset | undefined {

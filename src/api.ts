@@ -1,5 +1,6 @@
 import { callable } from "@decky/api";
 import type {
+  AnrStatus,
   AutoPlanResult,
   ConfigResult,
   Fsr4Source,
@@ -203,6 +204,14 @@ export const installOptipatcher = callable<
   [targetDir: string, enabled: boolean],
   ActionResult
 >("install_optipatcher");
+
+export const getAnrStatus = callable<[targetDir: string], AnrStatus>("get_anr_status");
+export const installAnrFg = callable<[targetDir: string], ActionResult & { anr?: AnrStatus }>(
+  "install_anr_fg"
+);
+export const removeAnrFg = callable<[targetDir: string], ActionResult & { anr?: AnrStatus }>(
+  "remove_anr_fg"
+);
 
 export const getLiveStatus = callable<[targetDir: string], LiveStatus>("get_live_status");
 export const installLive = callable<[targetDir: string], ActionResult>("install_live");
