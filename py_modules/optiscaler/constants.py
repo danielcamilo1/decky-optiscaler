@@ -305,3 +305,30 @@ UPGRADE_RUNTIME_HASHES = {
     "0.9.4": "fbfb6676b829dad7e020fb830586a16aa0ec6add78016db48ef12e2ae1803231",
     "0.9.5-pre5": "bd6fe5e7defdf7520ecd7a45eb3b5fe173d70551af5ad4a21b2837dd5d2e8a28",
 }
+
+# Apex Neural Rendering (ANR FG — https://github.com/apex-compute/ANR).
+# Downloaded on demand from GitHub Releases and verified by pinned SHA-256
+# because the beta provider binaries are not open-source and cannot be bundled.
+# The full package carries upstream OptiScaler commit d6b02459, which adds the
+# FGNvngxReplacement custom-provider hook that OptiScaler 0.9.5 does not have.
+ANR_REPO = "apex-compute/ANR"
+ANR_VERSION = "FG-V.B20"
+ANR_ASSET = "anr-fg-V.B20-full.zip"
+ANR_ARCHIVE_BYTES = 11729994
+ANR_ARCHIVE_SHA256 = (
+    "999e8b08ac177749880d75018bbe02f6d184730bbd3bb13b68633860bf491598"
+)
+ANR_OPTISCALER_COMMIT = "d6b02459"
+ANR_OPTISCALER_BYTES = 29950464
+ANR_OPTISCALER_SHA256 = (
+    "1b285f895a6a24b914b8d8eaea0f2d5e9d5ff59230ca361437c0677e1f607418"
+)
+ANR_DIR_ROOT = "OptiScaler"
+ANR_CUSTOM_DIR = "OptiScaler/custom"
+ANR_PROVIDER_NAME = "Apex Neural Rendering FG"
+ANR_PROVIDER_REL_DIR = f"{ANR_CUSTOM_DIR}/{ANR_PROVIDER_NAME}"
+ANR_PROVIDER_DLL_REL = f"{ANR_PROVIDER_REL_DIR}/dlssg/nvngx_dlssg.dll"
+ANR_PROVIDER_DLL_BYTES = 3684136
+ANR_PROVIDER_DLL_SHA256 = (
+    "94dc4f10b20d8034d9c1342385a545c60a92de9b6ddea86fd0012c7883a6e0a4"
+)

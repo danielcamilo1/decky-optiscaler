@@ -153,6 +153,21 @@ export interface IniInfo {
   keys: number;
 }
 
+export interface AnrStatus {
+  installed: boolean;
+  managed: boolean;
+  active: boolean;
+  version: string | null;
+  pinned_version: string;
+  optiscaler_commit: string;
+  provider_name: string;
+  provider_present: boolean;
+  provider_verified: boolean;
+  proxy_matches_anr: boolean;
+  ini_configured: boolean;
+  release_url: string;
+}
+
 export interface GameDetail {
   path: string;
   name: string;
@@ -169,6 +184,7 @@ export interface GameDetail {
   install: InstallInfo;
   launch_option: string;
   reframework: ReframeworkStatus;
+  anr?: AnrStatus;
   writable: boolean;
 }
 
@@ -376,6 +392,7 @@ export type ConfigValues = Record<string, Record<string, string>>;
 
 export interface ConfigResult {
   fsr4_build?: string | null;
+  anr_active?: boolean;
   ok: boolean;
   error?: string;
   path?: string;

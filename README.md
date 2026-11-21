@@ -53,6 +53,7 @@ The native bridge uses the final 0.9.5 source references and PDB-backed profile.
 
 - Decky OptiScaler authors and contributors.
 - [OptiScaler](https://github.com/optiscaler/OptiScaler) and its wiki contributors.
+- [Apex Neural Rendering (ANR)](https://github.com/apex-compute/ANR) for optional per-game ANR FG frame generation (see [the ANR guide](docs/anr.md)).
 - [fsr4-shader-performance-overrides](https://github.com/zgauthier2000/fsr4-shader-performance-overrides) community Lite build.
 - [fsr4xyz](https://github.com/the3rdparty1917/fsr4xyz) legacy 4.1.1b RDNA2 build.
 - [Decky Framegen](https://github.com/xXJSONDeruloXx/Decky-Framegen) and [Decky LSFG-VK](https://github.com/xXJSONDeruloXx/decky-lsfg-vk) for the upstream deployment/UI references.

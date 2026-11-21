@@ -12,6 +12,7 @@ import {
   liveFfxVersionChoices,
 } from "../liveControl";
 import {
+  ANR_FG_PRESET_ID,
   FFX_FG_ID,
   FFX_UPSCALER_ID,
   FG_PRESETS,
@@ -26,6 +27,7 @@ import {
   ffxFgChanges,
   ffxUpscalerChanges,
   frameGenEnabled,
+  isAnrFgActive,
   isFfxBackend,
   needsForcedInt8,
   runningBackend,
@@ -100,6 +102,10 @@ interface Props {
   onLiveChanged?: () => void;
   fsr4Build?: string | null;
   onEnableFsr4?: () => Promise<void>;
+  anrActive?: boolean;
+  onEnableAnr?: () => Promise<void>;
+  onDisableAnr?: () => Promise<void>;
+  onAnrChanged?: () => void | Promise<void>;
   onApply: (changes: OptionChange[]) => void | Promise<Record<string, number> | null>;
 }
 
@@ -272,6 +278,10 @@ export function BasicPanel({
   onApply,
   fsr4Build,
   onEnableFsr4,
+  anrActive,
+  onEnableAnr,
+  onDisableAnr,
+  onAnrChanged,
 }: Readonly<Props>) {
   const live = reportedLive?.supported === true ? reportedLive : null;
   const bindingTarget = liveTargetDir ?? targetDir ?? null;
@@ -282,8 +292,10 @@ export function BasicPanel({
   // when there is something to switch to.
   const [installingFsr4, setInstallingFsr4] = useState(false);
   const [fsr4Error, setFsr4Error] = useState<string | null>(null);
+  const [switchingAnr, setSwitchingAnr] = useState(false);
+  const [anrError, setAnrError] = useState<string | null>(null);
   const [switching, setSwitching] = useState(false);
-  const busy = disabled || installingFsr4 || autoBusy || switching;
+  const busy = disabled || installingFsr4 || switchingAnr || autoBusy || switching;
   const [picked, setPicked] = useState<string | null>(null);
   const [pickedBinding, setPickedBinding] = useState<{
     context: LiveContext | null;
@@ -699,30 +711,99 @@ export function BasicPanel({
    * are the ones worth reaching first, and a control that cannot act yet is not
    * one of them.
    */
+  const anrFgActive = Boolean(anrActive) || isAnrFgActive(values);
+  const fgChoices = FG_PRESETS.filter(
+    (preset) => preset.id !== ANR_FG_PRESET_ID || Boolean(onEnableAnr) || anrFgActive
+  );
   const methodControls = (
     <>
       <PanelSectionRow>
         <ValueDropdown
           label="Method"
-          description={hint(fgPreset?.description ?? "Choose which frame generator to use.")}
+          description={hint(
+            anrFgActive
+              ? "Apex Neural Rendering (ANR FG) replaces NVIDIA DLSS Frame Generation. Pick any other method to automatically restore OptiScaler 0.9.5 and live control."
+              : fgPreset?.description ?? "Choose which frame generator to use."
+          )}
           disabled={busy || !fgOn}
           bottomSeparator={automatic && fgOn && plannedFg ? "none" : "standard"}
-          options={FG_PRESETS.map((preset) => ({ data: preset.id, label: preset.label }))}
+          options={fgChoices.map((preset) => ({ data: preset.id, label: preset.label }))}
           // A wiki plan writes the pair the entry names, which is a stronger
           // statement than any preset and need not be one of them.
-          selected={fgPreset?.id ?? `${rawFgInput} \u2192 ${rawFgOutput}`}
-          describe={() =>
-            `${curatedLabel("FrameGen.FGInput", rawFgInput) ?? rawFgInput} \u2192 ` +
-            `${curatedLabel("FrameGen.FGOutput", rawFgOutput) ?? rawFgOutput}`
+          selected={anrFgActive ? ANR_FG_PRESET_ID : fgPreset?.id ?? `${rawFgInput} \u2192 ${rawFgOutput}`}
+          describe={(code) =>
+            code === ANR_FG_PRESET_ID
+              ? "ANR FG (Apex Neural Rendering)"
+              : `${curatedLabel("FrameGen.FGInput", rawFgInput) ?? rawFgInput} \u2192 ` +
+                `${curatedLabel("FrameGen.FGOutput", rawFgOutput) ?? rawFgOutput}`
           }
           onPick={(id) => {
             const preset = FG_PRESETS.find((p) => p.id === id);
             if (!preset) return;
+            setAnrError(null);
+            if (preset.id === ANR_FG_PRESET_ID) {
+              if (!onEnableAnr) return;
+              setSwitchingAnr(true);
+              void onEnableAnr()
+                .then(async () => {
+                  setMethodChanged(true);
+                  await onAnrChanged?.();
+                })
+                .catch((error) => setAnrError(String(error)))
+                .finally(() => setSwitchingAnr(false));
+              return;
+            }
+            if (anrFgActive && onDisableAnr) {
+              setSwitchingAnr(true);
+              void onDisableAnr()
+                .then(async () => {
+                  setMethodChanged(true);
+                  await applyChanges([
+                    { section: "FrameGen", key: "Enabled", value: "true" },
+                    ...preset.changes,
+                    { section: "FrameGen", key: "FGNvngxReplacement", value: AUTO },
+                  ]);
+                  await onAnrChanged?.();
+                })
+                .catch((error) => setAnrError(String(error)))
+                .finally(() => setSwitchingAnr(false));
+              return;
+            }
             setMethodChanged(true);
             applyChanges(preset.changes);
           }}
         />
       </PanelSectionRow>
+
+      {switchingAnr || anrError ? (
+        <PanelSectionRow>
+          <Notice
+            tone={anrError ? "error" : "info"}
+            title={
+              anrError
+                ? "ANR FG switch failed"
+                : anrFgActive
+                  ? "Restoring OptiScaler 0.9.5…"
+                  : "Setting up ANR FG…"
+            }
+          >
+            {anrError ??
+              (anrFgActive
+                ? "Disabling ANR FG and restoring bundled OptiScaler 0.9.5 and live control."
+                : "Downloading, verifying, and enabling Apex Neural Rendering (ANR FG).")}
+          </Notice>
+        </PanelSectionRow>
+      ) : null}
+
+      {anrFgActive && !switchingAnr && !anrError && !compact ? (
+        <PanelSectionRow>
+          <Notice tone="info" title="ANR FG active">
+            Enable NVIDIA DLSS Frame Generation in the game's settings — ANR FG takes its place.
+            Switching Method to FSR FG, XeFG, Nukem's, or DLSSG automatically restores OptiScaler
+            0.9.5 and live control.
+          </Notice>
+        </PanelSectionRow>
+      ) : null}
 
       {automatic && fgOn && plannedFg ? (
         <PanelSectionRow>

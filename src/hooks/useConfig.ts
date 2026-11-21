@@ -9,7 +9,7 @@ import {
 } from "../config/liveRecord";
 import type { PendingLiveChange } from "../config/liveRecord";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { readConfig, setFsr4Build, writeConfig } from "../api";
+import { installAnrFg, readConfig, removeAnrFg, setFsr4Build, writeConfig } from "../api";
 import { AUTO } from "../config/values";
 import { STEAM_DECK_FSR4_BUILD_ID } from "../config/basic";
 import { optionsInSection } from "../config/tabs";
@@ -97,6 +97,7 @@ interface ConfigView {
   identity: string;
   values: ConfigValues;
   fsr4Build: string | null;
+  anrActive: boolean;
   runtimeCurrent: boolean | undefined;
   loading: boolean;
   error: string | null;
@@ -112,6 +113,7 @@ function emptyView(identity: string, loading = false): ConfigView {
     identity,
     values: {},
     fsr4Build: null,
+    anrActive: false,
     runtimeCurrent: undefined,
     loading,
     error: null,
@@ -243,6 +245,7 @@ export function useConfig(
             ...current,
             values: authoritative ? result.values : overlay(dir, result.values),
             fsr4Build: result.fsr4_build ?? null,
+            anrActive: Boolean(result.anr_active),
             runtimeCurrent: result.runtime_current,
             live: liveRecord.live ?? current.live,
             restartKeys: liveRecord.restartKeys,
@@ -858,6 +861,70 @@ export function useConfig(
     gameContext?.appid,
   ]);
 
+  const enableAnr = useCallback(async () => {
+    if (!targetDir) throw new Error("Install OptiScaler first.");
+    if (view.runtimeCurrent !== true) throw new Error("Upgrade runtime in Setup first.");
+    updateView(identity, (current) => ({ ...current, saving: true, error: null }));
+    try {
+      await flushTarget(targetDir, identity, generationAtRender, true);
+      if (gameContext?.gamePath) {
+        const preserved = await preserveExistingInstall(targetDir, gameContext.gamePath, gameContext.appid);
+        if (!preserved.ok) throw new Error(preserved.error ?? "Could not preserve the previous install.");
+      }
+      const result = await serializeTargetWrite(targetDir, () => installAnrFg(targetDir));
+      if (!result.ok) throw new Error(result.error ?? "Could not enable ANR FG");
+      forgetWrites(targetDir);
+      await readTarget(targetDir, identity, generationAtRender, true);
+      clearTargetLiveActions(targetDir);
+      const updatedRecord = getTargetLiveRecord(targetDir);
+      updateView(identity, (current) => ({
+        ...current,
+        ...updatedRecord,
+        dirty: false,
+      }));
+    } finally {
+      updateView(identity, (current) => ({ ...current, saving: false }));
+    }
+  }, [
+    targetDir,
+    view.runtimeCurrent,
+    updateView,
+    identity,
+    generationAtRender,
+    flushTarget,
+    readTarget,
+    gameContext?.gamePath,
+    gameContext?.appid,
+  ]);
+
+  const disableAnr = useCallback(async () => {
+    if (!targetDir) throw new Error("Install OptiScaler first.");
+    updateView(identity, (current) => ({ ...current, saving: true, error: null }));
+    try {
+      await flushTarget(targetDir, identity, generationAtRender, true);
+      const result = await serializeTargetWrite(targetDir, () => removeAnrFg(targetDir));
+      if (!result.ok) throw new Error(result.error ?? "Could not disable ANR FG");
+      forgetWrites(targetDir);
+      await readTarget(targetDir, identity, generationAtRender, true);
+      clearTargetLiveActions(targetDir);
+      const updatedRecord = getTargetLiveRecord(targetDir);
+      updateView(identity, (current) => ({
+        ...current,
+        ...updatedRecord,
+        dirty: false,
+      }));
+    } finally {
+      updateView(identity, (current) => ({ ...current, saving: false }));
+    }
+  }, [
+    targetDir,
+    updateView,
+    identity,
+    generationAtRender,
+    flushTarget,
+    readTarget,
+  ]);
+
   const resetSection = useCallback(
     (section: string, bindings?: Record<string, LiveContext>) => {
       if (view.runtimeCurrent !== true) return;
@@ -927,8 +994,11 @@ export function useConfig(
   return {
     values: view.values,
     fsr4Build: view.fsr4Build,
+    anrActive: view.anrActive,
     runtimeCurrent: view.runtimeCurrent,
     enableFsr4,
+    enableAnr,
+    disableAnr,
     loading: view.loading || Boolean(targetDir && enabled && storedView.identity !== identity),
     error: view.error,
     dirty: view.dirty,

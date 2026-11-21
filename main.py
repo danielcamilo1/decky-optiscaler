@@ -179,6 +179,15 @@ class Plugin:
     async def install_optipatcher(self, target_dir: str, enabled: bool = True) -> dict:
         return await self.service.install_optipatcher(target_dir, enabled)
 
+    async def get_anr_status(self, target_dir: str) -> dict:
+        return await self.service.get_anr_status(target_dir)
+
+    async def install_anr_fg(self, target_dir: str) -> dict:
+        return await self.service.install_anr_fg(target_dir)
+
+    async def remove_anr_fg(self, target_dir: str) -> dict:
+        return await self.service.remove_anr_fg(target_dir)
+
     async def uninstall(self, target_dir: str, remove_ini: bool = True) -> dict:
         return await self.service.uninstall(target_dir, remove_ini)
 

@@ -19,9 +19,19 @@ from contextlib import contextmanager
 from pathlib import Path
 from pathlib import PurePosixPath
 
-from . import constants, fsr4build, live, schema
+from . import anr, constants, fsr4build, live, schema
 from .inifile import IniFile
 from .constants import (
+    ANR_CUSTOM_DIR,
+    ANR_DIR_ROOT,
+    ANR_OPTISCALER_BYTES,
+    ANR_OPTISCALER_COMMIT,
+    ANR_OPTISCALER_SHA256,
+    ANR_PROVIDER_DLL_BYTES,
+    ANR_PROVIDER_DLL_REL,
+    ANR_PROVIDER_DLL_SHA256,
+    ANR_PROVIDER_NAME,
+    ANR_PROVIDER_REL_DIR,
     OPTIPATCHER_NAME,
     OPTIPATCHER_SHA256,
     BACKUP_DIR,
@@ -78,8 +88,20 @@ def _allowed_file_names():
             | set(nested))
 
 
+def _is_anr_provider_path(name, directory=False):
+    """Whether ``name`` lies within the managed ANR custom provider namespace."""
+    folded = name.casefold()
+    provider_prefix = ANR_PROVIDER_REL_DIR.casefold() + "/"
+    if directory:
+        return (folded in (ANR_DIR_ROOT.casefold(), ANR_CUSTOM_DIR.casefold(),
+                           ANR_PROVIDER_REL_DIR.casefold())
+                or folded.startswith(provider_prefix))
+    return folded.startswith(provider_prefix)
+
+
 def _allowed_dir_names():
-    return set(PAYLOAD_DIRS) | {"DlssOverrides", live.PLUGIN_SUBDIR}
+    return set(PAYLOAD_DIRS) | {"DlssOverrides", live.PLUGIN_SUBDIR,
+                                ANR_DIR_ROOT, ANR_CUSTOM_DIR, ANR_PROVIDER_REL_DIR}
 
 
 def _shared_dir_names():
@@ -122,6 +144,8 @@ def _relative_name(name):
 
 def _validate_owned_name(name, directory=False):
     normalized = _relative_name(name)
+    if _is_anr_provider_path(normalized, directory=directory):
+        return normalized
     allowed = _allowed_dir_names() if directory else _allowed_file_names()
     allowed_casefold = {item.casefold() for item in allowed}
     if normalized not in allowed and normalized.casefold() not in allowed_casefold:
@@ -470,7 +494,8 @@ def validate_manifest(manifest):
     if not isinstance(created_dirs, list):
         raise ValueError("OptiScaler manifest created_directories must be a list")
     for name in created_dirs:
-        if name not in set(PAYLOAD_DIRS) | {live.PLUGIN_SUBDIR}:
+        if (name not in set(PAYLOAD_DIRS) | {live.PLUGIN_SUBDIR}
+                and not _is_anr_provider_path(_relative_name(name), directory=True)):
             raise ValueError(f"OptiScaler manifest has an unsupported created directory: {name}")
     original_dirs = manifest.get("original_directories", {})
     if not isinstance(original_dirs, dict):
@@ -823,8 +848,12 @@ def _validate_transaction_records(target, journal, records, intent=None,
         copy_stage = leaf.casefold().startswith(TRANSACTION_COPY_PREFIX.casefold())
         restorepoint_stage = ("/" not in name and
                               name.casefold().startswith(RESTOREPOINT_STAGING_PREFIX.casefold()))
-        payload_tree_path = any(name.casefold().startswith(directory.casefold() + "/")
-                                for directory in PAYLOAD_DIRS)
+        payload_tree_path = (
+            any(name.casefold().startswith(directory.casefold() + "/")
+                for directory in PAYLOAD_DIRS)
+            or _is_anr_provider_path(name, directory=False)
+            or _is_anr_provider_path(name, directory=True)
+        )
         if (name.casefold() not in allowed_casefold
                 and _legacy_backup_target(name) is None
                 and not copy_stage and not restorepoint_stage
@@ -1120,11 +1149,16 @@ def target_transaction(target_dir, extra_names=(), require_stopped=False,
             raise ValueError("managed INI transaction includes an out-of-scope path")
         if extra_dirs:
             raise ValueError("managed INI transaction cannot include directory paths")
+    def _nested_parent_dirs(path_names):
+        parents = set()
+        for item in path_names:
+            parts = PurePosixPath(_relative_name(item)).parts
+            parents.update(PurePosixPath(*parts[:index]).as_posix()
+                           for index in range(1, len(parts)))
+        return parents
+
     explicit_dirs = {_relative_name(name) for name in (extra_dirs or ())}
-    for name in extra_names or ():
-        parts = PurePosixPath(_relative_name(name)).parts
-        explicit_dirs.update(PurePosixPath(*parts[:index]).as_posix()
-                             for index in range(1, len(parts)))
+    explicit_dirs.update(_nested_parent_dirs(extra_names or ()))
     _preflight_recovery_live_asi(target)
     active = getattr(_TRANSACTIONS, "targets", None)
     if active is None:
@@ -1135,8 +1169,10 @@ def target_transaction(target_dir, extra_names=(), require_stopped=False,
         if state.get("intent") == TRANSACTION_INTENT_MANAGED_INI and intent not in (
                 TRANSACTION_INTENT_MANAGED_INI, TRANSACTION_INTENT_STOPPED):
             raise ValueError("nested transaction cannot widen a managed INI transaction")
-        names = sorted(set(_transaction_paths(target, extra_names, include_known))
-                       | explicit_dirs)
+        tx_paths = _transaction_paths(target, extra_names, include_known)
+        if include_known:
+            explicit_dirs.update(_nested_parent_dirs(tx_paths))
+        names = sorted(set(tx_paths) | explicit_dirs)
         state.setdefault("extra_dirs", set()).update(explicit_dirs)
         if require_stopped:
             require_stopped_target(target)
@@ -1166,8 +1202,10 @@ def target_transaction(target_dir, extra_names=(), require_stopped=False,
         return
 
     recover_target_transactions(target)
-    names = sorted(set(_transaction_paths(target, extra_names, include_known))
-                   | explicit_dirs)
+    tx_paths = _transaction_paths(target, extra_names, include_known)
+    if include_known:
+        explicit_dirs.update(_nested_parent_dirs(tx_paths))
+    names = sorted(set(tx_paths) | explicit_dirs)
     if require_stopped:
         require_stopped_target(target)
     preparing = Path(tempfile.mkdtemp(prefix=TRANSACTION_PREPARING_PREFIX, dir=target))
@@ -1746,16 +1784,315 @@ def runtime_current(target_dir):
     expected = getattr(constants, "RUNTIME_DLL_SHA256", "")
     if not expected:
         return False
-    import hashlib
+    actual = _sha256_file(path)
+    if actual == expected:
+        return True
+    anr_record = (manifest or {}).get("anr_fg") or {}
+    if anr_record.get("enabled"):
+        provider = _safe_path(target_dir, ANR_PROVIDER_DLL_REL)
+        return (
+            actual == ANR_OPTISCALER_SHA256
+            and anr._matches(provider, ANR_PROVIDER_DLL_BYTES, ANR_PROVIDER_DLL_SHA256)
+        )
+    return False
 
-    digest = hashlib.sha256()
-    try:
-        with path.open("rb") as handle:
-            for block in iter(lambda: handle.read(1 << 20), b""):
-                digest.update(block)
-    except OSError:
-        return False
-    return digest.hexdigest() == expected
+
+def _anr_parent_dirs(relative_files):
+    """All parent directories under OptiScaler/ needed for ANR provider files."""
+    dirs = set()
+    for rel in relative_files:
+        parts = PurePosixPath(rel).parts
+        for idx in range(1, len(parts)):
+            dirs.add(PurePosixPath(*parts[:idx]).as_posix())
+    return sorted(dirs, key=lambda item: (len(PurePosixPath(item).parts), item))
+
+
+def _remove_anr_runtime_logs(target, logger=None):
+    """Remove runtime nr_fg-*.log files created inside the ANR provider folder."""
+    dlssg_dir = _safe_path(target, f"{ANR_PROVIDER_REL_DIR}/dlssg")
+    if not _path_exists(dlssg_dir) or not stat.S_ISDIR(dlssg_dir.lstat().st_mode):
+        return []
+    removed = []
+    for child in sorted(dlssg_dir.iterdir()):
+        if not child.name.startswith("nr_fg-") or not child.name.endswith(".log"):
+            continue
+        if _require_path_type(child, directory=False):
+            child.unlink()
+            removed.append(f"{ANR_PROVIDER_REL_DIR}/dlssg/{child.name}")
+            if logger:
+                logger.info("removed ANR runtime log %s", child.name)
+    return removed
+
+
+def _prune_empty_dirs(target, directories, original_directories=None):
+    """Remove empty managed directories deepest-first without removing user files."""
+    removed = []
+    originals = original_directories or {}
+    for name in sorted(set(directories),
+                       key=lambda item: (len(PurePosixPath(item).parts), item),
+                       reverse=True):
+        original = originals.get(name)
+        if original and original.get("exists"):
+            continue
+        path = _safe_path(target, name)
+        if _require_path_type(path, directory=True) and not any(path.iterdir()):
+            path.rmdir()
+            removed.append(name + "/")
+    return removed
+
+
+def install_anr_fg(target_dir, package, logger=None):
+    """Install verified ANR FG provider files and Apex OptiScaler proxy DLL.
+
+    Swaps the game's installed OptiScaler proxy to the pinned Apex OptiScaler
+    build (which provides ``FGNvngxReplacement``), copies the verified ANR FG
+    provider tree into ``OptiScaler/custom/Apex Neural Rendering FG/``, removes
+    the incompatible 0.9.5 live-control bridge, and updates ``OptiScaler.ini``.
+    """
+    target = Path(target_dir).resolve()
+    if not target.is_dir():
+        raise NotADirectoryError(f"install target does not exist: {target}")
+    if not isinstance(package, dict) or not package.get("proxy_dll") or not package.get("files"):
+        raise ValueError("ANR FG package descriptor is incomplete.")
+    proxy_src = Path(package["proxy_dll"])
+    pkg_root = Path(package["root"])
+    if not anr._matches(proxy_src, ANR_OPTISCALER_BYTES, ANR_OPTISCALER_SHA256):
+        raise ValueError("ANR OptiScaler proxy DLL checksum mismatch.")
+    provider_src = pkg_root / ANR_PROVIDER_DLL_REL
+    if not anr._matches(provider_src, ANR_PROVIDER_DLL_BYTES, ANR_PROVIDER_DLL_SHA256):
+        raise ValueError("ANR provider DLL checksum mismatch.")
+
+    rel_files = [_validate_owned_name(rel) for rel in package["files"]]
+    if ANR_PROVIDER_DLL_REL not in rel_files:
+        raise ValueError("ANR FG package is missing nvngx_dlssg.dll.")
+    rel_dirs = _anr_parent_dirs(rel_files)
+
+    recover_target_transactions(target)
+    require_stopped_install(target)
+    manifest = read_manifest(target)
+    if not manifest:
+        raise ValueError("Install OptiScaler with this plugin before enabling ANR FG.")
+    if not runtime_current(target):
+        raise ValueError("Upgrade this game's OptiScaler runtime before enabling ANR FG.")
+    filename = manifest.get("filename")
+    if filename not in PROXY_FILENAMES:
+        raise ValueError("The installed proxy filename is unknown.")
+    _preflight_canonical_install_paths(target, (filename, *rel_files))
+    _backup_items(target, manifest)
+
+    extra_names = [filename, INI_NAME, MANIFEST_NAME, *rel_files,
+                   f"{live.PLUGIN_SUBDIR}/{live.ASI_NAME}", *live.CONTROL_FILES]
+    with target_transaction(target, extra_names=extra_names, extra_dirs=rel_dirs,
+                            require_stopped=True):
+        require_stopped_target(target)
+        manifest = read_manifest(target)
+        if not manifest:
+            raise ValueError("Install OptiScaler with this plugin before enabling ANR FG.")
+        files = list(manifest.get("files") or [])
+        backups = dict(manifest.get("backups") or {})
+        created_dirs = list(manifest.get("created_directories") or [])
+        old_anr = manifest.get("anr_fg") or {}
+
+        # Remove the 0.9.5 live-control bridge so it is never loaded into Apex's
+        # OptiScaler build (d6b02459). Remember if it was installed so disabling
+        # ANR FG restores it cleanly.
+        had_live_asi = bool(old_anr.get("had_live_asi") if old_anr.get("enabled")
+                            else manifest.get("live_asi"))
+        live_rel = f"{live.PLUGIN_SUBDIR}/{live.ASI_NAME}"
+        for item in (live_rel, *live.CONTROL_FILES):
+            path = _safe_path(target, item)
+            if _path_exists(path) and item in files:
+                _require_path_type(path, directory=False)
+                path.unlink()
+            if item in files:
+                files.remove(item)
+        manifest["live_asi"] = False
+        for key in ("live_asi_sha256", "live_build_id", "live_profile_id",
+                    "live_schema", "live_core_sha256"):
+            manifest.pop(key, None)
+
+        # Record which directories under OptiScaler/ we are creating.
+        anr_created_dirs = list(old_anr.get("created_directories") or [])
+        for directory in rel_dirs:
+            dir_path = _safe_path(target, directory)
+            mode = _existing_mode(dir_path)
+            if mode is not None and not stat.S_ISDIR(mode):
+                raise ValueError(f"ANR path is not a directory: {dir_path}")
+            if mode is None:
+                if directory not in anr_created_dirs:
+                    anr_created_dirs.append(directory)
+                if directory not in created_dirs:
+                    created_dirs.append(directory)
+
+        # Swap proxy DLL to Apex OptiScaler.
+        atomic_copy(proxy_src, _safe_path(target, filename), target_dir=target)
+
+        # Copy verified ANR provider files, preserving an existing user nr_fg.ini.
+        for rel in rel_files:
+            source = pkg_root.joinpath(*PurePosixPath(rel).parts)
+            if source.is_symlink() or not source.is_file():
+                raise FileNotFoundError(f"ANR source file missing: {source}")
+            destination = _safe_path(target, rel)
+            if rel == anr.NR_FG_INI_REL and _path_exists(destination):
+                _require_path_type(destination, directory=False)
+                if rel not in files:
+                    files.append(rel)
+                continue
+            if _path_exists(destination) and rel not in backups and rel not in files:
+                backups[rel] = _stash(target, destination, logger)
+            atomic_copy(source, destination, target_dir=target)
+            if rel not in files:
+                files.append(rel)
+
+        # Update OptiScaler.ini atomically and capture prior [FrameGen] values.
+        ini_path = _safe_path(target, INI_NAME)
+        if not _path_exists(ini_path) or not stat.S_ISREG(ini_path.lstat().st_mode):
+            raise FileNotFoundError("OptiScaler.ini not found")
+        with tempfile.TemporaryDirectory(prefix=".decky-anr-") as staging:
+            edited_ini = Path(staging) / INI_NAME
+            shutil.copy2(ini_path, edited_ini)
+            ini = IniFile(edited_ini)
+            fg_keys = ("Enabled", "FGInput", "FGOutput", "FGNvngxReplacement", "DisableHudless")
+            previous_fg = old_anr.get("previous_fg") if old_anr.get("enabled") else {
+                key: ini.get("FrameGen", key, None) for key in fg_keys
+            }
+            for change in anr.ini_changes():
+                meta = schema.option(change["section"], change["key"])
+                if meta is None or not schema.valid(meta, change["value"]):
+                    raise ValueError(
+                        f"Invalid ANR INI setting: {change['section']}.{change['key']}={change['value']}"
+                    )
+                ini.set(change["section"], change["key"], change["value"])
+            ini.save()
+            atomic_copy(edited_ini, ini_path, target_dir=target)
+
+        manifest["files"] = files
+        manifest["backups"] = backups
+        manifest["created_directories"] = created_dirs
+        manifest["anr_fg"] = {
+            "enabled": True,
+            "version": package["version"],
+            "optiscaler_commit": package.get("optiscaler_commit", ANR_OPTISCALER_COMMIT),
+            "proxy_sha256": ANR_OPTISCALER_SHA256,
+            "provider_dll_sha256": ANR_PROVIDER_DLL_SHA256,
+            "files": rel_files,
+            "created_directories": anr_created_dirs,
+            "had_live_asi": had_live_asi,
+            "previous_fg": previous_fg,
+        }
+        validate_manifest(manifest)
+        _atomic_json(_safe_path(target, MANIFEST_NAME), manifest)
+    if logger:
+        logger.info("enabled ANR FG %s in %s", package["version"], target)
+    return {
+        "path": str(target),
+        "filename": filename,
+        "anr": anr.status(target),
+        "restart_required": True,
+    }
+
+
+def remove_anr_fg(target_dir, payload_root, live_asi=None, plugin_root=None, logger=None):
+    """Disable ANR FG, restore bundled OptiScaler 0.9.5, and restore live control."""
+    target = Path(target_dir).resolve()
+    payload = Path(payload_root)
+    if not target.is_dir():
+        raise NotADirectoryError(f"install target does not exist: {target}")
+    _payload_inventory(payload)
+    source_dll = payload / "OptiScaler.dll"
+    if _sha256_file(source_dll) != constants.RUNTIME_DLL_SHA256:
+        raise ValueError("Bundled OptiScaler.dll checksum mismatch.")
+    live_info = None
+    if live_asi is not None:
+        live_info = live.validate_live_source(live_asi, plugin_root)
+
+    recover_target_transactions(target)
+    require_stopped_install(target)
+    manifest = read_manifest(target)
+    if not manifest:
+        raise ValueError("No managed OptiScaler install found.")
+    anr_record = manifest.get("anr_fg") or {}
+    if not anr_record.get("enabled"):
+        return {"path": str(target), "removed": [], "anr": anr.status(target)}
+    filename = manifest.get("filename")
+    if filename not in PROXY_FILENAMES:
+        raise ValueError("The installed proxy filename is unknown.")
+
+    anr_files = list(anr_record.get("files") or [])
+    anr_dirs = list(anr_record.get("created_directories") or [])
+    extra_names = [filename, INI_NAME, MANIFEST_NAME, *anr_files,
+                   f"{live.PLUGIN_SUBDIR}/{live.ASI_NAME}", *live.CONTROL_FILES]
+    with target_transaction(target, extra_names=extra_names, extra_dirs=anr_dirs,
+                            require_stopped=True):
+        require_stopped_target(target)
+        manifest = read_manifest(target)
+        anr_record = (manifest or {}).get("anr_fg") or {}
+        files = list(manifest.get("files") or [])
+        backups = dict(manifest.get("backups") or {})
+        created_dirs = list(manifest.get("created_directories") or [])
+        removed = []
+
+        # Restore official OptiScaler 0.9.5 proxy DLL.
+        atomic_copy(source_dll, _safe_path(target, filename), target_dir=target)
+
+        # Remove owned ANR provider files and any runtime logs.
+        for rel in anr_record.get("files") or []:
+            path = _safe_path(target, rel)
+            if _require_path_type(path, directory=False):
+                path.unlink()
+                removed.append(rel)
+            if rel in files:
+                files.remove(rel)
+        removed.extend(_remove_anr_runtime_logs(target, logger))
+        removed.extend(_prune_empty_dirs(target, anr_record.get("created_directories") or []))
+        for directory in anr_record.get("created_directories") or []:
+            if directory in created_dirs:
+                created_dirs.remove(directory)
+
+        # Restore prior [FrameGen] INI values.
+        ini_path = _safe_path(target, INI_NAME)
+        if _path_exists(ini_path) and stat.S_ISREG(ini_path.lstat().st_mode):
+            with tempfile.TemporaryDirectory(prefix=".decky-anr-restore-") as staging:
+                edited_ini = Path(staging) / INI_NAME
+                shutil.copy2(ini_path, edited_ini)
+                ini = IniFile(edited_ini)
+                previous_fg = anr_record.get("previous_fg") or {}
+                for key, old_value in previous_fg.items():
+                    ini.set("FrameGen", key, "auto" if old_value is None else str(old_value))
+                ini.save()
+                atomic_copy(edited_ini, ini_path, target_dir=target)
+
+        # Reinstall live-control ASI if it was active before enabling ANR FG.
+        if anr_record.get("had_live_asi") and live_asi is not None and live_info is not None:
+            live_rel = f"{live.PLUGIN_SUBDIR}/{live.ASI_NAME}"
+            _prepare_live_control_paths(target, backups, set(files), logger)
+            atomic_copy(live_asi, _safe_path(target, live_rel), target_dir=target)
+            for name in (live_rel, *live.CONTROL_FILES):
+                if name not in files:
+                    files.append(name)
+            manifest.update(
+                live_asi=True,
+                live_asi_sha256=live_info["sha256"],
+                live_build_id=live_info["build_id"],
+                live_profile_id=live_info["profile_id"],
+                live_schema=live_info["schema"],
+                live_core_sha256=constants.LIVE_CORE_SHA256,
+            )
+
+        manifest["files"] = files
+        manifest["backups"] = backups
+        manifest["created_directories"] = created_dirs
+        manifest.pop("anr_fg", None)
+        validate_manifest(manifest)
+        _atomic_json(_safe_path(target, MANIFEST_NAME), manifest)
+    if logger:
+        logger.info("disabled ANR FG and restored OptiScaler %s in %s", OPTISCALER_VERSION, target)
+    return {
+        "path": str(target),
+        "removed": removed,
+        "anr": anr.status(target),
+        "restart_required": True,
+    }
 
 
 def _replace_fsr4(target, source, recorded, enable_int8=False, fsr4_update="auto"):
@@ -2185,6 +2522,8 @@ def install_live_component(target_dir, source, logger=None, plugin_root=None):
     manifest = read_manifest(target)
     if not manifest:
         raise ValueError("Install OptiScaler with this plugin before adding live control.")
+    if (manifest.get("anr_fg") or {}).get("enabled"):
+        raise ValueError("Disable ANR FG before installing live control.")
     if not runtime_current(target):
         raise ValueError("Upgrade this game's OptiScaler core before installing live control.")
     live_rel = f"{live.PLUGIN_SUBDIR}/{live.ASI_NAME}"
@@ -2650,6 +2989,20 @@ def install(target_dir, payload_root, filename=DEFAULT_PROXY, preserve_ini=True,
         for name in created_dirs:
             if name not in dirs:
                 dirs.append(name)
+        # If ANR FG was active on this game, reinstalling official OptiScaler
+        # returns it to the bundled 0.9.5 runtime and cleans up ANR files.
+        old_anr = old_manifest.get("anr_fg") or {}
+        if old_anr.get("enabled"):
+            for rel in old_anr.get("files") or []:
+                path = _safe_path(target, rel)
+                if _require_path_type(path, directory=False):
+                    path.unlink()
+                old_files.discard(rel)
+            _remove_anr_runtime_logs(target, logger)
+            _prune_empty_dirs(target, old_anr.get("created_directories") or [])
+            for directory in old_anr.get("created_directories") or []:
+                created_directories.discard(directory)
+
         manifest = {
             **old_manifest,
             "plugin": "decky-optiscaler",
@@ -2681,6 +3034,7 @@ def install(target_dir, payload_root, filename=DEFAULT_PROXY, preserve_ini=True,
             for key in ("live_asi_sha256", "live_build_id", "live_profile_id",
                         "live_schema", "live_core_sha256"):
                 manifest.pop(key, None)
+        manifest.pop("anr_fg", None)
         validate_manifest(manifest)
         _atomic_json(_safe_path(target, MANIFEST_NAME), manifest)
 
@@ -2838,8 +3192,15 @@ def uninstall(target_dir, remove_ini=True, logger=None):
 
             restorepoint.remove(target)
 
+        if manifest and (manifest.get("anr_fg") or {}).get("enabled"):
+            removed.extend(_remove_anr_runtime_logs(target, logger))
+
         if manifest:
-            for name in manifest.get("created_directories", []):
+            for name in sorted(
+                manifest.get("created_directories", []),
+                key=lambda item: (len(PurePosixPath(item).parts), item),
+                reverse=True,
+            ):
                 original = manifest.get("original_directories", {}).get(name)
                 if original and original.get("exists"):
                     continue
@@ -3079,6 +3440,7 @@ def verify_install(target_dir, payload_root):
     if manifest and manifest.get("filename"):
         expected.insert(0, manifest["filename"])
 
+    anr_active = bool((manifest or {}).get("anr_fg", {}).get("enabled"))
     for name in expected:
         source_name = ("OptiScaler.dll" if manifest and name == manifest.get("filename") else name)
         source = payload / source_name
@@ -3091,7 +3453,13 @@ def verify_install(target_dir, payload_root):
             "size": destination.stat().st_size if destination.is_file() else 0,
             "expected_size": expected_record.get("bytes", 0) if expected_record else 0,
         }
-        if record["present"] and expected_record:
+        if anr_active and manifest and name == manifest.get("filename"):
+            record["expected_size"] = ANR_OPTISCALER_BYTES
+            record["matches_payload"] = bool(
+                record["present"]
+                and anr._matches(destination, ANR_OPTISCALER_BYTES, ANR_OPTISCALER_SHA256)
+            )
+        elif record["present"] and expected_record:
             record["matches_payload"] = runtime_payload.matches_file(destination, expected_record)
         if name == FFX_UPSCALER_DLL:
             selected = (manifest or {}).get("fsr4_build") or {}
@@ -3102,6 +3470,20 @@ def verify_install(target_dir, payload_root):
             if build and build.get("file_bytes"):
                 record["expected_size"] = build["file_bytes"]
         entries.append(record)
+
+    if anr_active:
+        provider_dst = _safe_path(target, ANR_PROVIDER_DLL_REL)
+        provider_present = _path_exists(provider_dst)
+        entries.append({
+            "name": ANR_PROVIDER_DLL_REL,
+            "present": provider_present,
+            "matches_payload": bool(
+                provider_present
+                and anr._matches(provider_dst, ANR_PROVIDER_DLL_BYTES, ANR_PROVIDER_DLL_SHA256)
+            ),
+            "size": provider_dst.stat().st_size if provider_dst.is_file() else 0,
+            "expected_size": ANR_PROVIDER_DLL_BYTES,
+        })
 
     for name in PAYLOAD_DIRS:
         destination = target / name

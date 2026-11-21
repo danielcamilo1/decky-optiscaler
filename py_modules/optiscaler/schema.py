@@ -11,15 +11,43 @@ the need is greater still.
 from .live import FFX_FG_MAX, FFX_UPSCALER_MAX
 from .schema_generated import OPTIONS
 
+#: Additional options/values supported by newer OptiScaler runtimes such as the
+#: Apex Neural Rendering (ANR FG) package (commit d6b02459) without mutating
+#: schema_generated.py, which stays generated from OptiScaler 0.9.5's INI.
+_EXTRA_OPTIONS = (
+    {
+        "section": "FrameGen",
+        "key": "FGNvngxReplacement",
+        "label": "FG NVNGX Replacement",
+        "description": "Custom DLSSG provider folder under OptiScaler/custom/ or built-in replacement",
+        "default": "auto",
+        "type": "string",
+    },
+)
+_EXTRA_ENUM_VALUES = {
+    ("FrameGen", "FGInput"): ("nvngxfg",),
+}
+
 #: (section, key) -> option metadata.
-SCHEMA = {(o["section"], o["key"]): o for o in OPTIONS}
+SCHEMA = {}
+for _option in (*OPTIONS, *_EXTRA_OPTIONS):
+    _key = (_option["section"], _option["key"])
+    _extra = _EXTRA_ENUM_VALUES.get(_key)
+    if _extra:
+        _merged = dict(_option)
+        _merged["options"] = list(_option.get("options") or []) + [
+            v for v in _extra if v not in (_option.get("options") or [])
+        ]
+        SCHEMA[_key] = _merged
+    else:
+        SCHEMA[_key] = _option
 
 #: lowercased key name -> every option with that name. Most are unique, but a
 #: dozen (Enabled, DebugView, MakeDepthCopy...) appear in several sections, and
 #: a key mined from prose that lands on one of those cannot be resolved without
 #: a section to go with it.
 BY_KEY_NAME = {}
-for _option in OPTIONS:
+for _option in SCHEMA.values():
     BY_KEY_NAME.setdefault(_option["key"].lower(), []).append(_option)
 
 
