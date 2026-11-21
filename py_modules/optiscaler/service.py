@@ -994,13 +994,15 @@ class OptiScalerService:
             path = Path(target_dir) / INI_NAME
             if not path.is_file():
                 return {"ok": False, "error": "OptiScaler.ini not found", "values": {}}
+            manifest = installer.read_manifest(target_dir)
             return {
                 "ok": True,
                 "path": str(path),
                 "values": IniFile(path).to_dict(),
-                "runtime_current": bool(installer.read_manifest(target_dir)) and installer.runtime_current(target_dir),
+                "runtime_current": bool(manifest) and installer.runtime_current(target_dir),
                 "modified": path.stat().st_mtime,
                 "fsr4_build": (fsr4build.identify(path.parent / installer.FFX_UPSCALER_DLL) or {}).get("id"),
+                "anr_active": bool((manifest or {}).get("anr_fg", {}).get("enabled")),
             }
 
         return await self._run(work)

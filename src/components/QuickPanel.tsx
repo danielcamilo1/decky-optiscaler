@@ -252,6 +252,13 @@ function NowPlayingTab({
               onLiveChanged={() => void refreshLive()}
               fsr4Build={config.fsr4Build}
               onEnableFsr4={config.enableFsr4}
+              anrActive={config.anrActive}
+              onEnableAnr={config.enableAnr}
+              onDisableAnr={config.disableAnr}
+              onAnrChanged={async () => {
+                await resolve();
+                await refreshLive();
+              }}
               onApply={config.setOptions}
             />
           )}

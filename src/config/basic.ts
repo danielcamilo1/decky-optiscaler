@@ -180,6 +180,9 @@ function fgPreset(
   };
 }
 
+export const ANR_PROVIDER_NAME = "Apex Neural Rendering FG";
+export const ANR_FG_PRESET_ID = "anr-fg";
+
 // Each preset is an FG Input and an FG Output together, and is named after the
 // pair the way OptiScaler's own overlay names them, so that what is picked here
 // is recognisable in the in-game FG Input / FG Output combos.
@@ -208,6 +211,22 @@ export const FG_PRESETS: Preset[] = [
     "FG Input “DLSSG via Streamline” into FG Output “FSR FG”. Only for games built on Streamline v2.",
     "dlssg", "fsrfg"
   ),
+  {
+    // installer.install_anr_fg owns the atomic package/proxy/INI write;
+    // BasicPanel invokes onEnableAnr when selected and onDisableAnr when leaving.
+    id: ANR_FG_PRESET_ID,
+    label: "ANR FG (Apex Neural Rendering)",
+    description:
+      "Replaces NVIDIA DLSS Frame Generation with Apex Neural Rendering. Close the game first; switches to Apex's OptiScaler build and pauses live control while active.",
+    changes: [
+      change("FrameGen", "Enabled", AUTO),
+      change("FrameGen", "FGInput", "nvngxfg"),
+      change("FrameGen", "FGOutput", AUTO),
+      change("FrameGen", "FGNvngxReplacement", ANR_PROVIDER_NAME),
+      change("FrameGen", "DisableHudless", "false"),
+    ],
+    matches: (values) => isAnrFgActive(values),
+  },
 ];
 
 // -- The FFX frame generator ------------------------------------------------
@@ -234,6 +253,7 @@ export const FFX_FG_ID = `${FFX_FG_SECTION}.${FFX_FG_KEY}`;
  * game settles the question by reporting a version list or not.
  */
 export function usesFfxFrameGen(values: ConfigValues): boolean {
+  if (isAnrFgActive(values)) return false;
   const output = get(values, "FrameGen", "FGOutput");
   return output === "fsrfg" || isAuto(output);
 }
@@ -470,8 +490,6 @@ export function liveUpscalerLabel(live: LiveStatus | null | undefined): string |
 export const MULTIPLIER_SECTION = "XeFG";
 export const MULTIPLIER_KEY = "InterpolationCount";
 
-export const ANR_PROVIDER_NAME = "Apex Neural Rendering FG";
-
 export function isAnrFgActive(values: ConfigValues): boolean {
   return (
     get(values, "FrameGen", "FGInput") === "nvngxfg" &&
@@ -503,6 +521,9 @@ export function supportsMultiplier(values: ConfigValues): boolean {
  * OptiScaler comes up with FG "enabled" but doing nothing.
  */
 export function enableFrameGenChanges(values: ConfigValues): OptionChange[] {
+  if (isAnrFgActive(values)) {
+    return [change("FrameGen", "Enabled", AUTO)];
+  }
   const changes = [change("FrameGen", "Enabled", "true")];
   if (!activeFgPreset(values)) {
     changes.push(...FG_PRESETS[0].changes);

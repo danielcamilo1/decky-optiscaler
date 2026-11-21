@@ -392,6 +392,7 @@ export type ConfigValues = Record<string, Record<string, string>>;
 
 export interface ConfigResult {
   fsr4_build?: string | null;
+  anr_active?: boolean;
   ok: boolean;
   error?: string;
   path?: string;
