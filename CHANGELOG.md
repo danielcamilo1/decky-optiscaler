@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.0.7.2-testing] - 2026-11-23
+
+**Pre-release.** Everything in 0.0.7.1-testing, plus one install fix. The call
+for Steam Deck testers in 0.0.7.1-testing still stands: this is still the
+OptiScaler 0.9.5 build that has not yet been confirmed on a real Deck.
+
+### Fixed
+
+- Installing no longer fails in games that ship their own `licenses/` folder,
+  such as *Trails in the Sky 1st Chapter*. The install stopped with "Cannot
+  safely inspect noncanonical install destination Licenses path: licenses"
+  because OptiScaler's own `Licenses/` folder clashed with the game's on a
+  filesystem Wine treats as case-insensitive. OptiScaler's license texts are
+  documentation, not something the game loads, so they are no longer copied
+  into game folders; they still ship inside the plugin. Games set up with an
+  earlier version still have those files removed cleanly when OptiScaler is
+  removed or reinstalled (contributed in #10 by domainus).
+
+[0.0.7.2-testing]: https://github.com/danielcamilo1/decky-optiscaler/releases/tag/v0.0.7.2-testing
+
 ## [0.0.7.1-testing] - 2026-11-17
 
 **Pre-release — Steam Deck testers wanted.** This bundles the complete official
