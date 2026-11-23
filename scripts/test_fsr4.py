@@ -179,12 +179,25 @@ class DeckFsr4Tests(unittest.TestCase):
         return {name: (self.target/name).read_bytes()
                 for name in [FFX_UPSCALER_DLL, INI_NAME, MANIFEST_NAME]}
 
-    def test_unowned_license_file_does_not_mark_healthy_runtime_corrupt(self):
-        user = self.target / 'Licenses/user-added.txt'
+    def test_unowned_payload_dir_file_does_not_mark_healthy_runtime_corrupt(self):
+        user = self.target / 'D3D12_Optiscaler/user-added.txt'
         user.write_bytes(b'user file')
         result = installer.verify_install(self.target, self.payload)
         self.assertTrue(result['complete'], result)
         self.assertEqual(user.read_bytes(), b'user file')
+        self.assertFalse((self.target / 'Licenses').exists())
+
+    def test_game_with_lowercase_licenses_dir_installs_and_verifies_complete(self):
+        game = self.root / 'trails-game'
+        game.mkdir()
+        (game / 'licenses').mkdir()
+        (game / 'licenses' / 'zlib_license.txt').write_bytes(b'game zlib license')
+        installer.install(game, self.payload)
+        result = installer.verify_install(game, self.payload)
+        self.assertTrue(result['complete'], result)
+        self.assertEqual((game / 'licenses' / 'zlib_license.txt').read_bytes(), b'game zlib license')
+        installer.uninstall(game)
+        self.assertEqual((game / 'licenses' / 'zlib_license.txt').read_bytes(), b'game zlib license')
 
     def test_enable_verify_reinstall_restore_uninstall(self):
         self.assertTrue(self.enable()['ok'])

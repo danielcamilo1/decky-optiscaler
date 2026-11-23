@@ -32,10 +32,6 @@ _HASH_CACHE = {}
 _PINNED_FILES = None
 REQUIRED_NESTED_FILES = (
     "D3D12_Optiscaler/D3D12Core.dll",
-    "Licenses/DirectX_LICENSE.txt",
-    "Licenses/FidelityFX_v1_LICENSE.md",
-    "Licenses/FidelityFX_v2_LICENSE.md",
-    "Licenses/XeSS_LICENSE.txt",
 )
 
 
