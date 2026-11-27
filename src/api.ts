@@ -1,7 +1,10 @@
 import { callable } from "@decky/api";
 import type {
+  AdaptiveFgConfig,
+  AdaptiveFgState,
   AutoPlanResult,
   ConfigResult,
+  DisplayInfo,
   Fsr4Source,
   Fsr4Status,
   GpuInfo,
@@ -203,6 +206,13 @@ export const installOptipatcher = callable<
   [targetDir: string, enabled: boolean],
   ActionResult
 >("install_optipatcher");
+
+export const getDisplayInfo = callable<[], DisplayInfo>("get_display_info");
+export const getAdaptiveFg = callable<[targetDir: string], AdaptiveFgState>("get_adaptive_fg");
+export const setAdaptiveFg = callable<
+  [targetDir: string, patch: Partial<AdaptiveFgConfig>],
+  ActionResult & Partial<AdaptiveFgState> & { framerate_limit?: string | null }
+>("set_adaptive_fg");
 
 export const getLiveStatus = callable<[targetDir: string], LiveStatus>("get_live_status");
 export const installLive = callable<[targetDir: string], ActionResult>("install_live");

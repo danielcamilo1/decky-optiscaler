@@ -2,6 +2,7 @@ import { ButtonItem, PanelSection, PanelSectionRow } from "@decky/ui";
 import { toaster } from "@decky/api";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { resolveGame } from "../shortcuts";
+import { useAdaptiveFg } from "../hooks/useAdaptiveFg";
 import { useAutoPlan } from "../hooks/useAutoPlan";
 import { useConfig } from "../hooks/useConfig";
 import { useLiveStatus } from "../hooks/useLiveStatus";
@@ -146,6 +147,7 @@ function NowPlayingTab({
   // Read-only over a running game: the mode is chosen on the full page, where
   // the plan it comes from can actually be read.
   const { plan, auto } = useAutoPlan(detail?.path ?? null, detail?.name ?? null, installed);
+  const adaptive = useAdaptiveFg(targetDir, installed);
 
   if (!runningGame) {
     return (
@@ -252,6 +254,16 @@ function NowPlayingTab({
               onLiveChanged={() => void refreshLive()}
               fsr4Build={config.fsr4Build}
               onEnableFsr4={config.enableFsr4}
+              adaptiveFg={adaptive.state}
+              adaptiveBusy={adaptive.saving}
+              adaptiveError={adaptive.error}
+              onAdaptiveFgChange={async (patch) => {
+                const ok = await adaptive.update(patch);
+                if (ok && patch.cap_to_target !== undefined) {
+                  await config.authoritativeReload();
+                }
+                return ok;
+              }}
               onApply={config.setOptions}
             />
           )}

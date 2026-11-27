@@ -21,6 +21,7 @@ import {
   liveFfxVersionChoices,
   liveResultIsComplete,
 } from "../liveControl";
+import { useAdaptiveFg } from "../hooks/useAdaptiveFg";
 import { useAutoPlan } from "../hooks/useAutoPlan";
 import { useConfig } from "../hooks/useConfig";
 import { restartGame, setLaunchOptions } from "../hooks/useRunningGame";
@@ -211,6 +212,7 @@ export function GameDetail({
   // OptiScaler's overlay writes the ini when the user hits Save in-game, so
   // re-read it whenever this game stops running rather than trusting our copy.
   const config = useConfig(targetDir, installed, isRunning, selectionKey, { gamePath, appid });
+  const adaptive = useAdaptiveFg(targetDir, installed);
   const beforeConfigMutation = async () => {
     await config.flush();
     if (targetDir) invalidateTargetReads(targetDir);
@@ -668,6 +670,16 @@ export function GameDetail({
                   autoBusy={autoBusy}
                   fsr4Build={config.fsr4Build}
                   onEnableFsr4={config.enableFsr4}
+                  adaptiveFg={adaptive.state}
+                  adaptiveBusy={adaptive.saving}
+                  adaptiveError={adaptive.error}
+                  onAdaptiveFgChange={async (patch) => {
+                    const ok = await adaptive.update(patch);
+                    if (ok && patch.cap_to_target !== undefined) {
+                      await config.authoritativeReload();
+                    }
+                    return ok;
+                  }}
                   onApply={config.setOptions}
                 />
                 <PanelSection>

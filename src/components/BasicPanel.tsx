@@ -44,6 +44,8 @@ import { optionById } from "../config/tabs";
 import { AUTO, effectiveValue, labelFor } from "../config/values";
 import type { Preset } from "../config/basic";
 import type {
+  AdaptiveFgConfig,
+  AdaptiveFgState,
   AutoPlan,
   ConfigValues,
   FfxUpscalerInfo,
@@ -100,10 +102,15 @@ interface Props {
   onLiveChanged?: () => void;
   fsr4Build?: string | null;
   onEnableFsr4?: () => Promise<void>;
+  adaptiveFg?: AdaptiveFgState | null;
+  adaptiveBusy?: boolean;
+  adaptiveError?: string | null;
+  onAdaptiveFgChange?: (patch: Partial<AdaptiveFgConfig>) => Promise<boolean>;
   onApply: (changes: OptionChange[]) => void | Promise<Record<string, number> | null>;
 }
 
 const MULTIPLIER_ID = `${MULTIPLIER_SECTION}.${MULTIPLIER_KEY}`;
+const ADAPTIVE_TARGET_FPS_CHOICES = [30, 40, 45, 50, 60, 72, 80, 90, 120, 144, 165, 180, 240];
 
 /**
  * One of the two FidelityFX version lists to offer, and where it came from.
@@ -272,6 +279,10 @@ export function BasicPanel({
   onApply,
   fsr4Build,
   onEnableFsr4,
+  adaptiveFg,
+  adaptiveBusy,
+  adaptiveError,
+  onAdaptiveFgChange,
 }: Readonly<Props>) {
   const live = reportedLive?.supported === true ? reportedLive : null;
   const bindingTarget = liveTargetDir ?? targetDir ?? null;
@@ -283,7 +294,7 @@ export function BasicPanel({
   const [installingFsr4, setInstallingFsr4] = useState(false);
   const [fsr4Error, setFsr4Error] = useState<string | null>(null);
   const [switching, setSwitching] = useState(false);
-  const busy = disabled || installingFsr4 || autoBusy || switching;
+  const busy = disabled || installingFsr4 || adaptiveBusy || autoBusy || switching;
   const [picked, setPicked] = useState<string | null>(null);
   const [pickedBinding, setPickedBinding] = useState<{
     context: LiveContext | null;
@@ -929,6 +940,157 @@ export function BasicPanel({
               }
             />
           </PanelSectionRow>
+        ) : null}
+
+        {adaptiveFg && onAdaptiveFgChange ? (
+          <>
+            <PanelSectionRow>
+              <ToggleField
+                label="Adaptive frame generation"
+                description={hint(
+                  "Dynamically adjusts frame generation (1X–4X on XeFG, 1X–2X on FSR FG) to hold your target frame rate."
+                )}
+                checked={adaptiveFg.config.enabled}
+                disabled={busy || fgUnavailable}
+                bottomSeparator={adaptiveFg.config.enabled ? "none" : "standard"}
+                onChange={(checked) => void onAdaptiveFgChange({ enabled: checked })}
+              />
+            </PanelSectionRow>
+
+            {adaptiveFg.config.enabled ? (
+              <>
+                <PanelSectionRow>
+                  <ToggleField
+                    label="Match display refresh rate"
+                    description={hint(
+                      adaptiveFg.display.available && adaptiveFg.display.refresh_hz
+                        ? `Tracks the active display refresh rate (${adaptiveFg.display.refresh_hz} Hz via ${adaptiveFg.display.source ?? "display"}). Falls back to manual Target FPS if unavailable.`
+                        : "Automatically tracks display refresh rate when available; currently using your manual Target FPS fallback."
+                    )}
+                    checked={adaptiveFg.config.match_refresh_rate}
+                    disabled={busy}
+                    bottomSeparator="standard"
+                    onChange={(checked) =>
+                      void onAdaptiveFgChange({ match_refresh_rate: checked })
+                    }
+                  />
+                </PanelSectionRow>
+
+                <PanelSectionRow>
+                  <ValueDropdown
+                    label={
+                      adaptiveFg.config.match_refresh_rate
+                        ? "Fallback target FPS"
+                        : "Target FPS"
+                    }
+                    description={hint(
+                      adaptiveFg.config.match_refresh_rate
+                        ? `Active target: ${adaptiveFg.resolved.effective_target_fps} fps (${adaptiveFg.resolved.target_source === "display" ? "display refresh rate" : "manual fallback"}).`
+                        : "Target presented frame rate Adaptive FG aims to maintain."
+                    )}
+                    disabled={busy}
+                    bottomSeparator="standard"
+                    options={ADAPTIVE_TARGET_FPS_CHOICES.map((fps) => ({
+                      data: String(fps),
+                      label: `${fps} fps`,
+                    }))}
+                    selected={String(adaptiveFg.config.target_fps)}
+                    describe={(v) => `${v} fps`}
+                    onPick={(v) => void onAdaptiveFgChange({ target_fps: Number(v) })}
+                  />
+                </PanelSectionRow>
+
+                {!compact ? (
+                  <>
+                    <PanelSectionRow>
+                      <ValueDropdown
+                        label="Adaptive max multiplier"
+                        description={
+                          multiplierUsable
+                            ? hint("Highest multiplier Adaptive FG may step up to on XeFG.")
+                            : "FSR FG adapts between 1X and 2X; switch Method to XeFG for 3X/4X."
+                        }
+                        disabled={busy || !multiplierUsable}
+                        bottomSeparator="standard"
+                        options={[
+                          { data: "2", label: "2X" },
+                          { data: "3", label: "3X" },
+                          { data: "4", label: "4X" },
+                        ]}
+                        selected={String(adaptiveFg.config.max_multiplier)}
+                        describe={(v) => `${v}X`}
+                        onPick={(v) =>
+                          void onAdaptiveFgChange({
+                            max_multiplier: Number(v) as 2 | 3 | 4,
+                          })
+                        }
+                      />
+                    </PanelSectionRow>
+
+                    <PanelSectionRow>
+                      <ToggleField
+                        label="Allow 1X (pause FG at target)"
+                        description={hint(
+                          "Turns frame generation off when native rendered FPS already exceeds the target."
+                        )}
+                        checked={adaptiveFg.config.allow_1x}
+                        disabled={busy}
+                        bottomSeparator="standard"
+                        onChange={(checked) =>
+                          void onAdaptiveFgChange({ allow_1x: checked })
+                        }
+                      />
+                    </PanelSectionRow>
+
+                    <PanelSectionRow>
+                      <ToggleField
+                        label="Cap FPS to target"
+                        description={hint(
+                          `Syncs OptiScaler's FramerateLimit to ${adaptiveFg.resolved.effective_target_fps} fps for steadier pacing.`
+                        )}
+                        checked={adaptiveFg.config.cap_to_target}
+                        disabled={busy}
+                        bottomSeparator="standard"
+                        onChange={(checked) =>
+                          void onAdaptiveFgChange({ cap_to_target: checked })
+                        }
+                      />
+                    </PanelSectionRow>
+                  </>
+                ) : null}
+
+                {adaptiveError ? (
+                  <PanelSectionRow>
+                    <Notice tone="error">{adaptiveError}</Notice>
+                  </PanelSectionRow>
+                ) : null}
+
+                {reportedLive?.adaptive_fg ? (
+                  <PanelSectionRow>
+                    <div style={{ padding: "2px 0 6px", fontSize: "12px", opacity: 0.85 }}>
+                      <Pill color={reportedLive.adaptive_fg.active ? "#2f6b3f" : "#5a4a20"}>
+                        target {reportedLive.adaptive_fg.effective_target_fps} fps (
+                        {reportedLive.adaptive_fg.target_source})
+                      </Pill>
+                      {reportedLive.adaptive_fg.current_multiplier ? (
+                        <Pill>{reportedLive.adaptive_fg.current_multiplier}X</Pill>
+                      ) : null}
+                      {reportedLive.adaptive_fg.smoothed_base_fps ? (
+                        <span style={{ opacity: 0.75 }}>
+                          base {reportedLive.adaptive_fg.smoothed_base_fps.toFixed(0)} fps
+                        </span>
+                      ) : null}
+                      {!compact && reportedLive.adaptive_fg.reason ? (
+                        <div style={{ marginTop: "4px", opacity: 0.75 }}>
+                          {reportedLive.adaptive_fg.reason}
+                        </div>
+                      ) : null}
+                    </div>
+                  </PanelSectionRow>
+                ) : null}
+              </>
+            ) : null}
+          </>
         ) : null}
 
         {/* Only when there is something to say. The panel used to explain the

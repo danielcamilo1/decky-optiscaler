@@ -5,12 +5,17 @@ alone does not establish driver, SDK or model compatibility on Proton. Keep
 RDNA2 classified as experimental until the active in-game model is confirmed.
 """
 
+import os
 import re
+import shutil
+import subprocess
 from functools import lru_cache
 from pathlib import Path
 
 DRM_ROOT = Path("/sys/class/drm")
 KFD_NODES = Path("/sys/class/kfd/kfd/topology/nodes")
+MIN_REFRESH_HZ = 24
+MAX_REFRESH_HZ = 360
 
 # PCI device id -> generation. Covers the APUs found in Linux handhelds plus the
 # common discrete families.
@@ -154,4 +159,143 @@ def gpu_info():
         "vendor": vendor,
         "generation": generation,
         "fsr4": FSR4_SUPPORT.get(generation or "", "unknown"),
+    }
+
+
+_XRANDR_CONNECTOR_RE = re.compile(r"^(\S+)\s+connected\b")
+_XRANDR_ACTIVE_HZ_RE = re.compile(r"(\d+(?:\.\d+)?)\*")
+_DRM_MODE_HZ_RE = re.compile(r"^\d+x\d+(?:i)?@(\d+(?:\.\d+)?)")
+
+
+def _parse_xrandr_refresh(output):
+    """Extract the active display refresh rate from `xrandr --current` output.
+
+    Gamescope (SteamOS Gaming Mode) and X11 mark the currently active mode's
+    refresh rate with ``*`` (for example ``90.00*+`` on Steam Deck OLED or
+    ``60.00*`` when docked). Returns ``(exact_hz, connector)`` or ``(None, None)``.
+    """
+    connector = None
+    fallback = (None, None)
+    for raw in (output or "").splitlines():
+        conn_match = _XRANDR_CONNECTOR_RE.match(raw)
+        if conn_match:
+            connector = conn_match.group(1)
+            continue
+        if not raw.startswith((" ", "\t")):
+            connector = None
+            continue
+        if connector is None or "*" not in raw:
+            continue
+        hz_match = _XRANDR_ACTIVE_HZ_RE.search(raw)
+        if not hz_match:
+            continue
+        try:
+            hz = float(hz_match.group(1))
+        except ValueError:
+            continue
+        if MIN_REFRESH_HZ <= hz <= MAX_REFRESH_HZ:
+            # Prefer a primary/internal or first valid active mode; keep highest
+            # active rate if multiple outputs are active at once.
+            if fallback[0] is None or hz > fallback[0]:
+                fallback = (hz, connector)
+    return fallback
+
+
+def _xrandr_refresh():
+    binary = shutil.which("xrandr")
+    if not binary:
+        return None, None
+    displays = []
+    env_display = os.environ.get("DISPLAY")
+    if env_display:
+        displays.append(env_display)
+    for candidate in (":0", ":1"):
+        if candidate not in displays:
+            displays.append(candidate)
+    for display in displays:
+        env = dict(os.environ, DISPLAY=display)
+        try:
+            result = subprocess.run(
+                [binary, "--current"],
+                capture_output=True,
+                text=True,
+                timeout=1.5,
+                check=False,
+                env=env,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if result.returncode != 0 or not result.stdout:
+            continue
+        hz, connector = _parse_xrandr_refresh(result.stdout)
+        if hz is not None:
+            return hz, connector
+    return None, None
+
+
+def _drm_refresh(drm_root=None):
+    """Fallback refresh detection from connected DRM sysfs connectors."""
+    root = Path(drm_root) if drm_root is not None else DRM_ROOT
+    if not root.is_dir():
+        return None, None
+    best = (None, None)
+    for status_file in sorted(root.glob("card[0-9]*-*/status")):
+        if _read(status_file).lower() != "connected":
+            continue
+        connector_dir = status_file.parent
+        connector = connector_dir.name
+        # Some kernels/drivers expose an explicit vrefresh attribute.
+        vrefresh = _read(connector_dir / "vrefresh")
+        if vrefresh:
+            try:
+                hz = float(vrefresh)
+                if MIN_REFRESH_HZ <= hz <= MAX_REFRESH_HZ:
+                    if best[0] is None or hz > best[0]:
+                        best = (hz, connector)
+                    continue
+            except ValueError:
+                pass
+        for filename in ("mode", "modes"):
+            text = _read(connector_dir / filename)
+            if not text:
+                continue
+            first_line = text.splitlines()[0].strip()
+            match = _DRM_MODE_HZ_RE.match(first_line)
+            if match:
+                try:
+                    hz = float(match.group(1))
+                except ValueError:
+                    continue
+                if MIN_REFRESH_HZ <= hz <= MAX_REFRESH_HZ:
+                    if best[0] is None or hz > best[0]:
+                        best = (hz, connector)
+                    break
+    return best
+
+
+def display_info():
+    """Detect the active display refresh rate (Hz) for Adaptive FG target matching.
+
+    Not cached across calls because Steam Deck users change Gamescope's refresh
+    rate slider or dock/undock to external displays while playing.
+    """
+    hz, connector = _xrandr_refresh()
+    source = "xrandr" if hz is not None else None
+    if hz is None:
+        hz, connector = _drm_refresh()
+        source = "drm" if hz is not None else None
+    if hz is None:
+        return {
+            "available": False,
+            "refresh_hz": None,
+            "exact_hz": None,
+            "source": None,
+            "connector": None,
+        }
+    return {
+        "available": True,
+        "refresh_hz": int(round(hz)),
+        "exact_hz": round(hz, 2),
+        "source": source,
+        "connector": connector,
     }
