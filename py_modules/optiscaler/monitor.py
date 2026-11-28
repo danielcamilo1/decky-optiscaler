@@ -44,9 +44,9 @@ LEVELS = {"T": "trace", "D": "debug", "I": "info", "W": "warning", "E": "error",
 HINTS = [
     (
         re.compile(r"Failed to load amdxcffx64\.dll"),
-        "FSR 4 is unavailable: amdxcffx64.dll is missing. OptiScaler does not ship it, and "
-        "under Proton there is no AMD driver store to load it from. Add it to the game "
-        "folder from the Setup tab.",
+        "amdxcffx64.dll is only an optional AMD driver FSR 4 source and is normally absent "
+        "under Proton. The bundled FidelityFX SDK 2.4 (amd_fidelityfx_upscaler_dx12.dll) "
+        "already provides FSR 4 — verify the active model with the in-game FSR 4 watermark.",
     ),
     (
         re.compile(r"Failed to load.*nvngx", re.I),

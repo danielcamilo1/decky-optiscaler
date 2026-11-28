@@ -1,4 +1,4 @@
-// Minimal stand-ins for the Steam UI components, enough to render the tree.
+// Minimal stand-ins for the Steam UI components, enough to render and interact with the tree.
 import React from "react";
 
 /**
@@ -83,9 +83,90 @@ const box = (name: string) =>
 export const PanelSection = box("PanelSection");
 export const PanelSectionRow = box("PanelSectionRow");
 export const ButtonItem = box("ButtonItem");
-export const ToggleField = box("ToggleField");
-export const SliderField = box("SliderField");
-export const TextField = box("TextField");
+const ToggleBox = box("ToggleField");
+export function ToggleField(props: {
+  onChange?: (checked: boolean) => void;
+  checked?: boolean;
+  disabled?: boolean;
+  label?: React.ReactNode;
+  description?: React.ReactNode;
+  [key: string]: any;
+}) {
+  return <ToggleBox {...props} />;
+}
+
+export function SliderField(props: {
+  onChange?: (value: number) => void;
+  value?: number;
+  min?: number;
+  max?: number;
+  step?: number;
+  disabled?: boolean;
+  label?: React.ReactNode;
+  description?: React.ReactNode;
+  [key: string]: any;
+}) {
+  const { label, description, value, min, max, step, disabled, onChange } = props;
+  return (
+    <div
+      data-mock="SliderField"
+      data-label={labelText(label)}
+      data-value={value === undefined ? undefined : String(value)}
+      data-disabled={disabled ? "true" : undefined}
+    >
+      {label ? <div data-label-text>{label}</div> : null}
+      {description ? <div data-desc>{description}</div> : null}
+      <input
+        type="range"
+        data-slider
+        value={value ?? min ?? 0}
+        min={min}
+        max={max}
+        step={step}
+        disabled={Boolean(disabled)}
+        onChange={(event) => {
+          if (!disabled) onChange?.(Number(event.target.value));
+        }}
+      />
+    </div>
+  );
+}
+
+export function TextField(props: {
+  onChange?: (event: React.ChangeEvent<HTMLInputElement>) => void;
+  onBlur?: (event: React.FocusEvent<HTMLInputElement>) => void;
+  value?: string;
+  disabled?: boolean;
+  label?: React.ReactNode;
+  description?: React.ReactNode;
+  [key: string]: any;
+}) {
+  const { label, description, value, disabled, onChange, onBlur } = props;
+  return (
+    <div
+      data-mock="TextField"
+      data-label={labelText(label)}
+      data-value={value === undefined ? undefined : String(value)}
+      data-disabled={disabled ? "true" : undefined}
+    >
+      {label ? <div data-label-text>{label}</div> : null}
+      {description ? <div data-desc>{description}</div> : null}
+      <input
+        type="text"
+        data-text-input
+        value={value ?? ""}
+        disabled={Boolean(disabled)}
+        onChange={(event) => {
+          if (!disabled) onChange?.(event);
+        }}
+        onBlur={(event) => {
+          if (!disabled) onBlur?.(event);
+        }}
+      />
+    </div>
+  );
+}
+
 /**
  * Steam's DropdownItem, including the part `ValueDropdown` exists to work
  * around: it builds the label for the selected option once and then *keeps* it.
@@ -100,7 +181,20 @@ export const TextField = box("TextField");
  */
 const DropdownBox = box("DropdownItem");
 
-export function DropdownItem(props: any) {
+export interface SingleDropdownOption {
+  data: any;
+  label: React.ReactNode;
+}
+
+export function DropdownItem(props: {
+  rgOptions?: SingleDropdownOption[];
+  selectedOption?: any;
+  onChange?: (option: SingleDropdownOption) => void;
+  disabled?: boolean;
+  label?: React.ReactNode;
+  description?: React.ReactNode;
+  [key: string]: any;
+}) {
   const displayed = React.useRef<string | undefined>(undefined);
   if (displayed.current === undefined) {
     const match = (props.rgOptions ?? []).find((o: any) => o.data === props.selectedOption);
@@ -112,26 +206,91 @@ export function DropdownItem(props: any) {
 export const Field = box("Field");
 export const Focusable = box("Focusable");
 export const DialogButton = box("DialogButton");
-export const ConfirmModal = box("ConfirmModal");
+
+export function ConfirmModal(props: any) {
+  const {
+    strTitle,
+    title,
+    strDescription,
+    description,
+    strOKButtonText,
+    strCancelButtonText,
+    bOKDisabled,
+    bAlertDialog,
+    onOK,
+    onCancel,
+    closeModal,
+    children,
+  } = props;
+  const heading = strTitle ?? title;
+  const body = strDescription ?? description;
+  return (
+    <div data-mock="ConfirmModal" data-title={labelText(heading)}>
+      {heading ? <div data-title>{heading}</div> : null}
+      {body ? <div data-desc>{body}</div> : null}
+      {children}
+      <button
+        type="button"
+        data-modal-ok
+        data-disabled={bOKDisabled ? "true" : undefined}
+        disabled={Boolean(bOKDisabled)}
+        onClick={() => {
+          if (bOKDisabled) return;
+          onOK?.();
+          closeModal?.();
+        }}
+      >
+        {strOKButtonText ?? "OK"}
+      </button>
+      {!bAlertDialog ? (
+        <button
+          type="button"
+          data-modal-cancel
+          onClick={() => {
+            onCancel?.();
+            closeModal?.();
+          }}
+        >
+          {strCancelButtonText ?? "Cancel"}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 export const shownModals: any[] = [];
 export function showModal(modal: any) {
   shownModals.push(modal);
   return { Close() {}, Update() {} };
 }
 export const Dropdown = box("Dropdown");
-export const Navigation = { Navigate() {}, CloseSideMenus() {} };
+export const Navigation = { Navigate(_path: string) {}, CloseSideMenus() {} };
 export const Router = { MainRunningApp: undefined as any, RunningApps: [] as any[] };
 export const staticClasses = { Title: "title" };
 
 export function Tabs(props: any) {
-  // Render every tab's content so all option controls are exercised.
+  const tabs: any[] = props.tabs ?? [];
+  const active = tabs.find((t: any) => t.id === props.activeTab) ?? tabs[0];
   return (
-    <div data-mock="Tabs">
-      {props.tabs.map((t: any) => (
-        <div key={t.id} data-tab={t.id}>
-          {t.content}
+    <div data-mock="Tabs" data-active-tab={active?.id}>
+      <div data-tab-bar>
+        {tabs.map((t: any) => (
+          <button
+            key={t.id}
+            type="button"
+            data-tab-button={t.id}
+            data-active={t.id === active?.id ? "true" : "false"}
+            onClick={() => props.onShowTab?.(t.id)}
+          >
+            {t.title}
+          </button>
+        ))}
+      </div>
+      {active ? (
+        <div key={active.id} data-tab={active.id}>
+          {active.content}
         </div>
-      ))}
+      ) : null}
     </div>
   );
 }
@@ -140,13 +299,13 @@ export function Tabs(props: any) {
 // the harness stands in for the webpack lookups it needs: nothing is found,
 // which is exactly the path the plugin has to survive.
 export const MenuItem = box("MenuItem");
-export function findModuleExport(_filter: (e: any) => boolean) {
+export function findModuleExport(_filter: (e: any) => boolean): any {
   return undefined;
 }
-export function findModuleByExport(_filter: (e: any) => boolean) {
+export function findModuleByExport(_filter: (e: any) => boolean): any {
   return undefined;
 }
-export function fakeRenderComponent(_fn: Function) {
+export function fakeRenderComponent(_fn: Function): any {
   return undefined;
 }
 /**

@@ -1,5 +1,6 @@
 import { callable } from "@decky/api";
 import type {
+  AppliedLaunchMetadata,
   AutoPlanResult,
   ConfigResult,
   Fsr4Source,
@@ -12,22 +13,15 @@ import type {
   LiveApplyResult,
   LiveContext,
   OptipatcherStatus,
-  ReframeworkStatus,
   MonitorReport,
   OptionChange,
   PayloadStatus,
-  Recommendation,
+  RollbackMetadata,
   VerifyResult,
   WikiSearchResult,
   WikiStatus,
   WriteConfigResult,
 } from "./types";
-
-export interface BrowseResult {
-  path: string | null;
-  parent: string | null;
-  entries: { path: string; name: string }[];
-}
 
 export interface ActionResult {
   ok: boolean;
@@ -46,7 +40,6 @@ export const removeCustomLibrary = callable<[path: string], ActionResult>(
   "remove_custom_library"
 );
 
-export const listGames = callable<[libraryPath: string, source: string], Game[]>("list_games");
 export const getGame = callable<[gamePath: string, name?: string], GameDetail>("get_game");
 /* `shortcut` carries what the Steam client said about a non-Steam entry, which
    is the only place a shortcut's install folder can come from. Call it through
@@ -67,10 +60,11 @@ export const importFsr4Files = callable<
 export const setFsr4Build = callable<[targetDir: string, buildId: string], ActionResult>(
   "set_fsr4_build"
 );
-/** Put the build that ships inside the OptiScaler release back. */
-export const restoreFsr4Build = callable<[targetDir: string], ActionResult>(
-  "restore_fsr4_build"
-);
+/** Put the build that ships inside the OptiScaler release back, optionally applying official FSR 4 settings. */
+export const restoreFsr4Build = callable<
+  [targetDir: string, applyOfficialPreset?: boolean],
+  ActionResult
+>("restore_fsr4_build");
 export const setGameTarget = callable<[gamePath: string, targetDir: string], ActionResult>(
   "set_game_target"
 );
@@ -86,18 +80,37 @@ export const recordLaunchOptions = callable<
 
 /** Preserve the current managed installation and its Steam launch options once. */
 export const createRestorePoint = callable<
-  [targetDir: string, gamePath: string, launchOptions: string | null],
-  ActionResult & { available?: boolean; version?: string; metadata?: Record<string, unknown> }
+  [
+    targetDir: string,
+    gamePath: string,
+    launchOptions: string | null,
+    appliedLaunch?: AppliedLaunchMetadata | null,
+  ],
+  ActionResult & { available?: boolean; version?: string; metadata?: RollbackMetadata }
 >("create_restore_point");
 
 /** Restore a retained pre-upgrade installation snapshot. */
 export const rollbackInstall = callable<
   [targetDir: string, gamePath: string],
-  ActionResult & { launch_options?: string | null }
+  ActionResult & {
+    launch_options?: string | null;
+    applied_launch?: AppliedLaunchMetadata | null;
+  }
 >("rollback_install");
 
+/** Clear the persisted rollback launch-options retry marker once Steam accepts the restored value. */
+export const confirmRollbackLaunchOptions = callable<[gamePath: string], ActionResult>(
+  "confirm_rollback_launch_options"
+);
+
 export const upgradeRuntime = callable<
-  [targetDir: string, gamePath: string, launchOptions: string | null, name: string],
+  [
+    targetDir: string,
+    gamePath: string,
+    launchOptions: string | null,
+    name: string,
+    appliedLaunch?: AppliedLaunchMetadata | null,
+  ],
   ActionResult & { upgraded?: boolean; deferred?: boolean; held?: boolean }
 >("upgrade_runtime");
 
@@ -116,10 +129,6 @@ export const getPref = callable<[key: string, fallback?: unknown], { key: string
 );
 export const setPref = callable<[key: string, value: unknown], ActionResult>("set_pref");
 
-export const getRecommendation = callable<
-  [name: string, extraNames?: string[], force?: boolean, gamePath?: string],
-  Recommendation
->("get_recommendation");
 export const searchWiki = callable<
   [query: string, limit?: number],
   { results: WikiSearchResult[]; entry_count: number; meta: { error: string | null } }
@@ -130,7 +139,7 @@ export const setWikiEntry = callable<[gamePath: string, entryName: string], Acti
 export const verifyInstall = callable<[targetDir: string], VerifyResult>("verify_install");
 export const refreshWiki = callable<
   [],
-  { count: number; meta: { source: string; fetched_at: number | null; error: string | null } }
+  { ok?: boolean; count: number; meta?: { source: string; fetched_at: number | null; error: string | null } }
 >("refresh_wiki");
 
 /** Whether the compatibility list is reachable at all, and what failed if not. */
@@ -183,10 +192,6 @@ export const writeConfig = callable<
 >("write_config");
 export const resetConfig = callable<[targetDir: string], ActionResult>("reset_config");
 
-export const getReframeworkStatus = callable<
-  [targetDir: string, gamePath?: string, name?: string, extraNames?: string[]],
-  ReframeworkStatus
->("get_reframework_status");
 export const installReframework = callable<
   [targetDir: string, gamePath?: string, name?: string, extraNames?: string[]],
   ActionResult & { installed?: boolean; files?: string[]; page?: string }

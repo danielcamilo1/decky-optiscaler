@@ -7,6 +7,7 @@ import { QuickPanel } from "./components/QuickPanel";
 import { ROUTE, openManager } from "./navigation";
 import { useRunningGame } from "./hooks/useRunningGame";
 import { clearTargetAfterSteamRestart } from "./config/liveRecord";
+import { syncLanguagePrefFromBackend } from "./i18n";
 
 function Content() {
   const runningGame = useRunningGame();
@@ -20,6 +21,7 @@ function Content() {
 }
 
 export default definePlugin(() => {
+  void syncLanguagePrefFromBackend();
   routerHook.addRoute(ROUTE, ManagerPage, { exact: true });
   const unpatchContextMenu = patchLibraryContextMenu();
   let unregisterGameSession: (() => void) | undefined;

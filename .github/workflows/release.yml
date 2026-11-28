@@ -65,10 +65,15 @@ jobs:
           python3 scripts/verify_runtime_profile.py
 
       - name: Typecheck
-        run: npx tsc --noEmit
+        run: |
+          npx tsc --noEmit
+          npx tsc -p tsconfig.test.json --noEmit
 
       - name: Build frontend
         run: pnpm build
+
+      - name: Offline backend unit and RPC contract tests
+        run: python3 scripts/test_units.py
 
       - name: Backend selftest
         run: python3 scripts/selftest.py
@@ -89,6 +94,8 @@ jobs:
           HARNESS=launch-options.tsx node testharness/build-and-run.mjs
           HARNESS=recovery-ui.tsx node testharness/build-and-run.mjs
           HARNESS=auto-upgrade.tsx node testharness/build-and-run.mjs
+          HARNESS=ui-flows.tsx node testharness/build-and-run.mjs
+          HARNESS=i18n.tsx node testharness/build-and-run.mjs
 
       # scripts/package.py mirrors the layout `decky plugin build` produces: one
       # top-level folder named after plugin.json's "name", runtime files only.

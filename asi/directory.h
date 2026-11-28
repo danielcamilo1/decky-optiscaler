@@ -1,11 +1,11 @@
 // Directory ownership is proved on Worker with actual Win32 directory handles.
 // The menu callback only compares pointer/path bytes against this publication.
-struct DirectoryAuth { bool verified;uint64_t generation;uintptr_t config;wchar_t path[512]; };
+struct DirectoryAuth { bool verified;uint64_t generation;uintptr_t config;wchar_t path[kPathCapacity]; };
 static DirectoryAuth g_directoryAuth;
 static uint64_t g_directoryGeneration;
 static bool g_controlOwned;
 static HANDLE g_targetDirectoryHandle=INVALID_HANDLE_VALUE,g_coreDirectoryHandle=INVALID_HANDLE_VALUE,g_configDirectoryHandle=INVALID_HANDLE_VALUE;
-static wchar_t g_canonicalDirectory[MAX_PATH],g_winePrefix[MAX_PATH*4];
+static wchar_t g_canonicalDirectory[kPathCapacity],g_winePrefix[MAX_PATH*4];
 #ifdef DECKY_LIVE_TEST
 static bool (*g_testDirectoryAuthMatches)(uintptr_t);
 #endif
@@ -27,10 +27,10 @@ static bool ParentDirectory(const wchar_t* path,wchar_t* out,size_t capacity) {
  if(!slash||(forward&&forward>slash))slash=forward;if(!slash)return false;
  if(slash>out&&slash[-1]==L':')slash[1]=0;else *slash=0;return out[0]!=0;
 }
-static bool SafeConfigPath(uintptr_t* config,wchar_t path[512]) {
- uintptr_t first=0,last=0;wchar_t again[512];
- if(!ReadConfigPointer(&first)||!first||!ReadWStringAt(first,offsetof(Config,absoluteFileName),path,512)||
-    !IsAbsoluteWindowsPath(path)||!ReadWStringAt(first,offsetof(Config,absoluteFileName),again,512)||
+static bool SafeConfigPath(uintptr_t* config,wchar_t (&path)[kPathCapacity]) {
+ uintptr_t first=0,last=0;wchar_t again[kPathCapacity];
+ if(!ReadConfigPointer(&first)||!first||!ReadWStringAt(first,offsetof(Config,absoluteFileName),path,kPathCapacity)||
+    !IsAbsoluteWindowsPath(path)||!ReadWStringAt(first,offsetof(Config,absoluteFileName),again,kPathCapacity)||
     wcscmp(path,again)||!ReadConfigPointer(&last)||first!=last)return false;
  *config=first;return true;
 }
@@ -47,27 +47,36 @@ static bool DirectoryAuthMatches(uintptr_t config) {
 #ifdef DECKY_LIVE_TEST
  if(g_testDirectoryAuthMatches)return g_testDirectoryAuthMatches(config);
 #endif
- wchar_t path[512];uintptr_t current=0;
+ wchar_t path[kPathCapacity];uintptr_t current=0;
  if(!g_controlOwned||!g_directoryAuth.verified||!SafeConfigPath(&current,path)||current!=config||
     current!=g_directoryAuth.config||wcscmp(path,g_directoryAuth.path)){RevokeDirectoryAuth();return false;}
  return true;
 }
 static bool OwnControlDirectory(const wchar_t* corePath) {
- wchar_t parent[MAX_PATH];if(!ParentDirectory(corePath,parent,MAX_PATH))return false;
+ if(!corePath||!*corePath){g_startError="core_path_invalid";return false;}
+ if(wcslen(corePath)>=kPathCapacity){g_startError="control_path_too_long";return false;}
+ wchar_t parent[kPathCapacity];if(!ParentDirectory(corePath,parent,kPathCapacity)){g_startError="core_path_invalid";return false;}
  HANDLE target=OpenDirectory(g_parentDirectory),core=OpenDirectory(parent);
- bool same=SameDirectory(target,core);DWORD length=0;
- if(same)length=GetFinalPathNameByHandleW(target,g_canonicalDirectory,MAX_PATH,FILE_NAME_NORMALIZED|VOLUME_NAME_DOS);
- if(!same||!length||length>=MAX_PATH){if(target!=INVALID_HANDLE_VALUE)CloseHandle(target);if(core!=INVALID_HANDLE_VALUE)CloseHandle(core);g_canonicalDirectory[0]=0;return false;}
+ bool same=SameDirectory(target,core);
+ if(!same){if(target!=INVALID_HANDLE_VALUE)CloseHandle(target);if(core!=INVALID_HANDLE_VALUE)CloseHandle(core);g_canonicalDirectory[0]=0;g_startError="wrong_control_directory";return false;}
+ DWORD length=GetFinalPathNameByHandleW(target,g_canonicalDirectory,kPathCapacity,FILE_NAME_NORMALIZED|VOLUME_NAME_DOS);
+ if(!length||length>=kPathCapacity){CloseHandle(target);CloseHandle(core);g_canonicalDirectory[0]=0;g_startError=length>=kPathCapacity?"control_path_too_long":"wrong_control_directory";return false;}
+ char utf8[kPathCapacity*4];
+ if(!Utf8(g_canonicalDirectory,utf8,sizeof(utf8))){CloseHandle(target);CloseHandle(core);g_canonicalDirectory[0]=0;g_startError="invalid_control_path_utf16";return false;}
+ wchar_t commandPath[kPathCapacity],statusPath[kPathCapacity],logPath[kPathCapacity];
+ if(!BuildControlPathsFrom(g_canonicalDirectory,commandPath,statusPath,logPath)){CloseHandle(target);CloseHandle(core);g_canonicalDirectory[0]=0;g_startError="control_path_too_long";return false;}
  // Future control-file operations use the handle's canonical target path,
  // never a potentially retargeted short path/junction supplied by the loader.
  wcscpy(g_parentDirectory,g_canonicalDirectory);
- if(!JoinPath(g_commandPath,L"decky_optiscaler_live.cmd")||!JoinPath(g_statusPath,L"decky_optiscaler_live.status")||!JoinPath(g_logPath,L"decky_optiscaler_live.log")) {CloseHandle(target);CloseHandle(core);return false;}
- g_targetDirectoryHandle=target;g_coreDirectoryHandle=core;g_controlOwned=true;return true;
+ wcscpy(g_commandPath,commandPath);
+ wcscpy(g_statusPath,statusPath);
+ wcscpy(g_logPath,logPath);
+ g_targetDirectoryHandle=target;g_coreDirectoryHandle=core;g_controlOwned=true;g_startError="";return true;
 }
 static void RefreshDirectoryAuth() {
  if(!g_controlOwned)return;
- uintptr_t config=0,confirm=0;wchar_t path[512],again[512],parent[512];HANDLE candidate=INVALID_HANDLE_VALUE;
- bool valid=g_coreHashValid&&SafeConfigPath(&config,path)&&ParentDirectory(path,parent,512);
+ uintptr_t config=0,confirm=0;wchar_t path[kPathCapacity],again[kPathCapacity],parent[kPathCapacity];HANDLE candidate=INVALID_HANDLE_VALUE;
+ bool valid=g_coreHashValid&&SafeConfigPath(&config,path)&&ParentDirectory(path,parent,kPathCapacity);
  if(valid){candidate=OpenDirectory(parent);valid=SameDirectory(candidate,g_targetDirectoryHandle)&&SameDirectory(g_coreDirectoryHandle,g_targetDirectoryHandle)&&SafeConfigPath(&confirm,again)&&confirm==config&&!wcscmp(path,again);}
  AcquireSRWLockExclusive(&g_lock);
  if(valid) {

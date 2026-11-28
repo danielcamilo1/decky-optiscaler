@@ -1,12 +1,14 @@
 import { ButtonItem, PanelSection, PanelSectionRow } from "@decky/ui";
 import { toaster } from "@decky/api";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { hasPbzIdentity, pbzTargetMismatch } from "../gameTarget";
 import { resolveGame } from "../shortcuts";
 import { useAutoPlan } from "../hooks/useAutoPlan";
 import { useConfig } from "../hooks/useConfig";
 import { useLiveStatus } from "../hooks/useLiveStatus";
 import { liveStatusMessage } from "../liveControl";
 import { restartGame } from "../hooks/useRunningGame";
+import { syncLanguagePrefFromBackend, useI18n } from "../i18n";
 import type { Game, GameDetail, LiveStatus, RunningGame } from "../types";
 import { BasicPanel } from "./BasicPanel";
 import { GamesList } from "./GamesList";
@@ -34,16 +36,21 @@ export function QuickPanel({
   runningGame: RunningGame | null;
   onOpenManager: (gamePath?: string, gameName?: string, appid?: string) => void;
 }>) {
+  const { t } = useI18n();
   // Land on the running game when there is one; otherwise the list is the only
   // thing this panel can usefully show.
   const [tab, setTab] = useState(runningGame ? "now" : "games");
+
+  useEffect(() => {
+    void syncLanguagePrefFromBackend();
+  }, []);
 
   return (
     <>
       <TabStrip
         tabs={[
-          { id: "now", title: "Now Playing" },
-          { id: "games", title: "Games" },
+          { id: "now", title: t("Now Playing") },
+          { id: "games", title: t("Games") },
         ]}
         active={tab}
         onChange={setTab}
@@ -66,7 +73,7 @@ export function QuickPanel({
           <PanelSection>
             <PanelSectionRow>
               <ButtonItem layout="below" onClick={() => onOpenManager()}>
-                Libraries & all settings
+                {t("Libraries & all settings")}
               </ButtonItem>
             </PanelSectionRow>
           </PanelSection>
@@ -85,6 +92,7 @@ function NowPlayingTab({
   onOpenManager: (gamePath?: string, gameName?: string, appid?: string) => void;
   onBrowse: () => void;
 }>) {
+  const { t } = useI18n();
   const [detail, setDetail] = useState<GameDetail | null>(null);
   const [resolving, setResolving] = useState(false);
   const [notFound, setNotFound] = useState(false);
@@ -146,13 +154,21 @@ function NowPlayingTab({
   // Read-only over a running game: the mode is chosen on the full page, where
   // the plan it comes from can actually be read.
   const { plan, auto } = useAutoPlan(detail?.path ?? null, detail?.name ?? null, installed);
+  const requiredTargetMismatch = Boolean(
+    detail &&
+      pbzTargetMismatch(
+        detail,
+        Boolean(plan?.required_target) || hasPbzIdentity(detail),
+        targetDir ?? detail.target,
+      ),
+  );
 
   if (!runningGame) {
     return (
-      <PanelSection title="Nothing running">
+      <PanelSection title={t("Nothing running")}>
         <PanelSectionRow>
           <ButtonItem layout="below" onClick={onBrowse}>
-            Browse games
+            {t("Browse games")}
           </ButtonItem>
         </PanelSectionRow>
       </PanelSection>
@@ -175,16 +191,16 @@ function NowPlayingTab({
         </PanelSectionRow>
       </PanelSection>
 
-      {resolving ? <Centered>Looking up this game…</Centered> : null}
+      {resolving ? <Centered>{t("Looking up this game…")}</Centered> : null}
 
       {!resolving && notFound ? (
         <PanelSection>
           <PanelSectionRow>
-            <Notice tone="warn">Not an installed Steam game — add its folder as a library.</Notice>
+            <Notice tone="warn">{t("Not an installed Steam game — add its folder as a library.")}</Notice>
           </PanelSectionRow>
           <PanelSectionRow>
             <ButtonItem layout="below" onClick={() => onOpenManager()}>
-              Manage games
+              {t("Manage games")}
             </ButtonItem>
           </PanelSectionRow>
         </PanelSection>
@@ -199,7 +215,7 @@ function NowPlayingTab({
                 onOpenManager(detail?.path, detail?.name, String(runningGame.appid))
               }
             >
-              Set up OptiScaler
+              {t("Set up OptiScaler")}
             </ButtonItem>
           </PanelSectionRow>
         </PanelSection>
@@ -207,43 +223,71 @@ function NowPlayingTab({
 
       {installed && detail ? (
         <>
-          {/* A write the backend would not take reaches neither the file nor
-              the running game, and this is the surface those changes are made
-              from, so it has to say so rather than leave the control looking
-              as if it worked. */}
           {config.error ? (
             <PanelSection>
               <PanelSectionRow>
-                <Notice tone="error" title="Could not save settings">{config.error}</Notice>
+                <Notice
+                  tone="error"
+                  title={
+                    config.errorKind === "read"
+                      ? t("Could not load settings")
+                      : t("Could not save settings")
+                  }
+                >
+                  {config.error}
+                </Notice>
+              </PanelSectionRow>
+              <PanelSectionRow>
+                <ButtonItem
+                  layout="below"
+                  disabled={config.loading}
+                  onClick={() => void config.reload()}
+                >
+                  {t("Reload settings")}
+                </ButtonItem>
               </PanelSectionRow>
             </PanelSection>
           ) : null}
 
           <LiveOutcome result={config.live} status={live} saving={config.saving} />
 
-          {!runtimeCurrent ? (
+          {requiredTargetMismatch ? (
             <PanelSection>
               <PanelSectionRow>
-                <Notice tone="warn" title="Settings are read-only">
-                  Upgrade the OptiScaler runtime in Setup before changing settings.
+                <Notice tone="warn" title={t("Wrong install folder")}>
+                  {t("Open All settings & logs to move OptiScaler to the main PBZ.exe folder.")}
+                </Notice>
+              </PanelSectionRow>
+            </PanelSection>
+          ) : !config.loading && !config.error && !runtimeCurrent ? (
+            <PanelSection>
+              <PanelSectionRow>
+                <Notice tone="warn" title={t("Settings are read-only")}>
+                  {t("Upgrade the OptiScaler runtime in Setup before changing settings.")}
                 </Notice>
               </PanelSectionRow>
             </PanelSection>
           ) : null}
 
           {config.loading ? (
-            <Centered>Reading config…</Centered>
+            <Centered>{t("Reading config…")}</Centered>
           ) : (
             <BasicPanel
               values={config.values}
               disabled={
-                config.loading || config.saving || !runtimeCurrent
+                config.loading ||
+                config.saving ||
+                !runtimeCurrent ||
+                requiredTargetMismatch
               }
+              running
               gpu={detail.gpu}
               live={live}
               ffx={detail.install.fsr4?.ffx}
               targetDir={detail.install.path}
               liveResult={config.live}
+              persistedSnapshot={config.persistedSnapshot}
+              getPersistedSnapshot={config.getPersistedSnapshot}
               onLiveResult={config.recordLiveAction}
               onFlush={config.flush}
               plan={plan}
@@ -252,6 +296,7 @@ function NowPlayingTab({
               onLiveChanged={() => void refreshLive()}
               fsr4Build={config.fsr4Build}
               onEnableFsr4={config.enableFsr4}
+              onRestoreOfficialFsr4={config.restoreOfficialFsr4}
               onApply={config.setOptions}
             />
           )}
@@ -264,16 +309,16 @@ function NowPlayingTab({
                   onClick={() => {
                     if (restartGame(runningGame)) {
                       config.clearDirty();
-                      toaster.toast({ title: "Restarting", body: runningGame.name });
+                      toaster.toast({ title: t("Restarting"), body: runningGame.name });
                     } else {
                       toaster.toast({
-                        title: "Could not restart",
-                        body: "Relaunch the game manually.",
+                        title: t("Could not restart"),
+                        body: t("Relaunch the game manually."),
                       });
                     }
                   }}
                 >
-                  Restart game to apply
+                  {t("Restart game to apply")}
                 </ButtonItem>
               </PanelSectionRow>
             </PanelSection>
@@ -287,7 +332,7 @@ function NowPlayingTab({
                   onOpenManager(detail.path, detail.name, String(runningGame.appid))
                 }
               >
-                All settings & logs
+                {t("All settings & logs")}
               </ButtonItem>
             </PanelSectionRow>
           </PanelSection>
@@ -302,16 +347,18 @@ function InstallPill({
   filename,
   resolving,
 }: Readonly<{ filename?: string | null; resolving: boolean }>) {
-  if (filename) return <Pill color="#2f6b3f">{filename}</Pill>;
-  return <Pill>{resolving ? "checking…" : "not installed"}</Pill>;
+  const { t } = useI18n();
+  if (filename) return <Pill tone="success">{filename}</Pill>;
+  return <Pill>{resolving ? t("checking…") : t("not installed")}</Pill>;
 }
 
 /** Whether the in-game plugin is answering, shown wherever the game is. */
 function LivePill({ live }: Readonly<{ live: LiveStatus | null }>) {
+  const { t } = useI18n();
   const state = liveStatusMessage(live);
-  if (state.ready) return <Pill color="#2f6b3f">live · ready</Pill>;
-  if (state.code === "old") return <Pill color="#5a4a20">live · old module</Pill>;
-  if (state.code === "unknown") return <Pill color="#5a4a20">live · unknown</Pill>;
-  if (state.code === "not-installed") return <Pill color="#5a4a20">live control off</Pill>;
-  return <Pill color="#5a4a20">live · {state.code}</Pill>;
+  if (state.ready) return <Pill tone="success">{t("live · ready")}</Pill>;
+  if (state.code === "old") return <Pill tone="warn">{t("live · old module")}</Pill>;
+  if (state.code === "unknown") return <Pill tone="warn">{t("live · unknown")}</Pill>;
+  if (state.code === "not-installed") return <Pill tone="warn">{t("live control off")}</Pill>;
+  return <Pill tone="warn">{t("live · {code}", { code: state.code })}</Pill>;
 }

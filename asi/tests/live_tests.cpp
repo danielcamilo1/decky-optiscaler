@@ -484,7 +484,7 @@ static void TestNoCallbackReleasesMailbox() {
 
 static void TestStatusTemporaryDoesNotTruncateHardlink() {
     Fixture fixture;
-    wchar_t temp[MAX_PATH],dir[MAX_PATH],source[MAX_PATH],alias[MAX_PATH];
+    wchar_t temp[kPathCapacity],dir[kPathCapacity],source[kPathCapacity],alias[kPathCapacity];
     CHECK(GetTempPathW(MAX_PATH,temp)>0);
     CHECK(GetTempFileNameW(temp,L"dky",0,dir));
     CHECK(DeleteFileW(dir));CHECK(CreateDirectoryW(dir,NULL));
@@ -501,6 +501,264 @@ static void TestStatusTemporaryDoesNotTruncateHardlink() {
     CHECK(ReadFile(file,bytes,4,&read,NULL)&&read==4&&!strcmp(bytes,"user"));CloseHandle(file);
     CHECK(DeleteFileW(source));CHECK(DeleteFileW(g_statusPath));CHECK(RemoveDirectoryW(dir));
     g_parentDirectory[0]=g_statusPath[0]=0;
+}
+
+static void ResetControlDirectoryState() {
+    if (g_targetDirectoryHandle != INVALID_HANDLE_VALUE) {
+        CloseHandle(g_targetDirectoryHandle);
+        g_targetDirectoryHandle = INVALID_HANDLE_VALUE;
+    }
+    if (g_coreDirectoryHandle != INVALID_HANDLE_VALUE) {
+        CloseHandle(g_coreDirectoryHandle);
+        g_coreDirectoryHandle = INVALID_HANDLE_VALUE;
+    }
+    if (g_configDirectoryHandle != INVALID_HANDLE_VALUE) {
+        CloseHandle(g_configDirectoryHandle);
+        g_configDirectoryHandle = INVALID_HANDLE_VALUE;
+    }
+    g_controlOwned = false;
+    g_parentDirectory[0] = 0;
+    g_canonicalDirectory[0] = 0;
+    g_commandPath[0] = 0;
+    g_statusPath[0] = 0;
+    g_logPath[0] = 0;
+    g_startError = "";
+}
+
+static bool CreateCanonicalDirectoryOfLength(const wchar_t* canonicalRoot, size_t targetLen,
+                                             wchar_t (&out)[kPathCapacity],
+                                             size_t (&createdLengths)[32], size_t* depth) {
+    *depth = 0;
+    size_t len = wcslen(canonicalRoot);
+    if (!len || len >= kPathCapacity || targetLen >= kPathCapacity || targetLen < len + 2)
+        return false;
+    memcpy(out, canonicalRoot, (len + 1) * sizeof(wchar_t));
+    while (len > 0 && out[len - 1] == L'\\') out[--len] = 0;
+    if (targetLen < len + 2) return false;
+    size_t rem = targetLen - len;
+    while (rem > 0) {
+        if (*depth >= 32) return false;
+        size_t segLen = rem <= 65 ? rem - 1 : ((rem - 65) < 2 ? 32 : 64);
+        out[len++] = L'\\';
+        wchar_t ch = static_cast<wchar_t>(L'a' + (*depth % 26));
+        for (size_t i = 0; i < segLen; ++i) out[len++] = ch;
+        out[len] = 0;
+        if (!CreateDirectoryW(out, NULL)) return false;
+        createdLengths[(*depth)++] = len;
+        rem -= (1 + segLen);
+    }
+    return len == targetLen;
+}
+
+static void RemoveCreatedDirectories(wchar_t (&path)[kPathCapacity],
+                                     const size_t (&createdLengths)[32], size_t depth) {
+    while (depth > 0) {
+        path[createdLengths[--depth]] = 0;
+        CHECK(RemoveDirectoryW(path));
+    }
+}
+
+static void TestControlDirectoryLongPaths() {
+    constexpr size_t kLongestSuffix = (sizeof(L"decky_optiscaler_live.status.tmp") / sizeof(wchar_t)) - 1;
+    CHECK(kLongestSuffix == 32);
+    constexpr size_t kMaxParentLen = kPathCapacity - kLongestSuffix - 2;
+
+    // Boundary checks for JoinPath / BuildControlPathsFrom at kPathCapacity.
+    {
+        wchar_t synthetic[kPathCapacity];
+        const wchar_t* prefix = L"\\\\?\\C:\\";
+        size_t pLen = wcslen(prefix);
+        memcpy(synthetic, prefix, pLen * sizeof(wchar_t));
+        for (size_t i = pLen; i < kMaxParentLen; ++i) synthetic[i] = L'x';
+        synthetic[kMaxParentLen] = 0;
+        wcscpy(g_parentDirectory, synthetic);
+        wchar_t cmd[kPathCapacity], status[kPathCapacity], statusTmp[kPathCapacity], log[kPathCapacity];
+        CHECK(JoinPath(cmd, L"decky_optiscaler_live.cmd"));
+        CHECK(JoinPath(status, L"decky_optiscaler_live.status"));
+        CHECK(JoinPath(statusTmp, L"decky_optiscaler_live.status.tmp"));
+        CHECK(JoinPath(log, L"decky_optiscaler_live.log"));
+        CHECK(BuildControlPathsFrom(synthetic, cmd, status, log));
+
+        // One code unit longer: .cmd/.status/.log still fit, but .status.tmp overflows.
+        synthetic[kMaxParentLen] = L'x';
+        synthetic[kMaxParentLen + 1] = 0;
+        wcscpy(g_parentDirectory, synthetic);
+        CHECK(JoinPath(cmd, L"decky_optiscaler_live.cmd"));
+        CHECK(JoinPath(status, L"decky_optiscaler_live.status"));
+        CHECK(JoinPath(log, L"decky_optiscaler_live.log"));
+        CHECK(!JoinPath(statusTmp, L"decky_optiscaler_live.status.tmp"));
+        CHECK(!BuildControlPathsFrom(synthetic, cmd, status, log));
+        ResetControlDirectoryState();
+    }
+
+    // Real \\?\ directories covering 226..229 char window, >260 char paths, and .status.tmp overflow.
+    Fixture fixture;
+    wchar_t temp[kPathCapacity], root[kPathCapacity], canonicalRoot[kPathCapacity];
+    CHECK(GetTempPathW(MAX_PATH, temp) > 0);
+    CHECK(GetTempFileNameW(temp, L"dkl", 0, root));
+    CHECK(DeleteFileW(root));
+    CHECK(CreateDirectoryW(root, NULL));
+    HANDLE rootHandle = OpenDirectory(root);
+    CHECK(rootHandle != INVALID_HANDLE_VALUE);
+    DWORD rootLen = 0;
+    if (rootHandle != INVALID_HANDLE_VALUE) {
+        rootLen = GetFinalPathNameByHandleW(
+            rootHandle, canonicalRoot, kPathCapacity, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+        CloseHandle(rootHandle);
+    }
+    CHECK(rootLen > 4 && rootLen < kPathCapacity);
+    CHECK(rootLen > 4 && !wcsncmp(canonicalRoot, L"\\\\?\\", 4));
+
+    const size_t validTargets[] = {226, 229, 320, 600};
+    for (size_t targetLen : validTargets) {
+        ResetControlDirectoryState();
+        wchar_t dir[kPathCapacity], corePath[kPathCapacity], configPath[kPathCapacity], tmpPath[kPathCapacity];
+        size_t created[32];
+        size_t depth = 0;
+        CHECK(CreateCanonicalDirectoryOfLength(canonicalRoot, targetLen, dir, created, &depth));
+        wcscpy(g_parentDirectory, dir);
+        CHECK(JoinPathFrom(dir, corePath, kPathCapacity, L"OptiScaler.dll"));
+        CHECK(JoinPathFrom(dir, configPath, kPathCapacity, L"OptiScaler.ini"));
+        g_startError = "stale_error";
+        CHECK(OwnControlDirectory(corePath));
+        CHECK(g_controlOwned);
+        CHECK(g_startError[0] == 0);
+        CHECK(wcslen(g_canonicalDirectory) == targetLen);
+        CHECK(!wcscmp(g_parentDirectory, g_canonicalDirectory));
+        CHECK(JoinPath(tmpPath, L"decky_optiscaler_live.status.tmp"));
+        CHECK(wcslen(tmpPath) == targetLen + 1 + kLongestSuffix);
+
+        // Verify real directory/config path auth handles >512-char paths end-to-end.
+        PutWideString(&fixture.config->absoluteFileName.text, configPath);
+        g_testDirectoryAuthMatches = nullptr;
+        RefreshDirectoryAuth();
+        const uintptr_t configAddress = reinterpret_cast<uintptr_t>(fixture.config);
+        CHECK(g_directoryAuth.verified);
+        CHECK(g_directoryAuth.config == configAddress);
+        CHECK(!wcscmp(g_directoryAuth.path, configPath));
+        CHECK(ValidateConfigAt(configAddress));
+        CHECK(DirectoryAuthMatches(configAddress));
+        g_snapshot = fixture.SnapshotNow();
+        CHECK(g_snapshot.dirVerified);
+        WriteStatus();
+        HANDLE statusFile = CreateFileW(
+            g_statusPath, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        CHECK(statusFile != INVALID_HANDLE_VALUE);
+        if (statusFile != INVALID_HANDLE_VALUE) {
+            char header[16] = {};
+            DWORD read = 0;
+            CHECK(ReadFile(statusFile, header, 9, &read, NULL) && read == 9 && !memcmp(header, "schema 7\n", 9));
+            CloseHandle(statusFile);
+        }
+        CHECK(DeleteFileW(g_statusPath));
+        PutWideString(&fixture.config->absoluteFileName.text, L"C:\\fixture\\OptiScaler.ini");
+        g_testDirectoryAuthMatches = &TestDirectoryMatch;
+        ResetControlDirectoryState();
+        RemoveCreatedDirectories(dir, created, depth);
+    }
+
+    // Real \\?\ directory where canonical path and .status fit in kPathCapacity,
+    // but .status.tmp overflows by 1 UTF-16 code unit.
+    {
+        ResetControlDirectoryState();
+        wchar_t dir[kPathCapacity], corePath[kPathCapacity];
+        size_t created[32];
+        size_t depth = 0;
+        const size_t overflowLen = kMaxParentLen + 1;
+        CHECK(CreateCanonicalDirectoryOfLength(canonicalRoot, overflowLen, dir, created, &depth));
+        wcscpy(g_parentDirectory, dir);
+        CHECK(JoinPathFrom(dir, corePath, kPathCapacity, L"OptiScaler.dll"));
+        CHECK(!OwnControlDirectory(corePath));
+        CHECK(!g_controlOwned);
+        CHECK(g_targetDirectoryHandle == INVALID_HANDLE_VALUE);
+        CHECK(g_coreDirectoryHandle == INVALID_HANDLE_VALUE);
+        CHECK(g_canonicalDirectory[0] == 0);
+        CHECK(!strcmp(g_startError, "control_path_too_long"));
+        ResetControlDirectoryState();
+        RemoveCreatedDirectories(dir, created, depth);
+    }
+
+    // Overlong corePath (>= kPathCapacity) reports control_path_too_long.
+    {
+        ResetControlDirectoryState();
+        wchar_t overlong[kPathCapacity + 8];
+        const wchar_t* prefix = L"\\\\?\\C:\\";
+        size_t pLen = wcslen(prefix);
+        memcpy(overlong, prefix, pLen * sizeof(wchar_t));
+        for (size_t i = pLen; i < kPathCapacity; ++i) overlong[i] = L'z';
+        overlong[kPathCapacity] = 0;
+        CHECK(!OwnControlDirectory(overlong));
+        CHECK(!g_controlOwned);
+        CHECK(!strcmp(g_startError, "control_path_too_long"));
+        ResetControlDirectoryState();
+    }
+
+    CHECK(RemoveDirectoryW(root));
+}
+
+static void BuildSyntheticConfigPath(wchar_t* out, size_t targetLen) {
+    const wchar_t* prefix = L"C:\\";
+    const wchar_t* suffix = L"\\OptiScaler.ini";
+    const size_t pLen = wcslen(prefix);
+    const size_t sLen = wcslen(suffix);
+    CHECK(targetLen > pLen + sLen);
+    memcpy(out, prefix, pLen * sizeof(wchar_t));
+    for (size_t i = pLen; i < targetLen - sLen; ++i)
+        out[i] = ((i - pLen) % 32 == 31) ? L'\\' : L'g';
+    memcpy(out + targetLen - sLen, suffix, (sLen + 1) * sizeof(wchar_t));
+    CHECK(wcslen(out) == targetLen);
+}
+
+static void TestConfigPathLengthBounds() {
+    Fixture fixture;
+    const uintptr_t configAddress = reinterpret_cast<uintptr_t>(fixture.config);
+    g_testDirectoryAuthMatches = nullptr;
+
+    // >512-char (~600-char) config path succeeds across identity.h and directory.h.
+    {
+        wchar_t path600[kPathCapacity];
+        BuildSyntheticConfigPath(path600, 600);
+        PutWideString(&fixture.config->absoluteFileName.text, path600);
+        CHECK(ValidateConfigAt(configAddress));
+        uintptr_t resolvedConfig = 0;
+        wchar_t safePath[kPathCapacity] = {};
+        CHECK(SafeConfigPath(&resolvedConfig, safePath));
+        CHECK(resolvedConfig == configAddress);
+        CHECK(!wcscmp(safePath, path600));
+        g_directoryAuth.verified = true;
+        g_directoryAuth.config = configAddress;
+        wcscpy(g_directoryAuth.path, path600);
+        CHECK(DirectoryAuthMatches(configAddress));
+    }
+
+    // Exact maximum capacity (kPathCapacity - 1 code units + NUL) succeeds.
+    {
+        wchar_t pathMax[kPathCapacity];
+        BuildSyntheticConfigPath(pathMax, kPathCapacity - 1);
+        PutWideString(&fixture.config->absoluteFileName.text, pathMax);
+        CHECK(ValidateConfigAt(configAddress));
+        uintptr_t resolvedConfig = 0;
+        wchar_t safePath[kPathCapacity] = {};
+        CHECK(SafeConfigPath(&resolvedConfig, safePath));
+        CHECK(resolvedConfig == configAddress);
+        CHECK(wcslen(safePath) == kPathCapacity - 1);
+    }
+
+    // Overlong config paths (>= kPathCapacity code units) fail cleanly.
+    const size_t overlongTargets[] = {kPathCapacity, kPathCapacity + 64};
+    for (size_t tooLong : overlongTargets) {
+        wchar_t overlong[kPathCapacity + 80];
+        BuildSyntheticConfigPath(overlong, tooLong);
+        PutWideString(&fixture.config->absoluteFileName.text, overlong);
+        CHECK(!ValidateConfigAt(configAddress));
+        uintptr_t resolvedConfig = 0;
+        wchar_t safePath[kPathCapacity] = {};
+        CHECK(!SafeConfigPath(&resolvedConfig, safePath));
+        CHECK(!ReadWStringAt(configAddress, offsetof(Config, absoluteFileName), safePath, kPathCapacity));
+        g_directoryAuth.verified = true;
+        g_directoryAuth.config = configAddress;
+        CHECK(!DirectoryAuthMatches(configAddress));
+    }
 }
 
 static void TestBootstrapCallerFingerprint() {
@@ -560,6 +818,8 @@ static void TestSha256() {
 int main(int argc, char** argv) {
     TestBootstrapCallerFingerprint();
     TestStatusTemporaryDoesNotTruncateHardlink();
+    TestControlDirectoryLongPaths();
+    TestConfigPathLengthBounds();
     TestSha256();
     TestProtocol();
     TestAllMenuOperations();

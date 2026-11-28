@@ -9,7 +9,7 @@ import time
 import uuid
 from pathlib import Path, PurePosixPath
 
-from . import constants, live
+from . import constants, fsutil, live
 
 RESTORE_DIR = ".decky_optiscaler_restore"
 SNAPSHOT_FILE = "snapshot.json"
@@ -22,11 +22,7 @@ _DIGEST_CACHE = {}
 
 
 def _sha256(path):
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as handle:
-        for block in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
+    return fsutil.sha256_file(path)
 
 
 def _stat_fingerprint(path):
@@ -63,15 +59,7 @@ def _stat_fingerprint(path):
 
 
 def _relative(name):
-    if not isinstance(name, str) or not name or "\\" in name or "\x00" in name:
-        raise ValueError(f"invalid restore path: {name!r}")
-    path = PurePosixPath(name)
-    if path.is_absolute() or any(part in ("", ".", "..") for part in path.parts):
-        raise ValueError(f"invalid restore path: {name!r}")
-    normalized = path.as_posix()
-    if normalized != name:
-        raise ValueError(f"invalid restore path: {name!r}")
-    return normalized
+    return fsutil.relative_name(name, label="restore path")
 
 
 def _lstat(path):
@@ -82,9 +70,7 @@ def _lstat(path):
 
 
 def _safe_path(target, name):
-    from . import installer
-
-    return installer._safe_path(target, _relative(name))
+    return fsutil.safe_path(target, name, label="restore path")
 
 
 def _copy_tree(source, destination):
@@ -214,23 +200,33 @@ def _candidate_covers(record, name):
 
 
 def validate_metadata(metadata):
-    """Require service-level game and launch recovery data for an experiment."""
+    """Require service-level game and launch recovery data for a restore point."""
     required = {"game_path", "game_settings", "launch_options"}
     if not isinstance(metadata, dict) or not required.issubset(metadata):
         raise ValueError("Restore point needs game_path, game_settings and launch_options metadata.")
     if not isinstance(metadata["game_path"], str) or not metadata["game_path"].strip():
         raise ValueError("Restore point needs a non-empty game identity.")
     settings = metadata["game_settings"]
-    if not isinstance(settings, dict) or not {"target", "auto", "experiment"}.issubset(settings):
+    if not isinstance(settings, dict) or not {"target", "auto"}.issubset(settings):
         raise ValueError("Restore point is missing complete game preference fields.")
     if settings["target"] is not None and not isinstance(settings["target"], str):
         raise ValueError("Restore point target preference is invalid.")
     if settings["auto"] is not None and not isinstance(settings["auto"], bool):
         raise ValueError("Restore point auto preference is invalid.")
-    if settings["experiment"] is not None and not isinstance(settings["experiment"], bool):
+    if "experiment" in settings and settings["experiment"] is not None and not isinstance(settings["experiment"], bool):
         raise ValueError("Restore point experiment preference is invalid.")
     if metadata["launch_options"] is not None and not isinstance(metadata["launch_options"], str):
         raise ValueError("Restore point launch options are invalid.")
+    if "applied_launch" in metadata and metadata["applied_launch"] is not None:
+        applied = metadata["applied_launch"]
+        if not isinstance(applied, dict):
+            raise ValueError("Restore point applied_launch metadata must be an object or null.")
+        if set(applied.keys()) != {"flags", "extraOverrides"}:
+            raise ValueError("Restore point applied_launch metadata must contain only flags and extraOverrides.")
+        for field in ("flags", "extraOverrides"):
+            entries = applied[field]
+            if not isinstance(entries, list) or not all(isinstance(item, str) for item in entries):
+                raise ValueError(f"Restore point applied_launch {field} must be a list of strings.")
     return metadata
 
 
@@ -367,16 +363,29 @@ def _load(target):
     return path, record
 
 
-def info(target_dir):
-    target = Path(target_dir).resolve()
-    if not target.is_dir():
-        return {"available": False, "version": None, "metadata": {}}
+def _strict_info(target):
     loaded = _load(target)
     if not loaded:
         return {"available": False, "version": None, "metadata": {}}
     _, record = loaded
     return {"available": True, "version": record.get("runtime_version"),
             "metadata": record["metadata"]}
+
+
+def info(target_dir):
+    target = Path(target_dir).resolve()
+    if not target.is_dir():
+        return {"available": False, "version": None, "metadata": {}}
+    try:
+        return _strict_info(target)
+    except (ValueError, OSError) as exc:
+        return {
+            "available": False,
+            "version": None,
+            "metadata": {},
+            "corrupt": True,
+            "error": str(exc),
+        }
 
 
 def create(target_dir, metadata):
@@ -404,7 +413,7 @@ def create(target_dir, metadata):
     installer._backup_items(target, manifest)
     root = _snapshot_path(target)
     if _lstat(root):
-        return info(target)
+        return _strict_info(target)
 
     files, dirs = _owned_paths(target, manifest)
     candidates = _candidate_paths(target)
@@ -413,7 +422,7 @@ def create(target_dir, metadata):
     with installer.target_transaction(target, extra_names=(RESTORE_DIR, staging_name),
                                       require_stopped=True):
         if _lstat(root):
-            return info(target)
+            return _strict_info(target)
         staging.mkdir()
         content_root = staging / "entries"
         content_root.mkdir()
@@ -461,15 +470,16 @@ def create(target_dir, metadata):
             "entries": entries,
             "metadata": metadata,
         }
-        (staging / SNAPSHOT_FILE).write_text(
-            json.dumps(record, indent=2, ensure_ascii=False), encoding="utf-8"
+        fsutil.atomic_json(
+            staging / SNAPSHOT_FILE, record, indent=2, ensure_ascii=False,
+            prefix=".decky-restorepoint-meta-",
         )
         # Validate every stored byte before the single commit rename.
         if _load_staged(staging) is None:
             raise ValueError("restore point failed pre-commit verification")
         installer.require_stopped_target(target)
         os.replace(staging, root)
-    return info(target)
+    return _strict_info(target)
 
 
 def _load_staged(root):

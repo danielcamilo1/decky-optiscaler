@@ -57,6 +57,6 @@ cli/*
 cli/decky
 
 out/
-testharness/.bundle.mjs
+testharness/.bundle*.mjs
 
 CLAUDE.md

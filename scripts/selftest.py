@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """End-to-end backend test against a synthetic Steam library in a temp dir.
 
-Exercises library discovery, executable-folder scoring, the wiki lookup (needs
-network; skipped gracefully offline), install/detect/uninstall round trips and
-comment-preserving INI edits.
+Exercises library discovery, executable-folder scoring, deterministic offline
+wiki lookup, install/detect/uninstall round trips and comment-preserving INI
+edits.
 """
 
 import asyncio
@@ -30,6 +30,31 @@ from optiscaler.constants import COMPAT_CACHE_TTL, INI_NAME  # noqa: E402
 
 PASSED = []
 FAILED = []
+_SHARED_PAYLOAD_TMP = None
+_SHARED_PAYLOAD_ROOT = None
+
+
+def _shared_payload_runtime():
+    global _SHARED_PAYLOAD_TMP
+    if _SHARED_PAYLOAD_TMP is None:
+        _SHARED_PAYLOAD_TMP = tempfile.TemporaryDirectory(prefix="decky-selftest-payload-")
+    return Path(_SHARED_PAYLOAD_TMP.name) / "runtime"
+
+
+def _shared_payload():
+    global _SHARED_PAYLOAD_ROOT
+    if _SHARED_PAYLOAD_ROOT is None:
+        from optiscaler.constants import PAYLOAD_ARCHIVE
+        from optiscaler.payload import Payload
+        _SHARED_PAYLOAD_ROOT = Payload(
+            ROOT / "bin" / PAYLOAD_ARCHIVE, _shared_payload_runtime()
+        ).ensure()
+    return _SHARED_PAYLOAD_ROOT
+
+
+def _write_sparse_exe(path, size):
+    path.write_bytes(b"MZ")
+    os.truncate(path, size)
 
 
 def check(name, condition, detail=""):
@@ -69,7 +94,7 @@ def build_fixture(root):
     cp = steam / "steamapps" / "common" / "Cyberpunk 2077"
     (cp / "bin" / "x64").mkdir(parents=True)
     (cp / "REDprelauncher.exe").write_bytes(b"MZ")
-    (cp / "bin" / "x64" / "Cyberpunk2077.exe").write_bytes(b"MZ" + b"\0" * (60 << 20))
+    _write_sparse_exe(cp / "bin" / "x64" / "Cyberpunk2077.exe", 60 << 20)
     (steam / "steamapps" / "common" / "Steamworks Shared").mkdir(parents=True)
 
     # Unreal: real binary under <Project>/Binaries/Win64, Engine/ must be ignored.
@@ -77,18 +102,47 @@ def build_fixture(root):
     (bmw / "Engine" / "Binaries" / "Win64").mkdir(parents=True)
     (bmw / "b1" / "Binaries" / "Win64").mkdir(parents=True)
     (bmw / "Engine" / "Binaries" / "Win64" / "UnrealEditor.exe").write_bytes(b"MZ")
-    (bmw / "b1" / "Binaries" / "Win64" / "b1-Win64-Shipping.exe").write_bytes(b"MZ" + b"\0" * (80 << 20))
+    _write_sparse_exe(bmw / "b1" / "Binaries" / "Win64" / "b1-Win64-Shipping.exe", 80 << 20)
     (bmw / "b1" / "Binaries" / "Win64" / "CrashReportClient.exe").write_bytes(b"MZ")
     return home
 
 
 async def run():
+    from optiscaler import wiki as wiki_mod
+    from optiscaler.constants import PAYLOAD_ARCHIVE
+    from optiscaler.payload import Payload
+
+    real_http_get = wiki_mod._http_get
     root = Path(tempfile.mkdtemp(prefix="decky-optiscaler-selftest-"))
+
+    def offline_wiki_get(url, *args, **kwargs):
+        if "Cyberpunk-2077" in url:
+            return (
+                "= Cyberpunk 2077\n\n"
+                "|===\n"
+                "|**Filename**\n"
+                "|`dxgi.dll`\n"
+                "|**Notes**\n"
+                "|Offline deterministic fixture for selftest.\n"
+                "|===\n"
+            )
+        if "Forza-Horizon-5" in url:
+            return (
+                "= Forza Horizon 5\n\n"
+                "|===\n"
+                "|**Filename**\n"
+                "|`dxgi.dll`\n"
+                "|===\n"
+            )
+        raise urllib.error.URLError(OSError(f"offline selftest blocked live URL: {url}"))
+
+    wiki_mod._http_get = offline_wiki_get
     try:
         home = build_fixture(root)
         service = OptiScalerService(
             ROOT, root / "settings", root / "runtime", home, logging.getLogger("selftest")
         )
+        service.payload = Payload(ROOT / "bin" / PAYLOAD_ARCHIVE, _shared_payload_runtime())
 
         print("\nPayload")
         status = await service.get_status()
@@ -108,7 +162,7 @@ async def run():
         libraries = await service.list_libraries()
         check("custom library listed", any(l["source"] == "custom" for l in libraries))
 
-        games = await service.list_games(libraries[0]["path"])
+        games = await service.list_all_games()
         names = [g["name"] for g in games]
         check("game listed", "Cyberpunk 2077" in names, names)
         check("redistributables filtered out",
@@ -570,6 +624,11 @@ async def run():
         check("imported FSR4 files removed too",
               not (target / "amdxcffx64.dll").exists())
     finally:
+        for _ in range(100):
+            if not getattr(service, "_wiki_jobs", None):
+                break
+            await asyncio.sleep(0.02)
+        wiki_mod._http_get = real_http_get
         shutil.rmtree(root, ignore_errors=True)
 
 
@@ -1142,6 +1201,134 @@ def check_wiki_cache():
         shutil.rmtree(root, ignore_errors=True)
 
 
+def check_wiki_mirrors():
+    """A blocked origin must refresh through a mirror without losing good data."""
+    from unittest.mock import patch, MagicMock
+    from email.message import Message
+    import ssl
+    from optiscaler import wiki
+
+    print("\nWiki mirror fallback")
+    table = ("| Game | Compatibility | Inputs |\n|---|---|---|\n"
+             "| [Cyberpunk 2077](Cyberpunk-2077) | OK | DLSS |\n")
+    origin = f"{wiki.WIKI_RAW_BASE}/{wiki.COMPAT_LIST_PAGE}"
+    urls = [origin] + [prefix + origin.removeprefix("https://") for prefix in wiki.COMPAT_LIST_MIRRORS]
+    with tempfile.TemporaryDirectory(prefix="optiscaler-mirrors-") as temporary:
+        client = wiki.WikiClient(Path(temporary))
+        with patch.object(wiki, "_http_get", return_value=table) as get:
+            result = client.revalidate()
+            check("a working origin never contacts a mirror", result["ok"]
+                  and get.call_count == 1 and get.call_args.args[0] == origin
+                  and get.call_args.kwargs.get("raw_markdown") is True)
+
+        failures = [TimeoutError("blocked"),
+                    urllib.error.HTTPError(origin, 403, "Forbidden", {}, None),
+                    "<html><body>\n" + table + "</body></html>", "", "not a table"]
+        for failure in failures:
+            with patch.object(wiki, "_http_get", side_effect=[failure, table]) as get:
+                result = client.revalidate()
+                calls = get.call_args_list
+                check(f"origin {type(failure).__name__} failure reaches a valid mirror",
+                      result["ok"] and result["count"] == 1 and client.last_error is None
+                      and [c.args[0] for c in calls] == urls[:2])
+                check("wiki attempts use short timeouts without unverified TLS override",
+                      all(c.kwargs["timeout"] == wiki.COMPAT_FETCH_TIMEOUT for c in calls)
+                      and all(not c.kwargs.get("allow_unverified", False) for c in calls))
+
+        with patch.object(wiki, "_http_get", side_effect=[TimeoutError("blocked"),
+                          "<html>unavailable</html>", table]) as get:
+            check("an invalid first mirror falls through to the next",
+                  client.revalidate()["ok"] and [c.args[0] for c in get.call_args_list] == urls)
+
+        before = client.list_cache.read_bytes()
+        revision = client.revision()
+        with patch.object(wiki, "_http_get", side_effect=TimeoutError("all blocked")):
+            result = client.revalidate()
+            check("total failure keeps the cache and its fetched time unchanged",
+                  not result["ok"] and client.list_cache.read_bytes() == before
+                  and client.revision() == revision and client.status()["available"])
+            check("total failure identifies every attempted source",
+                  all(url in result["error"] for url in urls))
+        with patch.object(wiki, "_http_get", return_value=table) as get:
+            check("a later refresh retries the origin and clears the old error",
+                  client.revalidate()["ok"] and client.last_error is None
+                  and get.call_count == 1 and get.call_args.args[0] == origin)
+
+    # Even if an unverified context is injected into cache or candidates,
+    # _http_get must never reuse it or fall back to it.
+    verified = ssl.create_default_context()
+    unverified = ssl._create_unverified_context()
+    with patch.object(wiki, "_ssl_context", unverified), \
+            patch.object(wiki, "_ssl_context_kind", "unverified"), \
+            patch.object(wiki, "_candidate_contexts", return_value=iter([
+                ("default", verified), ("unverified", unverified)])), \
+            patch.object(wiki, "_open", side_effect=ssl.SSLError("bad certificate")) as opened:
+        try:
+            wiki._http_get(urls[1])
+        except ssl.SSLError:
+            pass
+        check("TLS failure never falls back to or reuses an unverified context",
+              opened.call_count == 1 and opened.call_args.args[2] is verified)
+
+    with tempfile.TemporaryDirectory(prefix="optiscaler-mirror-timeouts-") as temporary:
+        waits = []
+        def stalled_sources(request, timeout, context, binary=False, **policy):
+            if request.full_url != urls[-1]:
+                waits.append(timeout)
+                raise TimeoutError("blackholed source")
+            return table
+        with patch.object(wiki, "_ssl_context", verified), \
+                patch.object(wiki, "_ssl_context_kind", "default"), \
+                patch.object(wiki, "_open", side_effect=stalled_sources):
+            client = wiki.WikiClient(temporary)
+            result = client.revalidate()
+            check("the final mirror updates after both earlier sources exhaust IPv4 retries",
+                  result["ok"] and result["changed"] and len(waits) == 4
+                  and sum(waits) == 12 and client.status()["entry_count"] == 1)
+
+    # Redirect checks run before the next hop, for both normal and IPv4 opens.
+    handler = wiki._HTTPSOnlyRedirectHandler()
+    request = wiki.urllib.request.Request(urls[1])
+    for destination in ("http://mirror.invalid/list", "ftp://mirror.invalid/list"):
+        try:
+            handler.redirect_request(request, None, 302, "Found", {}, destination)
+            check("insecure mirror redirects are rejected", False)
+        except urllib.error.URLError:
+            check("insecure mirror redirects are rejected", True)
+    check("HTTPS mirror redirects remain usable", handler.redirect_request(
+        request, None, 302, "Found", {}, urls[2]).full_url == urls[2])
+
+    headers = Message()
+    headers["Content-Type"] = "text/html; charset=utf-8"
+    response = MagicMock()
+    response.__enter__.return_value = response
+    response.headers = headers
+    html_opener = MagicMock()
+    html_opener.open.return_value = response
+    with patch.object(wiki.urllib.request, "urlopen", return_value=response), \
+            patch.object(wiki.urllib.request, "build_opener", return_value=html_opener):
+        try:
+            wiki._open(request, 3, verified, raw_markdown=True)
+            check("HTML MIME is rejected even without HTML wrapper tags", False)
+        except ValueError:
+            check("HTML MIME is rejected even without HTML wrapper tags",
+                  not response.read.called)
+    for ipv4 in (False, True):
+        opener = MagicMock()
+        opener.open.return_value = response
+        headers.replace_header("Content-Type", "text/plain")
+        response.read.return_value = table.encode()
+        with patch.object(wiki.urllib.request, "build_opener", return_value=opener) as build:
+            token = wiki._force_ipv4.set(ipv4)
+            try:
+                wiki._open(request, 3, verified, require_https=True, raw_markdown=True)
+            finally:
+                wiki._force_ipv4.reset(token)
+            check("both address-family paths enforce HTTPS redirects", any(
+                isinstance(h, wiki._HTTPSOnlyRedirectHandler) for h in build.call_args.args))
+
+
+
 def check_wiki_transport():
     """The fetch has to survive the ways one Deck's network differs.
 
@@ -1190,9 +1377,13 @@ def check_wiki_transport():
     finally:
         wiki_mod._open = real_open
 
-    kinds = [kind for kind, _ in wiki_mod._candidate_contexts()]
-    check("an unverified context is always the last resort",
-          kinds and kinds[-1] == "unverified", kinds)
+    import ssl
+    candidates = list(wiki_mod._candidate_contexts())
+    kinds = [kind for kind, _ in candidates]
+    check("only verified TLS contexts are offered",
+          len(kinds) >= 1 and "unverified" not in kinds
+          and all(ctx.verify_mode == ssl.CERT_REQUIRED and ctx.check_hostname
+                  for _, ctx in candidates), kinds)
 
 
 def check_wiki_tls():
@@ -1217,10 +1408,13 @@ def check_wiki_tls():
           not wiki._is_tls_error(urllib.error.URLError(OSError("unreachable"))))
     check("a timeout does not", not wiki._is_tls_error(TimeoutError()))
 
-    kinds = [kind for kind, _ in wiki._candidate_contexts()]
-    check("more than one CA source is tried", len(kinds) > 1, kinds)
-    check("an unverified attempt is the last resort, never the first",
-          kinds[-1] == "unverified" and kinds[0] != "unverified", kinds)
+    candidates = list(wiki._candidate_contexts())
+    kinds = [kind for kind, _ in candidates]
+    check("at least one verified CA source is available", len(kinds) >= 1, kinds)
+    check("unverified TLS contexts are never offered",
+          "unverified" not in kinds
+          and all(ctx.verify_mode == ssl.CERT_REQUIRED and ctx.check_hostname
+                  for _, ctx in candidates), kinds)
 
 
 def check_version_pin():
@@ -1294,9 +1488,11 @@ def check_optipatcher():
     try:
         target = root / "game"
         target.mkdir()
+        installer.install(str(target), str(_shared_payload()), "dxgi.dll", False)
         source = root / "fake.asi"
         source.write_bytes(b"MZ fake")
-        result = live.install_plugin_asi(str(target), source, constants.OPTIPATCHER_NAME)
+        relative = f"{live.PLUGIN_SUBDIR}/{constants.OPTIPATCHER_NAME}"
+        result = installer.install_plugin_file(str(target), source, relative)
         landed = target / live.PLUGIN_SUBDIR / constants.OPTIPATCHER_NAME
         # The README's instructions are: plugins/OptiPatcher.asi plus
         # LoadAsiPlugins=true. The second half is service.install's job.
@@ -1622,9 +1818,7 @@ def check_reframework():
         root = Path(tmp)
         game = root / "game"
         game.mkdir()
-        from optiscaler.payload import Payload
-        from optiscaler.constants import PAYLOAD_ARCHIVE
-        payload = Payload(ROOT / "bin" / PAYLOAD_ARCHIVE, root / "runtime").ensure()
+        payload = _shared_payload()
         source = root / "ref"
         source.mkdir()
         (source / REFRAMEWORK_DLL).write_bytes(b"the REFramework build")
@@ -1653,9 +1847,7 @@ def check_reframework():
         root = Path(tmp)
         game = root / "game"
         game.mkdir()
-        from optiscaler.payload import Payload
-        from optiscaler.constants import PAYLOAD_ARCHIVE
-        payload = Payload(ROOT / "bin" / PAYLOAD_ARCHIVE, root / "runtime").ensure()
+        payload = _shared_payload()
         installer.install(str(game), str(payload), "dxgi.dll", False)
         source = root / "ref"
         source.mkdir()
@@ -2063,35 +2255,32 @@ def check_option_validation():
                if not (schema_option(s, k) and valid(schema_option(s, k), v))]
         check(f"every key the {name} preset writes is accepted", not bad, bad)
 
+    # [CD-10] Reject control-character INI injection in string options and
+    # non-finite floats (NaN/Inf) in both bounded and unbounded float options.
+    dll_path = SCHEMA[("Libraries", "OptiDllPath")]
+    check("normal string option values remain accepted",
+          valid(dll_path, "auto") and valid(dll_path, "C:\\Games\\OptiScaler.dll"))
+    for bad_str in ("abc\n[Plugins]\nLoadAsiPlugins=true", "abc\rdef", "abc\x00def"):
+        check(f"string option rejects control chars {bad_str!r}", not valid(dll_path, bad_str))
+
+    bounded_float = SCHEMA[("FSRFG", "FPTVarianceFactor")]
+    unbounded_float = SCHEMA[("FSRFG", "FPTSafetyMarginInMs")]
+    check("finite float values remain accepted",
+          valid(bounded_float, "0.5") and valid(unbounded_float, "1.5"))
+    for non_finite in ("nan", "NaN", "inf", "-inf"):
+        check(f"bounded float rejects {non_finite!r}", not valid(bounded_float, non_finite))
+        check(f"unbounded float rejects {non_finite!r}", not valid(unbounded_float, non_finite))
+
 
 def check_live_bridge_contract():
     """Check the distributed ABI contract; native behavior runs in Windows tests."""
-    from optiscaler import live
     from optiscaler.constants import LIVE_CONTROL_SUPPORTED, LIVE_SCHEMA
-    from live_metadata import current
     print("\nPinned native live bridge")
     profile = json.loads((ROOT / "defaults/live-profile.json").read_text())
-    metadata = json.loads((ROOT / "defaults/live-build.json").read_text())
     runtime = json.loads((ROOT / "defaults/runtime-manifest.json").read_text())
     check("the bridge has an explicitly supported profile", LIVE_CONTROL_SUPPORTED and profile["schema"] == LIVE_SCHEMA)
     check("the ABI profile names the bundled core", profile["core_sha256"] == runtime["runtime"]["dll_sha256"]
           and profile["source_commit"] == runtime["runtime"]["commit"])
-    check("bridge binary and source identities match the build record", current() == metadata)
-    expected = {
-        "FrameGen.Enabled": "FGEnabled", "OptiFG.HUDFix": "FGHUDFix",
-        "FrameGen.DebugView": "FGDebugView", "OptiFG.MakeDepthCopy": "FGMakeDepthCopy",
-        "OptiFG.HUDFixExtended": "FGHUDFixExtended", "XeFG.InterpolationCount": "FGXeFGInterpolationCount",
-        "FSR.FGIndex": "FfxFGIndex", "FSR.UpscalerIndex": "FfxUpscalerIndex",
-        "Upscalers.Dx11Upscaler": "Dx11Upscaler", "Upscalers.Dx12Upscaler": "Dx12Upscaler",
-        "Upscalers.VulkanUpscaler": "VulkanUpscaler", "Sharpness.OverrideSharpness": "OverrideSharpness",
-        "Sharpness.Sharpness": "Sharpness", "Menu.ShowFps": "ShowFps",
-    }
-    check("all original fourteen live keys remain available", set(live.LIVE_FIELDS) == set(expected)
-          and set(profile["live_keys"]) == set(expected))
-    ini_map = json.loads((ROOT / "py_modules/optiscaler/live_fields.json").read_text())["fields"]
-    for key, member in expected.items():
-        check(f"{key} addresses the intended native member", live.LIVE_FIELDS[key].member == member
-              and ini_map.get(key, {}).get("member") == member)
     facts = json.loads((ROOT / "asi/optiscaler_ref/pdb_layout.json").read_text())
     assertions = (ROOT / "asi/generated/pdb_assertions.h").read_text()
     members = set(re.findall(r"offsetof\(Config,\s*(\w+)\)", assertions))
@@ -2099,41 +2288,37 @@ def check_live_bridge_contract():
     # The compiled PDB assertions cover the complete object, including those.
     check("the release mirror checks all 300 independently pinned members",
           len(members) == 300 and members == set(facts["classes"]["Config"]["fields"]))
-    with tempfile.TemporaryDirectory(prefix="optiscaler-live-contract-") as temporary:
-        target = Path(temporary)
-        (target / live.STATUS_FILE).write_text("status ready\nschema 5\nseq 123\n")
-        state = live.status(target)
-        check("an old heartbeat cannot attach or grant writes", not state.get("attached")
-              and not state.get("ready") and not state.get("can_switch_upscaler"))
-        result = live.apply_changes(target, [{"section": "Menu", "key": "ShowFps", "value": "true"}])
-        check("no native session means no command and no confirmation", not result.get("sent")
-              and not result.get("confirmed") and not (target / live.CMD_FILE).exists())
 
 
 def main():
     logging.basicConfig(level=logging.ERROR)
-    asyncio.run(run())
-    check_live_bridge_contract()
-    check_live_frame_rates()
-    check_remembered_choices()
-    check_launch_record()
-    check_launch_options_read()
-    check_non_steam_shortcut()
-    check_reported_folder()
-    check_wiki_failure_reporting()
-    check_wiki_cache()
-    check_wiki_transport()
-    check_wiki_tls()
-    check_version_pin()
-    check_optipatcher()
-    check_asi_wide_formats()
-    check_auto_plan()
-    check_reframework()
-    check_prose_is_not_a_specification()
-    check_parenthesised_pages()
-    check_compat_list_shapes()
-    check_option_validation()
-    check_library_labels()
+    try:
+        asyncio.run(run())
+        check_live_bridge_contract()
+        check_live_frame_rates()
+        check_remembered_choices()
+        check_launch_record()
+        check_launch_options_read()
+        check_non_steam_shortcut()
+        check_reported_folder()
+        check_wiki_failure_reporting()
+        check_wiki_cache()
+        check_wiki_transport()
+        check_wiki_mirrors()
+        check_wiki_tls()
+        check_version_pin()
+        check_optipatcher()
+        check_asi_wide_formats()
+        check_auto_plan()
+        check_reframework()
+        check_prose_is_not_a_specification()
+        check_parenthesised_pages()
+        check_compat_list_shapes()
+        check_option_validation()
+        check_library_labels()
+    finally:
+        if _SHARED_PAYLOAD_TMP is not None:
+            _SHARED_PAYLOAD_TMP.cleanup()
     print(f"\n{len(PASSED)} passed, {len(FAILED)} failed")
     if FAILED:
         for name in FAILED:

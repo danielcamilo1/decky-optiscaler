@@ -1,6 +1,7 @@
 import { ButtonItem, PanelSectionRow, TextField } from "@decky/ui";
 import { useCallback, useEffect, useState } from "react";
 import { searchWiki } from "../api";
+import { useI18n } from "../i18n";
 import type { WikiSearchResult } from "../types";
 import { Notice, Pill, RowButton } from "./Common";
 
@@ -14,6 +15,7 @@ export function WikiSearch({
   current: string | null;
   onPick: (entryName: string) => void | Promise<void>;
 }) {
+  const { t } = useI18n();
   const [query, setQuery] = useState(initialQuery);
   const [results, setResults] = useState<WikiSearchResult[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -43,14 +45,14 @@ export function WikiSearch({
     <>
       <PanelSectionRow>
         <TextField
-          label="Search the compatibility list"
+          label={t("Search the compatibility list")}
           value={query}
           onChange={(event) => setQuery(event.target.value)}
         />
       </PanelSectionRow>
       <PanelSectionRow>
         <ButtonItem layout="below" onClick={() => void run(query)}>
-          Search {count > 0 ? `${count} entries` : ""}
+          {count > 0 ? t("Search {count} entries", { count }) : t("Search")}
         </ButtonItem>
       </PanelSectionRow>
 
@@ -63,18 +65,18 @@ export function WikiSearch({
       {current ? (
         <PanelSectionRow>
           <Notice tone="info">
-            Pinned to <b>{current}</b>. Pick another entry to change it.
+            {t("Pinned to {entry}. Pick another entry to change it.", { entry: current })}
           </Notice>
         </PanelSectionRow>
       ) : null}
 
       {results === null ? (
         <PanelSectionRow>
-          <div style={{ opacity: 0.6, fontSize: "13px" }}>Searching…</div>
+          <div style={{ opacity: 0.6, fontSize: "13px" }}>{t("Searching…")}</div>
         </PanelSectionRow>
       ) : results.length === 0 ? (
         <PanelSectionRow>
-          <div style={{ opacity: 0.6, fontSize: "13px" }}>No entries matched that text.</div>
+          <div style={{ opacity: 0.6, fontSize: "13px" }}>{t("No entries matched that text.")}</div>
         </PanelSectionRow>
       ) : (
         results.map((result) => (

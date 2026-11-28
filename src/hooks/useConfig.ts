@@ -1,18 +1,24 @@
 import { preserveExistingInstall } from "../launchOptions";
 import {
+  EMPTY_PERSISTED_SNAPSHOT,
   clearTargetLiveActions,
   getTargetLiveStatusRequestEpoch,
   getTargetLiveRecord,
+  isPersistedKeyCurrent,
   rememberTargetForAppId,
   subscribeTargetLiveRecord,
   updateTargetLiveRecord,
 } from "../config/liveRecord";
-import type { PendingLiveChange } from "../config/liveRecord";
+import type {
+  PendingLiveChange,
+  PersistedKeySnapshot,
+  TargetLiveRecord,
+} from "../config/liveRecord";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { readConfig, setFsr4Build, writeConfig } from "../api";
+import { readConfig, restoreFsr4Build, setFsr4Build, writeConfig } from "../api";
 import { AUTO } from "../config/values";
 import { STEAM_DECK_FSR4_BUILD_ID } from "../config/basic";
-import { optionsInSection } from "../config/tabs";
+import { optionById, optionsInSection } from "../config/tabs";
 import {
   confirmedLiveKeys,
   isConfirmedLiveResult,
@@ -93,6 +99,22 @@ function decimalSequenceGreater(candidate: string, baseline: string): boolean {
     (normalizedCandidate.length === normalizedBaseline.length && normalizedCandidate > normalizedBaseline);
 }
 
+function buildPersistedSnapshot(
+  dir: string,
+  record?: TargetLiveRecord,
+): PersistedKeySnapshot {
+  const liveRecord = record ?? getTargetLiveRecord(dir);
+  const queue = getTargetConfigQueue(dir);
+  const queuedRevisions: Record<string, number> = {};
+  for (const [id, item] of queue.inFlight) queuedRevisions[id] = item.revision;
+  for (const [id, item] of queue.pending) queuedRevisions[id] = item.revision;
+  return {
+    persistedValues: { ...liveRecord.persistedValues },
+    persistedRevisions: { ...liveRecord.persistedRevisions },
+    queuedRevisions,
+  };
+}
+
 interface ConfigView {
   identity: string;
   values: ConfigValues;
@@ -100,11 +122,13 @@ interface ConfigView {
   runtimeCurrent: boolean | undefined;
   loading: boolean;
   error: string | null;
+  errorKind: "read" | "write" | null;
   dirty: boolean;
   restartKeys: string[];
   livePending: PendingLiveChange[];
   saving: boolean;
   live: LiveApplyResult | null;
+  persistedSnapshot: PersistedKeySnapshot;
 }
 
 function emptyView(identity: string, loading = false): ConfigView {
@@ -115,11 +139,13 @@ function emptyView(identity: string, loading = false): ConfigView {
     runtimeCurrent: undefined,
     loading,
     error: null,
+    errorKind: null,
     dirty: false,
     restartKeys: [],
     livePending: [],
     saving: false,
     live: null,
+    persistedSnapshot: EMPTY_PERSISTED_SNAPSHOT,
   };
 }
 
@@ -185,6 +211,7 @@ export function useConfig(
       updateView(requestIdentity, (current) => ({
         ...current,
         ...record,
+        persistedSnapshot: buildPersistedSnapshot(dir, record),
         dirty: record.restartKeys.length > 0 || record.livePending.length > 0,
       }));
     };
@@ -231,7 +258,7 @@ export function useConfig(
         }
         return false;
       };
-      updateView(requestIdentity, (current) => ({ ...current, loading: true, error: null }));
+      updateView(requestIdentity, (current) => ({ ...current, loading: true, error: null, errorKind: null }));
       try {
         const result = await readConfig(dir);
         if (!mayApply()) {
@@ -247,20 +274,27 @@ export function useConfig(
             live: liveRecord.live ?? current.live,
             restartKeys: liveRecord.restartKeys,
             livePending: liveRecord.livePending,
+            persistedSnapshot: buildPersistedSnapshot(dir, liveRecord),
             dirty: liveRecord.restartKeys.length > 0 || liveRecord.livePending.length > 0,
             error: null,
+            errorKind: null,
           }));
           return true;
         } else {
           updateView(requestIdentity, (current) => ({
             ...current,
             error: result.error ?? "Could not read OptiScaler.ini",
+            errorKind: "read",
           }));
           return false;
         }
       } catch (exc) {
         if (mayApply()) {
-          updateView(requestIdentity, (current) => ({ ...current, error: String(exc) }));
+          updateView(requestIdentity, (current) => ({
+            ...current,
+            error: String(exc),
+            errorKind: "read",
+          }));
         } else {
           return await retryIfStillCurrent();
         }
@@ -433,10 +467,12 @@ export function useConfig(
               updateView(requestIdentity, (current) => ({
                 ...current,
                 ...nextRecord,
+                persistedSnapshot: buildPersistedSnapshot(dir, nextRecord),
                 dirty: result.ok
                   ? nextRecord.restartKeys.length > 0 || nextRecord.livePending.length > 0
                   : current.dirty,
                 error: result.ok ? current.error : result.error ?? "Write failed",
+                errorKind: result.ok ? current.errorKind : "write",
               }));
             }
 
@@ -480,13 +516,21 @@ export function useConfig(
               if (queue.inFlight.get(id) === item) queue.inFlight.delete(id);
             }
             if (isCurrent(requestIdentity, requestGeneration)) {
-              updateView(requestIdentity, (current) => ({ ...current, saving: false }));
+              updateView(requestIdentity, (current) => ({
+                ...current,
+                saving: false,
+                persistedSnapshot: buildPersistedSnapshot(dir),
+              }));
             }
           }
           if (refreshAfterFailure && isCurrent(requestIdentity, requestGeneration)) {
             await readTarget(dir, requestIdentity, requestGeneration);
             if (failureMessage) {
-              updateView(requestIdentity, (current) => ({ ...current, error: failureMessage }));
+              updateView(requestIdentity, (current) => ({
+                ...current,
+                error: failureMessage,
+                errorKind: "write",
+              }));
             }
           }
         }
@@ -531,7 +575,6 @@ export function useConfig(
     if (status.schema === 7 && status.supported && status.dir_matches && status.dir_verified && status.dir) {
       canonicalTarget.current = status.dir;
     }
-    const queue = getQueue(dir);
     if (existing.livePending.length === 0 &&
         !(existing.live && receiptAuthorizationChanged(existing.live, status))) return;
     const nextRecord = updateTargetLiveRecord(dir, (stored) => {
@@ -541,9 +584,10 @@ export function useConfig(
       if (nextLive && receiptAuthorizationChanged(nextLive, status)) {
         for (const key of nextLive.sent_keys ?? []) restart.add(key);
         nextLive = { ...nextLive, confirmed: false, ack: "rejected", accepted_keys: [],
-          failed_keys: nextLive.sent_keys ?? [], error: "Live directory authorization changed." };
+          failed_keys: nextLive.sent_keys ?? [], error: "Live session changed. Restart the game to apply." };
       }
 
+      const snapshot = buildPersistedSnapshot(dir, stored);
       for (const entry of stored.livePending) {
         if (entry.target !== dir) {
           pending.push(entry);
@@ -570,10 +614,7 @@ export function useConfig(
             const invalidContext: string[] = [];
             for (const key of entry.keys) {
               const revision = entry.revisions[key] ?? -1;
-              const queued = queue.pending.get(key) ?? queue.inFlight.get(key);
-              const hasNewerWrite = Boolean(queued && queued.revision > revision);
-              const latestPersisted = stored.persistedRevisions[key] === revision &&
-                stored.persistedValues[key] === entry.values[key];
+              const isCurrentPersisted = isPersistedKeyCurrent(snapshot, key, entry.values[key], revision);
               const contextMatches = requestMatchesContext(entry.contexts[key], status, dir);
               if (!contextMatches) invalidContext.push(key);
               if (
@@ -581,7 +622,7 @@ export function useConfig(
                 contextMatches
               ) {
                 acceptedConfirmed.push(key);
-                if (hasNewerWrite || !latestPersisted) {
+                if (!isCurrentPersisted) {
                   restart.add(key);
                   needsRestart.push(key);
                 } else {
@@ -634,9 +675,10 @@ export function useConfig(
     updateView(identity, (current) => ({
       ...current,
       ...nextRecord,
+      persistedSnapshot: buildPersistedSnapshot(dir, nextRecord),
       dirty: nextRecord.restartKeys.length > 0 || nextRecord.livePending.length > 0,
     }));
-  }, [targetDir, enabled, getQueue, identity, updateView]);
+  }, [targetDir, enabled, identity, updateView]);
 
   const recordLiveAction = useCallback((
     result: LiveApplyResult,
@@ -650,7 +692,6 @@ export function useConfig(
       (context.target !== targetDir && context.target !== canonicalTarget.current)
     ) return;
     const dir = targetDir;
-    const queue = getQueue(dir);
     const nextRecord = updateTargetLiveRecord(dir, (stored) => {
       const restart = new Set(stored.restartKeys);
         const sentKeys = new Set(result.sent_keys ?? []);
@@ -669,13 +710,11 @@ export function useConfig(
       const revisions: Record<string, number> = {};
       const values: Record<string, string> = {};
       const contexts: Record<string, LiveContext> = {};
+      const snapshot = buildPersistedSnapshot(dir, stored);
       for (const key of keys) {
         const revision = expectedRevisions[key] ?? stored.persistedRevisions[key] ?? -1;
-        const queued = queue.pending.get(key) ?? queue.inFlight.get(key);
         const sentContext = contextForSentKey(result, key, context);
-        const exactValue = stored.persistedValues[key] === expectedValues[key];
-        const exactRevision = stored.persistedRevisions[key] === revision;
-        if (sentContext && exactValue && exactRevision && (!queued || queued.revision <= revision)) {
+        if (sentContext && isPersistedKeyCurrent(snapshot, key, expectedValues[key], revision)) {
           latestKeys.push(key);
           revisions[key] = revision;
           values[key] = expectedValues[key];
@@ -734,9 +773,10 @@ export function useConfig(
     updateView(identity, (current) => ({
       ...current,
       ...nextRecord,
+      persistedSnapshot: buildPersistedSnapshot(dir, nextRecord),
       dirty: nextRecord.restartKeys.length > 0 || nextRecord.livePending.length > 0,
     }));
-  }, [targetDir, getQueue, updateView, identity]);
+  }, [targetDir, updateView, identity]);
 
   const authoritativeReload = useCallback(async () => {
     if (!targetDir || !enabled) return;
@@ -762,7 +802,12 @@ export function useConfig(
       const queue = getQueue(targetDir);
       const stamp = rememberWrites(targetDir, changes);
       queueTargetChanges(targetDir, changes, stamp);
-      updateView(identity, (current) => ({ ...current, error: null }));
+      updateView(identity, (current) => ({
+        ...current,
+        error: null,
+        errorKind: null,
+        persistedSnapshot: buildPersistedSnapshot(targetDir),
+      }));
       if (queue.timer !== null) window.clearTimeout(queue.timer);
       if (immediate) {
         queue.timer = null;
@@ -826,7 +871,7 @@ export function useConfig(
   const enableFsr4 = useCallback(async () => {
     if (!targetDir) throw new Error("Install OptiScaler first.");
     if (view.runtimeCurrent !== true) throw new Error("Upgrade runtime in Setup first.");
-    updateView(identity, (current) => ({ ...current, saving: true, error: null }));
+    updateView(identity, (current) => ({ ...current, saving: true, error: null, errorKind: null }));
     try {
       await flushTarget(targetDir, identity, generationAtRender, true);
       if (!gameContext?.gamePath) throw new Error("Open Setup to preserve this game before changing its FSR build.");
@@ -835,12 +880,14 @@ export function useConfig(
       const result = await serializeTargetWrite(targetDir, () => setFsr4Build(targetDir, STEAM_DECK_FSR4_BUILD_ID));
       if (!result.ok) throw new Error(result.error ?? "Could not enable community FSR 4.1.2 Lite");
       forgetWrites(targetDir);
+      invalidateTargetReads(targetDir);
       await readTarget(targetDir, identity, generationAtRender, true);
       clearTargetLiveActions(targetDir);
       const updatedRecord = getTargetLiveRecord(targetDir);
       updateView(identity, (current) => ({
         ...current,
         ...updatedRecord,
+        persistedSnapshot: buildPersistedSnapshot(targetDir, updatedRecord),
         dirty: false,
       }));
     } finally {
@@ -858,10 +905,45 @@ export function useConfig(
     gameContext?.appid,
   ]);
 
-  const resetSection = useCallback(
-    (section: string, bindings?: Record<string, LiveContext>) => {
-      if (view.runtimeCurrent !== true) return;
-      const options = optionsInSection(section);
+  const restoreOfficialFsr4 = useCallback(async () => {
+    if (!targetDir) throw new Error("Install OptiScaler first.");
+    if (view.runtimeCurrent !== true) throw new Error("Upgrade runtime in Setup first.");
+    updateView(identity, (current) => ({ ...current, saving: true, error: null, errorKind: null }));
+    try {
+      await flushTarget(targetDir, identity, generationAtRender, true);
+      const result = await serializeTargetWrite(targetDir, () => restoreFsr4Build(targetDir, true));
+      if (!result.ok) throw new Error(result.error ?? "Could not restore official FSR 3.X/4");
+      forgetWrites(targetDir);
+      invalidateTargetReads(targetDir);
+      await readTarget(targetDir, identity, generationAtRender, true);
+      clearTargetLiveActions(targetDir);
+      const updatedRecord = getTargetLiveRecord(targetDir);
+      updateView(identity, (current) => ({
+        ...current,
+        ...updatedRecord,
+        persistedSnapshot: buildPersistedSnapshot(targetDir, updatedRecord),
+        dirty: false,
+      }));
+    } finally {
+      updateView(identity, (current) => ({ ...current, saving: false }));
+    }
+  }, [
+    targetDir,
+    view.runtimeCurrent,
+    updateView,
+    identity,
+    generationAtRender,
+    flushTarget,
+    readTarget,
+  ]);
+
+  const resetOptions = useCallback(
+    (ids: string[], bindings?: Record<string, LiveContext>) => {
+      if (view.runtimeCurrent !== true || ids.length === 0) return;
+      const options = ids
+        .map((id) => optionById(id))
+        .filter((option): option is OptionMeta => Boolean(option));
+      if (options.length === 0) return;
       const changes = options.map((option) => {
         const id = `${option.section}.${option.key}`;
         return {
@@ -872,14 +954,31 @@ export function useConfig(
         };
       });
       updateView(identity, (current) => {
-        const next = { ...(current.values[section] ?? {}) };
-        for (const option of options) next[option.key] = AUTO;
-        return { ...current, values: { ...current.values, [section]: next } };
+        const values = { ...current.values };
+        for (const option of options) {
+          values[option.section] = {
+            ...(values[option.section] ?? {}),
+            [option.key]: AUTO,
+          };
+        }
+        return { ...current, values };
       });
       queueChanges(changes);
     },
     [view.runtimeCurrent, identity, updateView, queueChanges],
   );
+
+  const resetSection = useCallback(
+    (section: string, bindings?: Record<string, LiveContext>) => {
+      const ids = optionsInSection(section).map((option) => `${option.section}.${option.key}`);
+      resetOptions(ids, bindings);
+    },
+    [resetOptions],
+  );
+
+  const getPersistedSnapshot = useCallback((): PersistedKeySnapshot => {
+    return targetDir ? buildPersistedSnapshot(targetDir) : EMPTY_PERSISTED_SNAPSHOT;
+  }, [targetDir]);
 
   useEffect(() => {
     void load();
@@ -929,15 +1028,20 @@ export function useConfig(
     fsr4Build: view.fsr4Build,
     runtimeCurrent: view.runtimeCurrent,
     enableFsr4,
+    restoreOfficialFsr4,
     loading: view.loading || Boolean(targetDir && enabled && storedView.identity !== identity),
     error: view.error,
+    errorKind: view.errorKind,
     dirty: view.dirty,
     restartRequired: view.restartKeys.length > 0,
     livePending: view.livePending.length > 0,
     saving: view.saving,
     live: view.live,
+    persistedSnapshot: view.persistedSnapshot,
+    getPersistedSnapshot,
     setOption,
     setOptions,
+    resetOptions,
     resetSection,
     reload: load,
     flush,

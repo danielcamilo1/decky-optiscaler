@@ -1,15 +1,17 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
-// React 18.3 exports act itself; the react-dom/test-utils re-export logs a
-// deprecation warning on every run, which the pass condition below counts.
 import { act } from "react";
 import { fixtures, calls, invocations, toaster } from "@decky/api";
+import { Router, shownModals } from "@decky/ui";
 import { GENERATED_OPTIONS } from "../src/config/generatedSchema";
 import { BasicPanel } from "../src/components/BasicPanel";
 import { beginTargetFlush, finishTargetFlush, forgetWrites, getTargetConfigQueue } from "../src/config/writeRecord";
 import { ManagerPage } from "../src/components/ManagerPage";
-import { NowPlaying } from "../src/components/NowPlaying";
 import { QuickPanel } from "../src/components/QuickPanel";
+import type { GpuInfo } from "../src/types";
+import { installVirtualClock } from "./virtual-clock";
+
+const clock = installVirtualClock();
 
 // ---- fixtures mirroring what the Python backend returns --------------------
 const iniValues: Record<string, Record<string, string>> = {};
@@ -35,7 +37,7 @@ const detail = {
     runtime_current: true,
     rollback: { available: false },
     installed_at: 1700000000, ini_present: true, directory_generation: "1", ini_path: "/x/OptiScaler.ini",
-    log_present: true, directory_generation: "1", log_path: "/x/OptiScaler.log",
+    log_present: true, log_path: "/x/OptiScaler.log",
     candidates: ["dxgi.dll"], extra_proxies: [],
     backup_dir: "/games/Cyberpunk 2077/bin/x64/decky_optiscaler_backup_files",
     backed_up: ["dxgi.dll", "amd_fidelityfx_upscaler_dx12.dll"],
@@ -56,8 +58,10 @@ const detail = {
   fsr4_sources: [{ path: "/home/deck/fgmod/fsr4-rdna2-3", files: ["amdxcffx64.dll", "amdxc64.dll"] }],
   ini_info: { present: true, directory_generation: "1", legacy: true, keys: 288 },
   wiki_entry: null,
-  gpu: { names: ["Van Gogh (Steam Deck)"], name: "Van Gogh (Steam Deck)", gfx: "gfx1033",
-         vendor: "amd", generation: "RDNA2", fsr4: "experimental" },
+  gpu: {
+    names: ["Van Gogh (Steam Deck)"], name: "Van Gogh (Steam Deck)", gfx: "gfx1033",
+    vendor: "amd", generation: "RDNA2", fsr4: "experimental", is_rdna2_apu: true,
+  } as GpuInfo,
   launch_option: 'WINEDLLOVERRIDES="dxgi=n,b" %command%',
   writable: true,
 };
@@ -321,6 +325,12 @@ Object.assign(fixtures, {
   set_game_target: { ok: true },
   install: { ok: true },
   rollback_install: { ok: true, launch_options: "gamemoderun %command%" },
+  confirm_rollback_launch_options: { ok: true },
+  create_restore_point: { ok: true, available: true },
+  restore_fsr4_build: { ok: true },
+  get_launch_options: { found: false, value: "", source: null },
+  get_optipatcher_status: { available: true, installed: false, version: "0.7.7", path: "/x/plugins/OptiPatcher.asi" },
+  install_optipatcher: { ok: true },
 });
 
 fixtures.set_auto_mode = (_gamePath: string, enabled: boolean) => {
@@ -331,37 +341,73 @@ fixtures.set_auto_mode = (_gamePath: string, enabled: boolean) => {
 // ---- harness ---------------------------------------------------------------
 const errors: string[] = [];
 const behaviorFailures: string[] = [];
-const originalLog = console.log.bind(console);
-// Existing behavior checks print their boolean result. Make those checks part
-// of the process exit contract so a false result cannot leave CI green.
-console.log = (...args: any[]) => {
-  const line = args.map(String).join(" ");
-  const check = line.match(/^\s*(.*?)\s*:\s*(true|false)$/);
-  if (check?.[2] === "false") behaviorFailures.push(check[1].trim());
-  originalLog(...args);
-};
 const originalError = console.error;
+const originalWarn = console.warn;
 console.error = (...args: any[]) => {
   errors.push(args.map(String).join(" "));
   originalError(...args);
 };
+console.warn = (...args: any[]) => {
+  errors.push(args.map(String).join(" "));
+  originalWarn(...args);
+};
 
-async function settle() {
-  for (let i = 0; i < 8; i++) {
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 5));
-    });
-  }
+function check(label: string, cond: boolean, detail?: string) {
+  if (!cond) behaviorFailures.push(detail ? `${label} (${detail})` : label);
+  console.log(`  [${cond ? "ok" : "FAIL"}] ${label}${!cond && detail ? ` — ${detail}` : ""}`);
+}
+
+async function settle(ms = 5) {
+  await clock.advance(ms * 8);
 }
 
 function findAll(node: Element, selector: string) {
   return Array.from(node.querySelectorAll(selector));
 }
 
+async function openTab(host: Element, id: string) {
+  const btn =
+    (host.querySelector(`[data-tab-button="${id}"]`) as HTMLElement | null) ??
+    (host.querySelector(`[data-tab="${id}"]`) as HTMLElement | null);
+  if (btn) {
+    await act(async () => {
+      btn.click();
+    });
+    await settle();
+  }
+}
+
+async function respondLatestModal(action: "ok" | "cancel") {
+  const modalElement = shownModals[shownModals.length - 1];
+  if (!modalElement) return false;
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  let closed = false;
+  await act(async () => {
+    root.render(React.cloneElement(modalElement, { closeModal: () => { closed = true; } }));
+  });
+  const btn = host.querySelector<HTMLElement>(action === "ok" ? "[data-modal-ok]" : "[data-modal-cancel]");
+  if (btn) {
+    await act(async () => {
+      btn.click();
+      await Promise.resolve();
+    });
+  }
+  await act(async () => {
+    root.unmount();
+  });
+  host.remove();
+  return closed;
+}
+
+const mountedViews: { root: ReturnType<typeof createRoot>; host: HTMLElement }[] = [];
+
 async function render(name: string, element: React.ReactElement) {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
+  mountedViews.push({ root, host });
   await act(async () => {
     root.render(element);
   });
@@ -388,44 +434,59 @@ async function render(name: string, element: React.ReactElement) {
   const qpTabs = findAll(qp.host, "[data-tab]").map((n) => n.getAttribute("data-tab"));
   console.log(`  sidebar tabs: ${qpTabs.join(", ")}`);
   const activeTab = findAll(qp.host, '[data-tab][data-active="true"]')[0];
-  console.log(`  opens on the running game: ${activeTab?.getAttribute("data-tab") === "now"}`);
-  console.log(`  live fps shown: ${/\d+(\.\d+)?\s*(fps|FPS)/.test(qp.host.textContent!)}`);
+  check("opens on the running game", Boolean(activeTab?.getAttribute("data-tab") === "now"));
+  check("live fps shown", Boolean(/\d+(\.\d+)?\s*(fps|FPS)/.test(qp.host.textContent!)));
 
   // The frame-generation state has to sit with the toggle that changes it,
   // not in a section the user has to scroll back to.
-  console.log(`  frame generation state shown inline: ${/In game:\s*(ON|OFF)/.test(qp.host.textContent!)}`);
+  check("frame generation state shown inline", Boolean(/In game:\s*(ON|OFF)/.test(qp.host.textContent!)));
   // The FFX FG list is the running game's answer, not the shipped ini's, and
   // it is named the way the overlay's own combo names it.
-  console.log(`  ffx fg versions come from the running game: ${
-    qp.host.textContent!.includes("FSR 3.1.6")}`);
+  check("ffx fg versions come from the running game", Boolean(qp.host.textContent!.includes("FSR 3.1.6")));
 
   const upscalerDrop = findAll(
     qp.host,
     '[data-mock="DropdownItem"][data-label="Override upscaler with"]'
   )[0];
   const upscalerLabels = findAll(upscalerDrop, "[data-opt]").map((n) => n.textContent);
-  console.log(`  DLSS not offered on an AMD GPU: ${!upscalerLabels.includes("DLSS")}`);
+  check("DLSS not offered on an AMD GPU", Boolean(!upscalerLabels.includes("DLSS")));
 
   // The switch is an action, not a permanent control: it appears only once a
   // different upscaler has been picked.
-  console.log(`  no upscaler switch before a change: ${!qp.host.textContent!.includes("Switch now")}`);
+  check("no upscaler switch before a change", Boolean(!qp.host.textContent!.includes("Switch now")));
   await act(async () => {
     (findAll(upscalerDrop, '[data-opt-value="xess"]')[0] as HTMLElement).click();
   });
   await settle();
-  console.log(`  picking one offers the live switch: ${qp.host.textContent!.includes("Switch now")}`);
+  check("picking one offers the live switch", Boolean(qp.host.textContent!.includes("Switch now")));
 
   // FG method is read when the swapchain is created, so it cannot apply live.
+  const methodInvocationsBefore = invocations.length;
   const methodDrop = findAll(qp.host, '[data-mock="DropdownItem"][data-label^="Method"]')[0];
   await act(async () => {
     (findAll(methodDrop, '[data-opt-value="xefg"]')[0] as HTMLElement).click();
   });
-  await settle();
-  console.log(`  changing the FG method warns about the restart: ${
-    qp.host.textContent!.includes("Restart the game to apply")}`);
-  console.log(`  startup FG method fields stay out of live confirmation: ${
-    ["FrameGen.FGInput", "FrameGen.FGOutput"].every((key) =>
-      !runLiveKeys.includes(key) && !runLiveStatus.accepted_keys.includes(key))}`);
+  await settle(100);
+  const methodWrites = invocations
+    .slice(methodInvocationsBefore)
+    .filter((call) => call.name === "write_config");
+  const writtenKeys = methodWrites.flatMap((call) =>
+    ((call.args[1] as any[]) ?? []).map((c: any) => `${c.section}.${c.key}`),
+  );
+  check(
+    "changing the FG method warns about the restart",
+    qp.host.textContent!.includes("Saved · restart required") &&
+      qp.host.textContent!.includes("Restart game to apply"),
+  );
+  check(
+    "startup FG method fields are written to INI and stay out of live confirmation",
+    writtenKeys.includes("FrameGen.FGInput") &&
+      writtenKeys.includes("FrameGen.FGOutput") &&
+      !qp.host.textContent!.includes("Applied to running game") &&
+      !runLiveStatus.accepted_keys.includes("FrameGen.FGInput") &&
+      !runLiveStatus.accepted_keys.includes("FrameGen.FGOutput"),
+    `writtenKeys=${JSON.stringify(writtenKeys)}`,
+  );
 
   // Over a running game the controls that act now come first; the one that
   // cannot until the next launch is last, under its own heading.
@@ -434,11 +495,9 @@ async function render(name: string, element: React.ReactElement) {
       findAll(qp.host, '[data-mock="DropdownItem"]').findIndex(
         (n) => n.getAttribute("data-label") === label
       );
-    console.log(`  restart-only control comes after the live ones: ${
-      order("Method") > order("Override upscaler with") &&
-      order("Method") > order("FFX FG version")}`);
-    console.log(`  and says so as a heading: ${
-      qp.host.textContent!.includes("Startup settings")}`);
+    check("restart-only control comes after the live ones", Boolean(order("Method") > order("Override upscaler with") &&
+      order("Method") > order("FFX FG version")));
+    check("and says so as a heading", Boolean(qp.host.textContent!.includes("Startup settings")));
   }
 
   const gamesTab = findAll(qp.host, '[data-tab="games"]')[0] as HTMLElement;
@@ -448,11 +507,11 @@ async function render(name: string, element: React.ReactElement) {
   await settle();
   const qpGames = qp.host.textContent!;
   // "Now Playing" is the tab's own label, so the body is what has to change.
-  console.log(`  switching to Games swaps the body: ${!qpGames.includes("All settings & logs")}`);
-  console.log(`  sidebar lists games: ${qpGames.includes("Test Game 01")}`);
-  console.log(`  sidebar pages at 20: ${qpGames.includes("Test Game 19") && !qpGames.includes("Test Game 20")}`);
-  console.log(`  sidebar offers the next page: ${/Show next \d+ of \d+ more/.test(qpGames)}`);
-  console.log(`  sidebar links to the full page: ${qpGames.includes("Libraries & all settings")}`);
+  check("switching to Games swaps the body", Boolean(!qpGames.includes("All settings & logs")));
+  check("sidebar lists games", Boolean(qpGames.includes("Test Game 01")));
+  check("sidebar pages at 20", Boolean(qpGames.includes("Test Game 19") && !qpGames.includes("Test Game 20")));
+  check("sidebar offers the next page", Boolean(/Show next \d+ of \d+ more/.test(qpGames)));
+  check("sidebar links to the full page", Boolean(qpGames.includes("Libraries & all settings")));
   // Filters, not tabs: they narrow the same list rather than swapping the view.
   // Recent is absent here because the harness has no Steam client to ask for a
   // last-played time, which is exactly when it must not be offered.
@@ -463,8 +522,7 @@ async function render(name: string, element: React.ReactElement) {
   });
   await settle();
   const setUpOnly = qp.host.textContent!;
-  console.log(`  filtering to the ones set up drops the rest: ${
-    setUpOnly.includes("Cyberpunk 2077") && !setUpOnly.includes("Test Game 01")}`);
+  check("filtering to the ones set up drops the rest", Boolean(setUpOnly.includes("Cyberpunk 2077") && !setUpOnly.includes("Test Game 01")));
   await act(async () => {
     (findAll(qp.host, '[data-filter="all"]')[0] as HTMLElement).click();
   });
@@ -476,52 +534,84 @@ async function render(name: string, element: React.ReactElement) {
     nowTab.click();
   });
   await settle();
-  console.log(`  switching back restores Now Playing: ${
-    qp.host.textContent!.includes("All settings & logs")}`);
+  check("switching back restores Now Playing", Boolean(qp.host.textContent!.includes("All settings & logs")));
 
   console.log("\n=== rendering ManagerPage (main page) ===");
+  Router.MainRunningApp = { appid: 1091500, display_name: "Cyberpunk 2077", gameid: "1091500" };
   const mp = await render("ManagerPage", <ManagerPage />);
-  const mpTabs = findAll(mp.host, "[data-tab]").map((n) => n.getAttribute("data-tab"));
-  console.log(`  main tabs: ${mpTabs.join(", ")}`);
+  const mpTabIds = findAll(mp.host, "[data-tab-button]").map((n) => n.getAttribute("data-tab-button"));
+  console.log(`  main tabs: ${mpTabIds.join(", ")}`);
+  check("ManagerPage top-level tabs are Games, Libraries, and Plugin Settings (no duplicate Now Playing)",
+    mpTabIds.join(",") === "games,libraries,settings");
   const mpText = mp.host.textContent!;
-  // Every tab's content is rendered by the mock, so all three are visible here.
-  console.log(`  games listed by name: ${mpText.includes("Cyberpunk 2077")}`);
-  console.log(`  library shown for each game: ${mpText.includes("Internal Storage")}`);
-  console.log(`  custom library listed: ${mpText.includes("SD Card")}`);
-  console.log(`  games are paged, not all 28 at once: ${!mpText.includes("Test Game 27")}`);
-  console.log(`  first page shows 20: ${mpText.includes("Test Game 19") && !mpText.includes("Test Game 20")}`);
-  console.log(`  offers the next page: ${/Show next \d+ of \d+ more/.test(mpText)}`);
-  console.log(`  running game leads the page: ${mpText.includes("Cyberpunk 2077")}`);
-  console.log(`  no dead steam-menu status row: ${!mpText.includes("Steam menu shortcut")}`);
+  check("games tab renders active by default", findAll(mp.host, '[data-tab="games"]').length === 1);
+  check("games listed by name", mpText.includes("Cyberpunk 2077"));
+  check("library shown for each game", mpText.includes("Internal Storage"));
+  check("games are paged, not all 28 at once", !mpText.includes("Test Game 27"));
+  check("first page shows 20", mpText.includes("Test Game 19") && !mpText.includes("Test Game 20"));
+  check("offers the next page", /Show next \d+ of \d+ more/.test(mpText));
+  check("running game leads the page via Running now card", mpText.includes("Running now") && mpText.includes("Cyberpunk 2077"));
+  check("no dead steam-menu status row", !mpText.includes("Steam menu shortcut"));
+
+  // [TS-05]: Verify real Tabs switching swaps active content between Games, Libraries, and Settings.
+  await openTab(mp.host, "libraries");
+  check("switching to Libraries tab renders custom libraries and hides Games tab",
+    findAll(mp.host, '[data-tab="libraries"]').length === 1 &&
+    findAll(mp.host, '[data-tab="games"]').length === 0 &&
+    mp.host.textContent!.includes("SD Card"));
+  await openTab(mp.host, "settings");
+  check("switching to Settings tab renders Plugin Settings",
+    findAll(mp.host, '[data-tab="settings"]').length === 1 &&
+    mp.host.textContent!.includes("Remember my choices"));
+  await openTab(mp.host, "games");
+  check("switching back to Games tab restores GamesList",
+    findAll(mp.host, '[data-tab="games"]').length === 1);
+
+  // [UI-01]/[UI-07]: Clicking the GamesList "Running now" card opens GameDetail carrying appid
+  // (even when the running game is not installed yet).
+  {
+    const prevGame = fixtures.get_game;
+    fixtures.get_game = { ...detail, install: { ...detail.install, installed: false } };
+    const runningCard = findAll(mp.host, '[data-mock="Field"]')
+      .find((node) => node.textContent?.includes("Running now")) as HTMLElement | undefined;
+    check("Running now card is clickable on GamesList", Boolean(runningCard));
+    await act(async () => { runningCard?.click(); });
+    await settle();
+    check("opening from Running now card preserves appid and running state on uninstalled GameDetail",
+      mp.host.textContent!.includes("running") &&
+      mp.host.textContent!.includes("Set the Steam launch options") &&
+      !mp.host.textContent!.includes("came from a custom folder rather than Steam"));
+    fixtures.get_game = prevGame;
+    await act(async () => mp.root.unmount());
+    mp.host.remove();
+  }
+  Router.MainRunningApp = undefined;
 
   // -- opening the page at one game -----------------------------------------
-  // Picking a game used to land on the page's Now Playing tab: the deep link
-  // travelled as a query string and the Steam client's router does not hand
-  // that back to the route it renders. It travels in-process now, so both the
-  // Quick Access panel (folder and name) and the Steam context menu (an app id
-  // to look up) reach the game they named.
   console.log("\n=== opening the page at one game ===");
   {
     const { openManager } = await import("../src/navigation");
     openManager({ path: detail.path, name: detail.name, appid: "1091500" });
     const deep = await render("ManagerPage (deep link)", <ManagerPage />);
-    console.log(`  a named game opens its own page, not Now Playing: ${
+    await openTab(deep.host, "install");
+    check("a named game opens its own page, not Now Playing",
       findAll(deep.host, '[data-tab="now"]').length === 0 &&
-      deep.host.textContent!.includes("Installed as")}`);
+      deep.host.textContent!.includes("Installed as"));
 
     // Nothing named: the library list, as before.
     const plain = await render("ManagerPage (no target)", <ManagerPage />);
-    console.log(`  opening it with no game still lists them: ${
-      findAll(plain.host, '[data-tab="games"]').length === 1}`);
+    check("opening it with no game still lists them",
+      findAll(plain.host, '[data-tab="games"]').length === 1);
 
     // The context menu knows only the app id, and the page is already open.
     await act(async () => {
       openManager({ appid: "1091500" });
     });
     await settle();
-    console.log(`  an app id is looked up, even while the page is open: ${
+    await openTab(plain.host, "install");
+    check("an app id is looked up, even while the page is open",
       findAll(plain.host, '[data-tab="now"]').length === 0 &&
-      plain.host.textContent!.includes("Installed as")}`);
+      plain.host.textContent!.includes("Installed as"));
 
     // A non-Steam shortcut has no app manifest, so Steam has no install folder
     // to report and this used to be where every one of them stopped: "Steam
@@ -547,10 +637,9 @@ async function render(name: string, element: React.ReactElement) {
       openManager({ appid: "3060399406" });
     });
     await settle();
-    console.log(`  a non-Steam shortcut's target is handed to the lookup: ${
-      handed?.exe === '"/home/deck/Games/Some Game/Binaries/Win64/Game.exe"' &&
+    check("a non-Steam shortcut's target is handed to the lookup", Boolean(handed?.exe === '"/home/deck/Games/Some Game/Binaries/Win64/Game.exe"' &&
       handed?.start_dir === '"/home/deck/Games/Some Game"' &&
-      handed?.name === "Some Game"}`);
+      handed?.name === "Some Game"));
 
     // A Steam game has no shortcut fields at all, and asking for them must not
     // turn into a target made up out of nothing.
@@ -560,8 +649,7 @@ async function render(name: string, element: React.ReactElement) {
       openManager({ appid: "1091500" });
     });
     await settle();
-    console.log(`  and a Steam game hands over nothing rather than an empty one: ${
-      handed === undefined}`);
+    check("and a Steam game hands over nothing rather than an empty one", Boolean(handed === undefined));
     (globalThis as any).appDetailsStore = undefined;
     fixtures.find_running_game = previousLookup;
   }
@@ -581,36 +669,33 @@ async function render(name: string, element: React.ReactElement) {
       { key: "s2", props: { onSelected: () => "DeleteScreenshot" } },
     ];
 
-    console.log(`  game menu recognised: ${menu.isAppContextMenu(gameMenu())}`);
-    console.log(`  other menus left alone: ${!menu.isAppContextMenu(screenshotMenu)}`);
+    check("game menu recognised", Boolean(menu.isAppContextMenu(gameMenu())));
+    check("other menus left alone", Boolean(!menu.isAppContextMenu(screenshotMenu)));
 
     const items = gameMenu();
     menu.spliceMenuItem(items, 1091500);
     const idx = items.findIndex((x: any) => x?.key === menu.MARKER);
     const propIdx = items.findIndex((x: any) => x?.key === "properties");
-    console.log(`  entry inserted: ${idx !== -1}`);
-    console.log(`  entry sits above Properties: ${idx !== -1 && idx < propIdx}`);
+    check("entry inserted", Boolean(idx !== -1));
+    check("entry sits above Properties", Boolean(idx !== -1 && idx < propIdx));
     console.log(`  entry is labelled "${menu.MENU_LABEL}": ${
       (items[idx] as any)?.props?.children === menu.MENU_LABEL}`);
 
     // Steam re-renders the same menu; it must not stack duplicates.
     menu.removeExisting(items);
     menu.spliceMenuItem(items, 1091500);
-    console.log(`  no duplicates after a re-render: ${
-      items.filter((x: any) => x?.key === menu.MARKER).length === 1}`);
+    check("no duplicates after a re-render", Boolean(items.filter((x: any) => x?.key === menu.MARKER).length === 1));
 
     // The appid captured on first render goes stale when Steam reuses the menu.
     const stale = 1018880;
     const withOverview: any[] = [
       { _owner: { pendingProps: { overview: { appid: 1091500 } } }, props: {} },
     ];
-    console.log(`  stale appid replaced from the menu's own overview: ${
-      menu.resolveAppid(withOverview, stale) === 1091500}`);
+    check("stale appid replaced from the menu's own overview", Boolean(menu.resolveAppid(withOverview, stale) === 1091500));
     const newClient: any[] = [{ props: { children: { app: { appid: 2358720 } } } }];
-    console.log(`  newer clients resolved through props.children: ${
-      menu.resolveAppid(newClient, undefined) === 2358720}`);
+    check("newer clients resolved through props.children", Boolean(menu.resolveAppid(newClient, undefined) === 2358720));
     const noAppid = menu.patchMenuItems([], undefined);
-    console.log(`  nothing inserted without an appid: ${noAppid === undefined}`);
+    check("nothing inserted without an appid", Boolean(noAppid === undefined));
   }
 
   console.log("\n=== rendering GameDetail with every tab ===");
@@ -628,21 +713,21 @@ async function render(name: string, element: React.ReactElement) {
   );
   const tabs = findAll(gd.host, "[data-tab]").map((n) => n.getAttribute("data-tab"));
   console.log(`  tabs (basic mode): ${tabs.join(", ")}`);
-  console.log(`  basic FG controls present: ${gd.host.textContent!.includes("Frame multiplier")}`);
-  console.log(`  basic upscaler presets named as OptiScaler names them: ${["FSR 3.X/4", "FSR 2.2.1", "XeSS"].every((n) => gd.host.textContent!.includes(n))}`);
+  check("basic FG controls present", Boolean(gd.host.textContent!.includes("Frame multiplier")));
+  check("basic upscaler presets named as OptiScaler names them", Boolean(["FSR 3.X/4", "FSR 2.2.1", "XeSS"].every((n) => gd.host.textContent!.includes(n))));
   // The Deck's own row: FSR 4 here is the INT8 override, so the panel has to
   // offer it rather than hide the upscaler entirely. What choosing it does is
   // asserted in live-fields.tsx, which can drive the control.
-  console.log(`  RDNA 2 is offered the INT8 preset: ${gd.host.textContent!.includes("FSR 4.1.2 Lite — community")}`);
+  check("RDNA 2 is offered the INT8 preset", Boolean(gd.host.textContent!.includes("FSR 4.1.2 Lite — community")));
   // Driving the running game is the Quick Access panel's job; this page is for
   // setting a game up, so it must not offer the live switch at all.
-  console.log(`  settings tab has no live upscaler switch: ${!gd.host.textContent!.includes("Switch now")}`);
+  check("settings tab has no live upscaler switch", Boolean(!gd.host.textContent!.includes("Switch now")));
   // "not Insert" rather than "in game": the hotkey notice is the only thing on
   // the page that names the key it moved away from, and the looser phrase
   // matched any copy that happened to mention doing something "in games".
-  console.log(`  settings tab drops the hotkey advice: ${!gd.host.textContent!.includes("not Insert")}`);
-  console.log(`  basic FG methods named as OptiScaler names them: ${["FSR FG", "XeFG", "DLSSG via Streamline"].every((n) => gd.host.textContent!.includes(n))}`);
-  console.log(`  no invented FG name for DLSSG: ${!gd.host.textContent!.includes("DLSS Frame Generation")}`);
+  check("settings tab drops the hotkey advice", Boolean(!gd.host.textContent!.includes("not Insert")));
+  check("basic FG methods named as OptiScaler names them", Boolean(["FSR FG", "XeFG", "DLSSG via Streamline"].every((n) => gd.host.textContent!.includes(n))));
+  check("no invented FG name for DLSSG", Boolean(!gd.host.textContent!.includes("DLSS Frame Generation")));
   {
     const order = (label: string) =>
       findAll(gd.host, '[data-mock="DropdownItem"]').findIndex(
@@ -650,13 +735,12 @@ async function render(name: string, element: React.ReactElement) {
       );
     // Nothing on this page applies live, so there is nothing to sort by: the
     // method stays where it belongs, with the rest of frame generation.
-    console.log(`  the full page keeps the FG method in its own section: ${
-      order("Method") < order("Override upscaler with") &&
-      !gd.host.textContent!.includes("Startup settings")}`);
+    check("the full page keeps the FG method in its own section", Boolean(order("Method") < order("Override upscaler with") &&
+      !gd.host.textContent!.includes("Startup settings")));
   }
-  console.log(`  basic 2X/3X/4X multiplier is a dropdown: ${gd.host.textContent!.includes("2X") && gd.host.textContent!.includes("4X")}`);
-  console.log(`  FSR4 reported from bundled SDK: ${gd.host.textContent!.includes("4.1.1.2740")}`);
-  console.log(`  no false 'FSR4 missing file' claim: ${!gd.host.textContent!.includes("does not ship")}`);
+  check("basic 2X/3X/4X multiplier is a dropdown", Boolean(gd.host.textContent!.includes("2X") && gd.host.textContent!.includes("4X")));
+  check("FSR4 reported from bundled SDK", Boolean(gd.host.textContent!.includes("4.1.1.2740")));
+  check("no false 'FSR4 missing file' claim", Boolean(!gd.host.textContent!.includes("does not ship")));
 
   // Flip to advanced mode and re-render.
   (globalThis as any).window.localStorage.setItem("decky-optiscaler:advanced", "1");
@@ -665,45 +749,45 @@ async function render(name: string, element: React.ReactElement) {
       status={fixtures.get_status}
       runningGame={{ appid: 1091500, name: "Cyberpunk 2077", gameid: "1091500" }}
       onBack={() => {}} />);
-  const advTabs = findAll(gdAdv.host, "[data-tab]").map((n) => n.getAttribute("data-tab"));
+  const advTabs = findAll(gdAdv.host, "[data-tab-button]").map((n) => n.getAttribute("data-tab-button"));
   console.log(`  tabs (advanced mode): ${advTabs.join(", ")}`);
-  const advText = gdAdv.host.textContent!;
-  console.log(`  advanced shows real upscaler names: ${advText.includes("FSR 3.X/4")}`);
-  console.log(`  advanced shows OptiScaler's own FG input names: ${advText.includes("FSR 3.1 FG") && advText.includes("DLSSG via Streamline")}`);
-  console.log(`  raw internal ids no longer bare: ${!/\bfsr31\b(?! —)/.test(advText.split("Filename override")[0])}`);
+  const advFgText = gdAdv.host.textContent!;
+  await openTab(gdAdv.host, "upscaling");
+  const advUpsText = gdAdv.host.textContent!;
+  check("advanced shows real upscaler names", advUpsText.includes("FSR 3.X/4"));
+  check("advanced shows OptiScaler's own FG input names",
+    advFgText.includes("FSR 3.1 FG") && advFgText.includes("DLSSG via Streamline"));
+  check("raw internal ids no longer bare",
+    !/\bfsr31\b(?! —)/.test(advUpsText));
   (globalThis as any).window.localStorage.setItem("decky-optiscaler:advanced", "0");
   console.log(`  toggles: ${findAll(gd.host, '[data-mock="ToggleField"]').length}`);
   console.log(`  dropdowns: ${findAll(gd.host, '[data-mock="DropdownItem"]').length}`);
   console.log(`  sliders: ${findAll(gd.host, '[data-mock="SliderField"]').length}`);
-  console.log(`  wiki recommendation shown: ${gd.host.textContent!.includes("wiki entry")}`);
 
-  // Now Playing uses the same controls while a game is running, so its host
-  // must show write failures, restart guidance and the FFX version from the
-  // installed file just like the Settings page does.
-  console.log("\n=== full-screen Now Playing feedback ===");
+  // QuickPanel is the unified Now Playing host ([UI-07]) — verify write failures,
+  // optimistic rollback, and restart guidance there.
+  console.log("\n=== QuickPanel Now Playing feedback ===");
   {
     iniValues.Upscalers.Dx12Upscaler = "fsr31";
-    forgetWrites(detail.install.path);
+    act(() => { forgetWrites(detail.install.path); });
     const previousWrite = fixtures.write_config;
     fixtures.write_config = () => ({ ok: false, error: "Now Playing write failed" });
     const failedNow = await render(
-      "NowPlaying (write failure)",
-      <NowPlaying runningGame={{ appid: 1091500, name: "Cyberpunk 2077", gameid: "1091500" }}
-        onOpenGame={() => {}} onBrowse={() => {}} />,
+      "QuickPanel (write failure)",
+      <QuickPanel runningGame={{ appid: 1091500, name: "Cyberpunk 2077", gameid: "1091500" }}
+        onOpenManager={() => {}} />,
     );
-    console.log(`  detected FidelityFX file version is shown on Now Playing: ${
-      failedNow.host.textContent!.includes("FidelityFX4.1.1.2740 · FSR 4 capable")}`);
     await act(async () => {
       (findAll(failedNow.host,
         '[data-mock="DropdownItem"][data-label="Override upscaler with"] [data-opt-value="xess"]')[0] as HTMLElement).click();
     });
     await settle(100);
-    console.log(`  a write failure is visible on Now Playing: ${
-      failedNow.host.textContent!.includes("Now Playing write failed")}`);
-    console.log(`  and the optimistic choice returns to the INI value: ${
+    check("a write failure is visible on QuickPanel Now Playing",
+      failedNow.host.textContent!.includes("Now Playing write failed"));
+    check("and the optimistic choice returns to the INI value",
       findAll(failedNow.host,
         '[data-mock="DropdownItem"][data-label="Override upscaler with"]')[0]
-        ?.getAttribute("data-selected") === "fsr31"}`);
+        ?.getAttribute("data-selected") === "fsr31");
     await act(async () => failedNow.root.unmount());
 
     fixtures.write_config = (_dir: string, changes: any[]) => ({
@@ -711,91 +795,79 @@ async function render(name: string, element: React.ReactElement) {
       live: { sent: false, deferred: changes },
     });
     const savedNow = await render(
-      "NowPlaying (restart required)",
-      <NowPlaying runningGame={{ appid: 1091500, name: "Cyberpunk 2077", gameid: "1091500" }}
-        onOpenGame={() => {}} onBrowse={() => {}} />,
+      "QuickPanel (restart required)",
+      <QuickPanel runningGame={{ appid: 1091500, name: "Cyberpunk 2077", gameid: "1091500" }}
+        onOpenManager={() => {}} />,
     );
     await act(async () => {
       (findAll(savedNow.host,
         '[data-mock="DropdownItem"][data-label="Override upscaler with"] [data-opt-value="xess"]')[0] as HTMLElement).click();
     });
     await settle(100);
-    console.log(`  saved changes show a restart action: ${
-      savedNow.host.textContent!.includes("Restart the game to apply") &&
-      savedNow.host.textContent!.includes("Restart game to apply")}`);
+    check("saved changes show a restart action on QuickPanel",
+      savedNow.host.textContent!.includes("Saved · restart required") &&
+      savedNow.host.textContent!.includes("Restart game to apply"));
     await act(async () => savedNow.root.unmount());
     fixtures.write_config = previousWrite;
-    const queue = getTargetConfigQueue(detail.install.path);
-    const acknowledgement = beginTargetFlush(queue, queue.revision, true);
-    finishTargetFlush(queue, acknowledgement);
+    act(() => {
+      const queue = getTargetConfigQueue(detail.install.path);
+      const acknowledgement = beginTargetFlush(queue, queue.revision, true);
+      finishTargetFlush(queue, acknowledgement);
+    });
   }
 
   // -- setting a game up, as a checklist ------------------------------------
   // The Setup tab is the same three steps before and after: what will happen,
   // then what did. Everything else it used to hold is one row away.
-  const setupTab = findAll(gd.host, '[data-tab="install"]')[0] as HTMLElement;
-  await act(async () => { setupTab.click(); });
-  await settle();
+  await openTab(gd.host, "install");
   const setupText = gd.host.textContent!;
-  console.log(`  monitor is no longer a tab: ${!tabs.includes("monitor")}`);
-  console.log(`  setup states what is installed: ${
-    setupText.includes("Installed as") && setupText.includes("dxgi.dll")}`);
-  console.log(`  the wiki step is a toggle, off until asked for: ${
-    findAll(gd.host, '[data-mock="ToggleField"][data-label^="Not using the wiki"]').length === 1}`);
-  console.log(`  and says what turning it on would do: ${
-    setupText.includes("apply the wiki settings once")}`);
+  const allGdTabIds = findAll(gd.host, "[data-tab-button]").map((n) => n.getAttribute("data-tab-button"));
+  check("monitor is no longer a tab", !allGdTabIds.includes("monitor"));
+  check("wiki recommendation shown on Setup", setupText.includes("wiki entry"));
+  check("setup states what is installed", Boolean(setupText.includes("Installed as") && setupText.includes("dxgi.dll")));
+  check("the wiki step is a toggle, off until asked for", Boolean(findAll(gd.host, '[data-mock="ToggleField"][data-label^="Not using the wiki"]').length === 1));
+  check("and says what turning it on would do", Boolean(setupText.includes("apply the wiki settings once")));
   // Removing has to be findable without hunting: it is on the tab, not behind
   // the manual page it used to live on.
-  console.log(`  removing and resetting stay on the setup tab: ${
-    setupText.includes("Remove") && setupText.includes("Reset settings")}`);
-  console.log(`  setup no longer shows the manual install controls: ${
-    !setupText.includes("Filename override")}`);
+  check("removing and resetting stay on the setup tab", Boolean(setupText.includes("Remove") && setupText.includes("Reset settings")));
+  check("setup no longer shows the manual install controls", Boolean(!setupText.includes("Filename override")));
   // Not running is not a step of setting a game up, and was being listed as
   // the last one. What the log says lives on the Logs row either way.
-  console.log(`  "not running" is not a setup step: ${!setupText.includes("Not running")}`);
+  check("\"not running\" is not a setup step", Boolean(!setupText.includes("Not running")));
 
   // "Manual setup" opens in the tab's place, and comes back.
   await act(async () => {
     (findAll(gd.host, '[data-mock="Field"][data-label="Manual setup"]')[0] as HTMLElement).click();
   });
   await settle();
-  console.log(`  "manual setup" restores every install control: ${
-    gd.host.textContent!.includes("Filename override") &&
+  check("\"manual setup\" restores every install control", Boolean(gd.host.textContent!.includes("Filename override") &&
     gd.host.textContent!.includes("Reinstall as dxgi.dll") &&
-    gd.host.textContent!.includes("Steam Launch Options")}`);
+    gd.host.textContent!.includes("Steam Launch Options")));
   const manualText = gd.host.textContent!;
-  console.log(`  and the live-control panel with them: ${
-    manualText.includes("Live in-game control")}`);
+  check("and the live-control panel with them", Boolean(manualText.includes("Live in-game control")));
   // The FSR 4 panel is here, and the build it reports comes from the bytes in
   // the game folder rather than from a version: the modelled builds report the
   // version the released SDK reports.
-  console.log(`  the FSR 4 build in the folder is named: ${
-    manualText.includes("Bundled (FidelityFX SDK 4.1.1)")}`);
-  console.log(`  Setup directs users to the combined Deck preset: ${manualText.includes("FSR 4.1.2 Lite — community")}`);
-  console.log(`  older community builds are not offered: ${!manualText.includes("Use 4.0.2")}`);
-  console.log(`  the launch options are spelled out there: ${
-    manualText.includes("WINEDLLOVERRIDES")}`);
+  check("the FSR 4 build in the folder is named", Boolean(manualText.includes("Bundled (FidelityFX SDK 4.1.1)")));
+  check("Setup directs users to the combined Deck preset", Boolean(manualText.includes("community Lite preset")));
+  check("older community builds are not offered", Boolean(!manualText.includes("Use 4.0.2")));
+  check("the launch options are spelled out there", Boolean(manualText.includes("WINEDLLOVERRIDES")));
   // "The plugin cannot read them" and "they are empty" look identical from the
   // outside, and telling them apart took a source-code read the last time it
   // mattered. Both, and what removing would put back, are on the page now.
-  console.log(`  and what Steam is actually passing is stated: ${
-    manualText.includes("Steam is passing") && manualText.includes("Steam would not say")}`);
-  console.log(`  next to what removing would put back: ${
-    manualText.includes("Before the install") && manualText.includes("gamemoderun %command%")}`);
-  console.log(`  legacy ini warning shown: ${manualText.includes("FGType")}`);
-  console.log(`  backup folder mentioned: ${
-    manualText.includes("decky_optiscaler_backup_files")}`);
-  console.log(`  Deck setup guidance present: ${manualText.includes("Steam Deck")}`);
+  check("and what Steam is actually passing is stated", Boolean(manualText.includes("Steam is passing") && manualText.includes("Steam would not say")));
+  check("next to what removing would put back", Boolean(manualText.includes("Before the install") && manualText.includes("gamemoderun %command%")));
+  check("legacy ini warning shown", Boolean(manualText.includes("FGType")));
+  check("backup folder mentioned", Boolean(manualText.includes("decky_optiscaler_backup_files")));
+  check("Deck setup guidance present", Boolean(manualText.includes("Steam Deck")));
   // The manual panel is several screens long, so the way out is at both ends.
-  console.log(`  the way back is at both ends of it: ${
-    findAll(gd.host, '[data-back="setup"]').length === 2}`);
+  check("the way back is at both ends of it", Boolean(findAll(gd.host, '[data-back="setup"]').length === 2));
   await act(async () => {
     (findAll(gd.host, '[data-back="setup"]')[0] as HTMLElement).click();
   });
   await settle();
-  console.log(`  and back returns to the checklist: ${
-    gd.host.textContent!.includes("Installed as") &&
-    !gd.host.textContent!.includes("Filename override")}`);
+  check("and back returns to the checklist", Boolean(gd.host.textContent!.includes("Installed as") &&
+    !gd.host.textContent!.includes("Filename override")));
 
   // The old Monitor tab, now a row.
   await act(async () => {
@@ -803,10 +875,8 @@ async function render(name: string, element: React.ReactElement) {
   });
   await settle();
   const logsText = gd.host.textContent!;
-  console.log(`  the logs row opens what the Monitor tab used to show: ${
-    logsText.includes("Write OptiScaler log")}`);
-  console.log(`  with the runtime state it read out of the log: ${
-    logsText.includes("FSR 4.0.2")}`);
+  check("the logs row opens what the Monitor tab used to show", Boolean(logsText.includes("Write OptiScaler log")));
+  check("with the runtime state it read out of the log", Boolean(logsText.includes("FSR 4.0.2")));
   await act(async () => {
     (findAll(gd.host, '[data-back="setup"]')[0] as HTMLElement).click();
   });
@@ -817,25 +887,20 @@ async function render(name: string, element: React.ReactElement) {
   const gdFresh = await render("GameDetail (not set up)",
     <GameDetail gamePath="/games/Cyberpunk 2077" gameName="Cyberpunk 2077" appid="1091500"
       status={fixtures.get_status}
-      runningGame={{ appid: 1091500, name: "Cyberpunk 2077", gameid: "1091500" }}
+      runningGame={null}
       onBack={() => {}} />);
   const freshText = gdFresh.host.textContent!;
-  console.log(`  a matched game says so before anything is written: ${
-    freshText.includes("can be set up automatically")}`);
-  console.log(`  three steps, named: ${
-    freshText.includes("Install OptiScaler as") &&
+  check("a matched game says so before anything is written", Boolean(freshText.includes("can be set up automatically")));
+  check("three steps, named", Boolean(freshText.includes("Install OptiScaler as") &&
     freshText.includes("Set the Steam launch options") &&
-    freshText.includes("Apply the 2 settings")}`);
-  console.log(`  the install step is required, the other two are toggles: ${
-    findAll(gdFresh.host, '[data-mock="ToggleField"][data-label^="Set the Steam launch options"]').length === 1 &&
+    freshText.includes("Apply the 2 settings")));
+  check("the install step is required, the other two are toggles", Boolean(findAll(gdFresh.host, '[data-mock="ToggleField"][data-label^="Set the Steam launch options"]').length === 1 &&
     findAll(gdFresh.host, '[data-mock="ToggleField"][data-label^="Apply the 2 settings"]').length === 1 &&
-    freshText.includes("required")}`);
-  console.log(`  the launch options are shown in full, with the wiki's flag: ${
-    freshText.includes('WINEDLLOVERRIDES="dxgi=n,b" %command% -dx12')}`);
-  console.log(`  the wiki's settings are named before they are applied: ${
-    freshText.includes("Dxgi=false") && freshText.includes("RestoreComputeSignature=true") &&
-    !freshText.includes("DLSSG via Streamline → FSR FG")}`);
-  console.log(`  the button counts what will run: ${freshText.includes("Do all three")}`);
+    freshText.includes("required")));
+  check("the launch options are shown in full, with the wiki's flag", Boolean(freshText.includes('WINEDLLOVERRIDES="dxgi=n,b" %command% -dx12')));
+  check("the wiki's settings are named before they are applied", Boolean(freshText.includes("Dxgi=false") && freshText.includes("RestoreComputeSignature=true") &&
+    !freshText.includes("DLSSG via Streamline → FSR FG")));
+  check("the button counts what will run", Boolean(freshText.includes("Do all three")));
   // Switching a step off has to change what the button promises, or the
   // toggles are decoration.
   const wikiStep = findAll(gdFresh.host,
@@ -844,8 +909,7 @@ async function render(name: string, element: React.ReactElement) {
     (findAll(wikiStep, "[data-toggle]")[0] as HTMLElement).click();
   });
   await settle();
-  console.log(`  turning one off narrows the button: ${
-    gdFresh.host.textContent!.includes("Do both")}`);
+  check("turning one off narrows the button", Boolean(gdFresh.host.textContent!.includes("Do both")));
 
   // Both Setup and the Manual panel add only the clauses this plugin needs;
   // existing wrappers, launch flags and DLL assignments stay in place.
@@ -884,22 +948,47 @@ async function render(name: string, element: React.ReactElement) {
       .find((node) => node.textContent?.trim() === "Manual setup") as HTMLElement;
     await act(async () => manualEntry.click());
     await settle(80);
-    console.log(`  Manual setup cannot change Steam before a managed install: ${
-      !findAll(manual.host, '[data-mock="ButtonItem"]').some((node) => node.textContent?.includes("Set launch options for me"))}`);
+    check("Manual setup cannot change Steam before a managed install", Boolean(!findAll(manual.host, '[data-mock="ButtonItem"]').some((node) => node.textContent?.includes("Set launch options for me"))));
     const manualInstall = findAll(manual.host, '[data-mock="ButtonItem"]')
       .find((node) => node.textContent?.includes("as dxgi.dll")) as HTMLElement;
     fixtures.get_game = detail;
+    shownModals.length = 0;
     await act(async () => manualInstall.click());
     await settle(80);
+    // [TS-05]: LaunchOptionsPrompt Cancel does not touch Steam; re-triggering & OK applies merged launch options.
+    check("manual install shows LaunchOptionsPrompt modal", shownModals.length > 0);
+    const writesBeforeCancel = launchWrites.length;
+    await respondLatestModal("cancel");
+    await settle();
+    check("LaunchOptionsPrompt Cancel leaves Steam launch options untouched",
+      launchWrites.length === writesBeforeCancel);
     const setLaunch = findAll(manual.host, '[data-mock="ButtonItem"]')
       .find((node) => node.textContent?.includes("Set launch options for me")) as HTMLElement;
     await act(async () => setLaunch.click());
     await settle();
     const manualWritten = launchWrites[launchWrites.length - 1]?.value ?? "";
-    console.log(`  Manual setup keeps wrappers, flags and other DLL clauses: ${
+    check("Manual setup keeps wrappers, flags and other DLL clauses",
       manualWritten.includes("MANGOHUD=1 gamescope --mangoapp %command%") &&
       manualWritten.includes("-dx11") && manualWritten.includes("d3d12=n,b") &&
-      manualWritten.includes("dxgi=n,b")}`);
+      manualWritten.includes("dxgi=n,b"));
+    // Also test LaunchOptionsPrompt OK directly on a fresh manual install.
+    steamByAppid[1091500] = baseLaunch;
+    const writesBeforePromptOk = launchWrites.length;
+    shownModals.length = 0;
+    const reinstallBtn = findAll(manual.host, '[data-mock="ButtonItem"]')
+      .find((node) => node.textContent?.includes("Reinstall as dxgi.dll")) as HTMLElement | undefined;
+    if (reinstallBtn) {
+      await act(async () => reinstallBtn.click());
+      await settle(80);
+      if (shownModals.length > 0) {
+        await respondLatestModal("ok");
+        await settle();
+        const okWritten = launchWrites[launchWrites.length - 1]?.value ?? "";
+        check("LaunchOptionsPrompt OK merges override into Steam launch options",
+          launchWrites.length > writesBeforePromptOk &&
+          okWritten.includes("dxgi=n,b") && okWritten.includes("d3d12=n,b"));
+      }
+    }
     await act(async () => manual.root.unmount());
 
     fixtures.get_auto_plan = previousPlan;
@@ -916,16 +1005,15 @@ async function render(name: string, element: React.ReactElement) {
       .find((node) => node.textContent?.includes("Do all three")) as HTMLElement;
     await act(async () => runSetup.click());
     await settle(80);
-    const guidedWritten = launchWrites.filter((write) => write.appid === 2358720).at(-1)?.value ?? "";
+    const guidedWrites = launchWrites.filter((write) => write.appid === 2358720);
+    const guidedWritten = guidedWrites[guidedWrites.length - 1]?.value ?? "";
     const installCalls = invocations.slice(invocationsBefore);
     const recordIndex = installCalls.findIndex((call) => call.name === "record_launch_options");
     const installIndex = installCalls.findIndex((call) => call.name === "auto_install");
-    console.log(`  guided setup captures Steam in the install transaction: ${
-      installIndex >= 0 && recordIndex < 0 && installCalls[installIndex].args[4] === baseLaunch}`);
-    console.log(`  guided setup merges rather than replaces Steam options: ${
-      guidedWritten.includes("MANGOHUD=1 gamescope --mangoapp %command%") &&
+    check("guided setup captures Steam in the install transaction", Boolean(installIndex >= 0 && recordIndex < 0 && installCalls[installIndex].args[4] === baseLaunch));
+    check("guided setup merges rather than replaces Steam options", Boolean(guidedWritten.includes("MANGOHUD=1 gamescope --mangoapp %command%") &&
       guidedWritten.includes("-dx11") && guidedWritten.includes("-dx12") &&
-      guidedWritten.includes("d3d12=n,b") && guidedWritten.includes("dxgi=n,b")}`);
+      guidedWritten.includes("d3d12=n,b") && guidedWritten.includes("dxgi=n,b")));
     await act(async () => guided.root.unmount());
     fixtures.get_game = previousGame;
     fixtures.get_auto_plan = previousPlan;
@@ -969,28 +1057,20 @@ async function render(name: string, element: React.ReactElement) {
       onBack={() => {}} />);
   const refText = gdRef.host.textContent!;
   console.log("\n=== a game that needs REFramework ===");
-  console.log(`  the step is on the list before anything is written: ${
-    refText.includes("Install REFramework")}`);
-  console.log(`  it says why, citing the entry that said so: ${
-    refText.includes("cannot hook this game without it") &&
-    refText.includes("compatibility list notes")}`);
-  console.log(`  and which of the two builds it is: ${
-    refText.includes("pd-upscaler build for this game")}`);
-  console.log(`  it is required, not a toggle like the other two steps: ${
-    findAll(gdRef.host, '[data-mock="ToggleField"][data-label^="Install REFramework"]').length === 0}`);
-  console.log(`  so the button counts four steps, not three: ${
-    refText.includes("Do all four")}`);
+  check("the step is on the list before anything is written", Boolean(refText.includes("Install REFramework")));
+  check("it says why, citing the entry that said so", Boolean(refText.includes("so OptiScaler can hook this game") &&
+    refText.includes("compatibility list notes")));
+  check("and which of the two builds it is", Boolean(refText.includes("pd-upscaler build for this game")));
+  check("it is required, not a toggle like the other two steps", Boolean(findAll(gdRef.host, '[data-mock="ToggleField"][data-label^="Install REFramework"]').length === 0));
+  check("so the button counts four steps, not three", Boolean(refText.includes("Do all four")));
   // Proton ships its own dinput8 and loads that in preference to the game
   // folder, so REF needs an override exactly as OptiScaler's proxy does. The
   // wiki never says so — it is written for Windows.
-  console.log(`  REFramework gets a WINEDLLOVERRIDES entry of its own: ${
-    refText.includes('WINEDLLOVERRIDES="dxgi=n,b;dinput8=n,b" %command% -dx12')}`);
-  console.log(`  and the row says why both are needed: ${
-    refText.includes("its own dinput8.dll, and neither mod runs")}`);
+  check("REFramework gets a WINEDLLOVERRIDES entry of its own", Boolean(refText.includes('WINEDLLOVERRIDES="dxgi=n,b;dinput8=n,b" %command% -dx12')));
+  check("and the row says why both are needed", Boolean(refText.includes("Proton loads dxgi.dll and dinput8.dll")));
   // The one file that can never be automatic.
-  console.log(`  the Nexus-hosted plugin is named as the user's job: ${
-    refText.includes("Add PDPerfPlugin.dll yourself") &&
-    refText.includes("nexusmods.com")}`);
+  check("the Nexus-hosted plugin is named as the user's job", Boolean(refText.includes("Add PDPerfPlugin.dll yourself") &&
+    refText.includes("nexusmods.com")));
 
   // A build this plugin has no asset for must say so rather than pretend.
   fixtures.get_auto_plan = refPlan({
@@ -1004,11 +1084,9 @@ async function render(name: string, element: React.ReactElement) {
       runningGame={{ appid: 1091500, name: "Cyberpunk 2077", gameid: "1091500" }}
       onBack={() => {}} />);
   const refManualText = gdRefManual.host.textContent!;
-  console.log(`  a game with no known build says so instead of guessing: ${
-    refManualText.includes("No REFramework build is known") &&
-    refManualText.includes("TheRazerMD/REFramework")}`);
-  console.log(`  and does not count itself as a step the button performs: ${
-    refManualText.includes("Do all three")}`);
+  check("a game with no known build says so instead of guessing", Boolean(refManualText.includes("No REFramework build is known") &&
+    refManualText.includes("TheRazerMD/REFramework")));
+  check("and does not count itself as a step the button performs", Boolean(refManualText.includes("Do all three")));
 
   // Automatic installation is switched off (constants.REFRAMEWORK_AUTO_INSTALL),
   // which reaches the UI as exactly the same shape: required, not automatic,
@@ -1023,14 +1101,11 @@ async function render(name: string, element: React.ReactElement) {
       runningGame={{ appid: 1091500, name: "Cyberpunk 2077", gameid: "1091500" }}
       onBack={() => {}} />);
   const refOffText = gdRefOff.host.textContent!;
-  console.log(`  with the download off the game still says it needs REFramework: ${
-    refOffText.includes("Install REFramework") &&
-    refOffText.includes("cannot hook this game without it")}`);
-  console.log(`  says the plugin will not fetch it, and where to get it: ${
-    refOffText.includes("This plugin no longer downloads it for you") &&
-    refOffText.includes("TheRazerMD/REFramework")}`);
-  console.log(`  and keeps the launch-options override REF needs from Proton: ${
-    refOffText.includes('WINEDLLOVERRIDES="dxgi=n,b;dinput8=n,b" %command% -dx12')}`);
+  check("with the download off the game still says it needs REFramework", Boolean(refOffText.includes("Install REFramework") &&
+    refOffText.includes("so OptiScaler can hook this game")));
+  check("says the plugin will not fetch it, and where to get it", Boolean(refOffText.includes("This plugin no longer downloads it for you") &&
+    refOffText.includes("TheRazerMD/REFramework")));
+  check("and keeps the launch-options override REF needs from Proton", Boolean(refOffText.includes('WINEDLLOVERRIDES="dxgi=n,b;dinput8=n,b" %command% -dx12')));
 
   // -- the same game, already set up ---------------------------------------
   fixtures.get_auto_plan = refPlan({});
@@ -1047,16 +1122,15 @@ async function render(name: string, element: React.ReactElement) {
       status={fixtures.get_status}
       runningGame={{ appid: 1091500, name: "Cyberpunk 2077", gameid: "1091500" }}
       onBack={() => {}} />);
+  await openTab(gdRefMissing.host, "install");
   const missingText = gdRefMissing.host.textContent!;
-  console.log(`  an install missing it says so rather than looking finished: ${
-    missingText.includes("REFramework is missing") &&
-    missingText.includes("loads and changes nothing on screen")}`);
+  check("an install missing it says so rather than looking finished", Boolean(missingText.includes("REFramework is missing") &&
+    missingText.includes("won't affect the image")));
   // The pd games do not upscale at all without PDPerfPlugin, and the panel
   // still connects and reports a frame rate, so "live and connected" is not
   // evidence of anything. This is how that was reported.
-  console.log(`  a missing companion file is said loudly, not as a quiet pill: ${
-    missingText.includes("This game will not upscale yet") &&
-    missingText.includes("connect and report normally while nothing on screen changes")}`);
+  check("a missing companion file is said loudly, not as a quiet pill", Boolean(missingText.includes("This game will not upscale yet") &&
+    missingText.includes("connect and report normally while nothing on screen changes")));
 
   fixtures.get_game = {
     ...detail,
@@ -1071,14 +1145,14 @@ async function render(name: string, element: React.ReactElement) {
       status={fixtures.get_status}
       runningGame={{ appid: 1091500, name: "Cyberpunk 2077", gameid: "1091500" }}
       onBack={() => {}} />);
+  await openTab(gdRefToggle.host, "install");
   // REFramework is a third-party DLL that can stop a game booting. When that
   // happens the only way to learn which of the two mods did it is to take one
   // out, so it has to be removable without removing OptiScaler.
   const refToggle = findAll(gdRefToggle.host,
     '[data-mock="ToggleField"][data-label^="REFramework installed"]');
-  console.log(`  REFramework can be taken out on its own: ${refToggle.length === 1}`);
-  console.log(`  and the row says why you would: ${
-    gdRefToggle.host.textContent!.includes("turn off if the game stops launching")}`);
+  check("REFramework can be taken out on its own", Boolean(refToggle.length === 1));
+  check("and the row says why you would", Boolean(gdRefToggle.host.textContent!.includes("turn off if the game stops launching")));
 
   fixtures.get_game = {
     ...detail,
@@ -1095,11 +1169,10 @@ async function render(name: string, element: React.ReactElement) {
       status={fixtures.get_status}
       runningGame={{ appid: 1091500, name: "Cyberpunk 2077", gameid: "1091500" }}
       onBack={() => {}} />);
+  await openTab(gdRefOk.host, "install");
   const okText = gdRefOk.host.textContent!;
-  console.log(`  and once it is there, it is ticked with the build it is: ${
-    okText.includes("REFramework installed") && okText.includes("684ca77369ec")}`);
-  console.log(`  the plugin the user added is ticked too: ${
-    okText.includes("PDPerfPlugin.dll is there")}`);
+  check("and once it is there, it is ticked with the build it is", Boolean(okText.includes("REFramework installed") && okText.includes("684ca77369ec")));
+  check("the plugin the user added is ticked too", Boolean(okText.includes("PDPerfPlugin.dll is there")));
 
   // Silently remapping the overlay key is how "pressing Insert does nothing"
   // gets reported as the overlay being broken. It had simply moved.
@@ -1117,10 +1190,8 @@ async function render(name: string, element: React.ReactElement) {
       runningGame={{ appid: 1091500, name: "Cyberpunk 2077", gameid: "1091500" }}
       onBack={() => {}} />);
   const hotkeyText = gdHotkey.host.textContent!;
-  console.log(`  a plan that moves the overlay key says so before writing it: ${
-    hotkeyText.includes("The overlay opens on a different key")}`);
-  console.log(`  and names the key to press, not the code: ${
-    hotkeyText.includes("Home") && hotkeyText.includes("not Insert")}`);
+  check("a plan that moves the overlay key says so before writing it", Boolean(hotkeyText.includes("The overlay opens on a different key")));
+  check("and names the key to press, not the code", Boolean(hotkeyText.includes("Home") && hotkeyText.includes("not Insert")));
 
   // The other 676 games must not grow a permanently unticked REFramework step.
   fixtures.get_auto_plan = plainPlan;
@@ -1130,17 +1201,13 @@ async function render(name: string, element: React.ReactElement) {
       status={fixtures.get_status}
       runningGame={{ appid: 1091500, name: "Cyberpunk 2077", gameid: "1091500" }}
       onBack={() => {}} />);
-  console.log(`  a game that does not need it never mentions it: ${
-    !gdPlain.host.textContent!.includes("REFramework")}`);
+  check("a game that does not need it never mentions it", Boolean(!gdPlain.host.textContent!.includes("REFramework")));
 
   // -- automatic settings mode ----------------------------------------------
-  const settingsTab = findAll(gd.host, '[data-tab="basic"]')[0] as HTMLElement;
-  await act(async () => { settingsTab.click(); });
-  await settle();
+  await openTab(gd.host, "basic");
   const autoToggle = findAll(gd.host, '[data-mock="ToggleField"][data-label="Automatic"]')[0];
-  console.log(`  settings offer the automatic toggle: ${Boolean(autoToggle)}`);
-  console.log(`  automatic is off until asked for: ${
-    !gd.host.textContent!.includes("Wiki FG path:")}`);
+  check("settings offer the automatic toggle", Boolean(Boolean(autoToggle)));
+  check("automatic is off until asked for", Boolean(!gd.host.textContent!.includes("Wiki FG path:")));
   // A manual edit can still be in the write queue when Automatic is enabled.
   // The automatic apply must flush it, replace its optimistic record, and read
   // back the wiki's authoritative FG pair instead of painting the manual one
@@ -1156,34 +1223,27 @@ async function render(name: string, element: React.ReactElement) {
   });
   await settle();
   const autoText = gd.host.textContent!;
-  console.log(`  Automatic replaces a pending manual value with the wiki's pair: ${
-    findAll(gd.host, '[data-mock="DropdownItem"][data-label="Method"]')[0]
+  check("Automatic replaces a pending manual value with the wiki's pair", Boolean(findAll(gd.host, '[data-mock="DropdownItem"][data-label="Method"]')[0]
       ?.getAttribute("data-selected") === "dlssg" &&
-      iniValues.FrameGen.FGInput === "dlssg" && iniValues.FrameGen.FGOutput === "fsrfg"}`);
+      iniValues.FrameGen.FGInput === "dlssg" && iniValues.FrameGen.FGOutput === "fsrfg"));
   // The wiki's pair is the better starting answer, but which generator runs is
   // the user's call in either mode -- so it is printed as a recommendation
   // under the control rather than instead of it.
-  console.log(`  automatic keeps the FG method, and says what the wiki advises: ${
-    findAll(gd.host, '[data-mock="DropdownItem"][data-label="Method"]').length === 1 &&
+  check("automatic keeps the FG method, and says what the wiki advises", Boolean(findAll(gd.host, '[data-mock="DropdownItem"][data-label="Method"]').length === 1 &&
     autoText.includes("Wiki FG path:") &&
-    autoText.includes("DLSSG via Streamline → FSR FG")}`);
+    autoText.includes("DLSSG via Streamline → FSR FG")));
   // The four the user still owns.
-  console.log(`  automatic keeps frame generation on/off: ${
-    findAll(gd.host, '[data-mock="ToggleField"][data-label="Frame generation"]').length === 1}`);
-  console.log(`  automatic keeps the 2X/3X/4X multiplier: ${
-    findAll(gd.host, '[data-mock="DropdownItem"][data-label="Frame multiplier"]').length === 1}`);
-  console.log(`  automatic keeps the upscaler choice: ${
-    findAll(gd.host, '[data-mock="DropdownItem"][data-label="Override upscaler with"]').length === 1}`);
-  console.log(`  automatic keeps the FFX FG version: ${
-    findAll(gd.host, '[data-mock="DropdownItem"][data-label="FFX FG version"]').length === 1}`);
-  console.log(`  automatic says what the wiki set: ${autoText.includes("Dxgi=false")}`);
+  check("automatic keeps frame generation on/off", Boolean(findAll(gd.host, '[data-mock="ToggleField"][data-label="Frame generation"]').length === 1));
+  check("automatic keeps the 2X/3X/4X multiplier", Boolean(findAll(gd.host, '[data-mock="DropdownItem"][data-label="Frame multiplier"]').length === 1));
+  check("automatic keeps the upscaler choice", Boolean(findAll(gd.host, '[data-mock="DropdownItem"][data-label="Override upscaler with"]').length === 1));
+  check("automatic keeps the FFX FG version", Boolean(findAll(gd.host, '[data-mock="DropdownItem"][data-label="FFX FG version"]').length === 1));
+  check("automatic says what the wiki set", Boolean(autoText.includes("Dxgi=false")));
   await act(async () => {
     (findAll(findAll(gd.host, '[data-mock="ToggleField"][data-label="Automatic"]')[0],
       "[data-toggle]")[0] as HTMLElement).click();
   });
   await settle();
-  console.log(`  turning it off gives every option back: ${
-    findAll(gd.host, '[data-mock="DropdownItem"][data-label="Method"]').length === 1}`);
+  check("turning it off gives every option back", Boolean(findAll(gd.host, '[data-mock="DropdownItem"][data-label="Method"]').length === 1));
 
   // A PBZ wiki plan may recommend an FG path while the configured values have
   // FG off. Keep the control, but do not show that path as active.
@@ -1207,10 +1267,8 @@ async function render(name: string, element: React.ReactElement) {
       <BasicPanel values={pbzValues} gpu={detail.gpu} ffx={detail.install.fsr4.ffx}
         plan={pbzPlan.plan} auto={true} onApply={() => {}} />);
     const pbzBasicText = pbzBasic.host.textContent!;
-    console.log(`  the method control remains present when the PBZ plan has FG off: ${
-      findAll(pbzBasic.host, '[data-mock="DropdownItem"][data-label="Method"]').length === 1}`);
-    console.log(`  FG-off Basic does not expose a planned FG path: ${
-      !pbzBasicText.includes("PBZ_FG_SENTINEL") && !pbzBasicText.includes("Wiki FG path:")}`);
+    check("the method control remains present when the PBZ plan has FG off", Boolean(findAll(pbzBasic.host, '[data-mock="DropdownItem"][data-label="Method"]').length === 1));
+    check("FG-off Basic does not expose a planned FG path", Boolean(!pbzBasicText.includes("PBZ_FG_SENTINEL") && !pbzBasicText.includes("Wiki FG path:")));
     await act(async () => pbzBasic.root.unmount());
   }
 
@@ -1233,16 +1291,12 @@ async function render(name: string, element: React.ReactElement) {
     const gdFgOff = await render("GameDetail (Automatic with frame generation off)",
       <GameDetail gamePath={detail.path} gameName={detail.name} appid="1091500"
         status={fixtures.get_status} runningGame={null} onBack={() => {}} />);
-    await act(async () => {
-      (findAll(gdFgOff.host, '[data-tab="basic"]')[0] as HTMLElement).click();
-    });
-    await settle();
+    await openTab(gdFgOff.host, "basic");
     const fgOffText = gdFgOff.host.textContent!;
-    console.log(`  FG-off Basic keeps Automatic on and the wiki path hidden: ${
-      findAll(gdFgOff.host, '[data-mock="ToggleField"][data-label="Automatic"] [data-toggle]')[0]
+    check("FG-off Basic keeps Automatic on and the wiki path hidden", Boolean(findAll(gdFgOff.host, '[data-mock="ToggleField"][data-label="Automatic"] [data-toggle]')[0]
         ?.getAttribute("data-checked") === "true" &&
       !fgOffText.includes("DLSSG via Streamline → FSR FG") &&
-      !fgOffText.includes("Wiki FG path:")}`);
+      !fgOffText.includes("Wiki FG path:")));
     await act(async () => gdFgOff.root.unmount());
     fixtures.get_auto_plan = previousPlan;
     iniValues.FrameGen.Enabled = previousEnabled;
@@ -1264,16 +1318,13 @@ async function render(name: string, element: React.ReactElement) {
       "[data-toggle]")[0] as HTMLElement).click();
   });
   await settle();
-  console.log(`  the mode switch is locked while settings apply: ${
-    findAll(gd.host, '[data-mock="ToggleField"][data-label="Automatic"]')[0]
-      ?.getAttribute("data-disabled") === "true"}`);
+  check("the mode switch is locked while settings apply", Boolean(findAll(gd.host, '[data-mock="ToggleField"][data-label="Automatic"]')[0]
+      ?.getAttribute("data-disabled") === "true"));
   finishAuto({ ok: false, error: "Automatic config write failed" });
   await settle(80);
-  console.log(`  a failed automatic write leaves Automatic off: ${
-    findAll(gd.host, '[data-mock="ToggleField"][data-label="Automatic"] [data-toggle]')[0]
-      ?.getAttribute("data-checked") === "false"}`);
-  console.log(`  and reports the backend reason: ${
-    toastMessages.some((message) => message.includes("Automatic config write failed"))}`);
+  check("a failed automatic write leaves Automatic off", Boolean(findAll(gd.host, '[data-mock="ToggleField"][data-label="Automatic"] [data-toggle]')[0]
+      ?.getAttribute("data-checked") === "false"));
+  check("and reports the backend reason", Boolean(toastMessages.some((message) => message.includes("Automatic config write failed"))));
   toaster.toast = originalToast;
   fixtures.apply_auto_settings = successfulAuto;
 
@@ -1289,23 +1340,27 @@ async function render(name: string, element: React.ReactElement) {
   const gdNoEntry = await render("GameDetail (no wiki entry)",
     <GameDetail gamePath="/games/Cyberpunk 2077" gameName="Cyberpunk 2077" appid="1091500"
       status={fixtures.get_status} runningGame={null} onBack={() => {}} />);
+  await openTab(gdNoEntry.host, "install");
   const noEntryText = gdNoEntry.host.textContent!;
-  console.log(`  no entry means no mode choice: ${
-    findAll(gdNoEntry.host, '[data-tab="auto"]').length === 0}`);
-  console.log(`  no entry says so on the checklist: ${
-    noEntryText.includes("No wiki entry matched this game")}`);
-  console.log(`  no entry offers no automatic toggle: ${
-    findAll(gdNoEntry.host, '[data-mock="ToggleField"][data-label="Automatic"]').length === 0}`);
-  console.log(`  no entry points at setting it up by hand: ${
-    noEntryText.includes("Manual setup")}`);
+  check("no entry means no mode choice", Boolean(findAll(gdNoEntry.host, '[data-tab-button="auto"]').length === 0));
+  check("no entry says so on the checklist", Boolean(noEntryText.includes("No wiki entry matched this game")));
+  check("no entry offers no automatic toggle", Boolean(findAll(gdNoEntry.host, '[data-mock="ToggleField"][data-label="Automatic"]').length === 0));
+  check("no entry points at setting it up by hand", Boolean(noEntryText.includes("Manual setup")));
   fixtures.get_auto_plan = matchedPlan;
 
-  // Live in-game control: the connected state must replace the restart advice.
+  // Live in-game control: Setup tab reports live status; Basic tab shows LiveStats
+  // without a duplicate "Live control is connected" box ([UI-09]).
+  await openTab(gd.host, "install");
+  const setupLiveText = gd.host.textContent!;
+  check("live state is reported on the setup tab", Boolean(setupLiveText.includes("Live control connected")));
+  await openTab(gd.host, "basic");
   const liveText = gd.host.textContent!;
-  console.log(`  live state is reported on the setup tab: ${
-    liveText.includes("Live control connected")}`);
-  console.log(`  live connected state shown: ${liveText.includes("Live control is connected")}`);
-  console.log(`  a live connection still reports settings deferred until restart: ${liveText.includes("restart the game to apply")}`);
+  check("Basic tab avoids duplicate Live control is connected box", !liveText.includes("Live control is connected"));
+  check("live frame rate shown", Boolean(liveText.includes("40.4 fps")));
+  check("frame generation state shown", Boolean(liveText.includes("Frame generation")));
+  check("live upscaler named as OptiScaler names it", Boolean(liveText.includes("FSR 3.X/4")));
+  check("live readout stays read-only here", Boolean(!liveText.includes("Switch now")));
+  check("FidelityFX version surfaced", Boolean(liveText.includes("4.1.1.2740")));
 
   fixtures.get_live_status = {
     ...fixtures.get_live_status, attached: false, state: "failed",
@@ -1316,16 +1371,12 @@ async function render(name: string, element: React.ReactElement) {
       status={fixtures.get_status}
       runningGame={{ appid: 1091500, name: "Cyberpunk 2077", gameid: "1091500" }}
       onBack={() => {}} />);
+  await openTab(gdOffline.host, "install");
   const offlineText = gdOffline.host.textContent!;
-  console.log(`  live failure explained: ${offlineText.includes("could not attach")}`);
-  console.log(`  live frame rate shown: ${gd.host.textContent!.includes("40.4 fps")}`);
-  console.log(`  frame generation state shown: ${gd.host.textContent!.includes("Frame generation")}`);
-  console.log(`  live upscaler named as OptiScaler names it: ${gd.host.textContent!.includes("FSR 3.X/4")}`);
-  console.log(`  live readout stays read-only here: ${!gd.host.textContent!.includes("Switch now")}`);
-  console.log(`  FidelityFX version surfaced: ${gd.host.textContent!.includes("4.1.1.2740")}`);
+  check("live failure explained", Boolean(offlineText.includes("could not attach")));
   // Nothing to say about live control when it is not connected and the game is
   // not being driven from here: the failure notice above is the whole message.
-  console.log(`  no hotkey advice when disconnected: ${!offlineText.includes("not Insert")}`);
+  check("no hotkey advice when disconnected", Boolean(!offlineText.includes("not Insert")));
 
   // The Basic/Advanced switch: reachable with the D-pad means it has to be one
   // of Steam's own buttons, and it names both modes so the other one is on
@@ -1336,19 +1387,15 @@ async function render(name: string, element: React.ReactElement) {
       <GameDetail gamePath="/games/Cyberpunk 2077" gameName="Cyberpunk 2077" appid="1091500"
         status={fixtures.get_status} runningGame={null} onBack={() => {}} />);
     const modeSwitch = findAll(gdMode.host, "[data-mode-switch]")[0];
-    console.log(`  the mode switch is a real button: ${
-      modeSwitch?.getAttribute("data-mock") === "DialogButton"}`);
-    console.log(`  it names both modes: ${
-      modeSwitch?.textContent === "BasicAdvanced"}`);
-    console.log(`  and starts on basic: ${
-      modeSwitch?.getAttribute("data-mode-switch") === "basic"}`);
+    check("the mode switch is a real button", Boolean(modeSwitch?.getAttribute("data-mock") === "DialogButton"));
+    check("it names both modes", Boolean(modeSwitch?.textContent === "BasicAdvanced"));
+    check("and starts on basic", Boolean(modeSwitch?.getAttribute("data-mode-switch") === "basic"));
     await act(async () => {
       (modeSwitch as HTMLElement).click();
     });
     await settle();
-    console.log(`  pressing it opens every option: ${
-      findAll(gdMode.host, "[data-tab]").map((n) => n.getAttribute("data-tab"))
-        .includes("framegen")}`);
+    check("pressing it opens every option", Boolean(findAll(gdMode.host, "[data-tab]").map((n) => n.getAttribute("data-tab"))
+        .includes("framegen")));
     (globalThis as any).window.localStorage.setItem("decky-optiscaler:advanced", "0");
   }
 
@@ -1362,37 +1409,30 @@ async function render(name: string, element: React.ReactElement) {
     const lo = await import("../src/launchOptions");
     const ours = 'WINEDLLOVERRIDES="dxgi=n,b" %command%';
 
-    console.log(`  our own override is recognised: ${
-      lo.hasOverride(ours, "dxgi.dll") && !lo.hasOverride(ours, "winmm.dll")}`);
-    console.log(`  an .asi install needs no override: ${
-      lo.launchOptionFor("OptiScaler.asi") === "%command%"}`);
+    check("our own override is recognised", Boolean(lo.hasOverride(ours, "dxgi.dll") && !lo.hasOverride(ours, "winmm.dll")));
+    check("an .asi install needs no override", Boolean(lo.launchOptionFor("OptiScaler.asi") === "%command%"));
     // Someone else's flags are not ours to delete.
-    console.log(`  stripping ours keeps the user's own flags: ${
-      lo.stripOverride('WINEDLLOVERRIDES="dxgi=n,b" mangohud %command% -dx12', "dxgi.dll")
-        === "mangohud %command% -dx12"}`);
+    check("stripping ours keeps the user's own flags", Boolean(lo.stripOverride('WINEDLLOVERRIDES="dxgi=n,b" mangohud %command% -dx12', "dxgi.dll")
+        === "mangohud %command% -dx12"));
     const existingOptions =
       'WINEDLLOVERRIDES="d3d12=n,b;dinput8=b" MANGOHUD=1 gamescope --mangoapp %command% -dx11';
     const mergedOptions = lo.mergeLaunchOptions(
       existingOptions, "dxgi.dll", ["-dx12"], ["dinput8.dll"],
     );
-    console.log(`  adding an override preserves the user's wrapper and flags: ${
-      mergedOptions !== null &&
+    check("adding an override preserves the user's wrapper and flags", Boolean(mergedOptions !== null &&
       mergedOptions.includes("MANGOHUD=1 gamescope --mangoapp %command%") &&
       mergedOptions.includes("-dx11") && mergedOptions.includes("-dx12") &&
-      mergedOptions.includes("d3d12=n,b") && mergedOptions.includes("dxgi=n,b")}`);
+      mergedOptions.includes("d3d12=n,b") && mergedOptions.includes("dxgi=n,b")));
     const strippedOptions = mergedOptions === null ? null : lo.stripLaunchOptions(
       mergedOptions, "dxgi.dll", ["-dx12"], [], existingOptions,
     );
-    console.log(`  removing the plugin clauses preserves the existing wrapper and DLL rules: ${
-      strippedOptions !== null &&
+    check("removing the plugin clauses preserves the existing wrapper and DLL rules", Boolean(strippedOptions !== null &&
       strippedOptions.includes("MANGOHUD=1 gamescope --mangoapp %command%") &&
       strippedOptions.includes("-dx11") && !strippedOptions.includes("-dx12") &&
       strippedOptions.includes("d3d12=n,b") && strippedOptions.includes("dinput8=n,b") &&
-      !strippedOptions.includes("dxgi=n,b")}`);
-    console.log(`  a bare %command% left over is an empty field: ${
-      lo.stripOverride(ours, "dxgi.dll") === ""}`);
-    console.log(`  another mod's override is left alone: ${
-      lo.stripOverride('WINEDLLOVERRIDES="dxgi=n,b" %command%', "winmm.dll") !== ""}`);
+      !strippedOptions.includes("dxgi=n,b")));
+    check("a bare %command% left over is an empty field", Boolean(lo.stripOverride(ours, "dxgi.dll") === ""));
+    check("another mod's override is left alone", Boolean(lo.stripOverride('WINEDLLOVERRIDES="dxgi=n,b" %command%', "winmm.dll") !== ""));
 
     // Recorded and not empty: putting it back is the exact answer.
     const withRecord = lo.launchChoices({
@@ -1400,18 +1440,15 @@ async function render(name: string, element: React.ReactElement) {
       recorded: "gamemoderun %command%",
       filename: "dxgi.dll",
     });
-    console.log(`  a recorded value is offered first, verbatim: ${
-      withRecord[0].action === "restore" && withRecord[0].value === "gamemoderun %command%"}`);
+    check("a recorded value is offered first, verbatim", Boolean(withRecord[0].action === "restore" && withRecord[0].value === "gamemoderun %command%"));
     // Restoring and stripping would land on the same string here, and a dialog
     // offering the same outcome twice is one nobody can answer.
-    console.log(`  an identical second choice is collapsed away: ${
-      withRecord.map((c) => c.action).join(",") === "restore,keep"}`);
+    check("an identical second choice is collapsed away", Boolean(withRecord.map((c) => c.action).join(",") === "restore,keep"));
 
     // Recorded and empty: the game genuinely had none, so clearing is honest.
     const wasEmpty = lo.launchChoices({ current: ours, recorded: "", filename: "dxgi.dll" });
-    console.log(`  "there were none before" offers no restore: ${
-      !wasEmpty.some((c) => c.action === "restore") &&
-      wasEmpty[0].action === "clear" && wasEmpty[0].value === ""}`);
+    check("\"there were none before\" offers no restore", Boolean(!wasEmpty.some((c) => c.action === "restore") &&
+      wasEmpty[0].action === "clear" && wasEmpty[0].value === ""));
 
     // No record at all: only what we recognise as ours comes out.
     const noRecord = lo.launchChoices({
@@ -1419,37 +1456,28 @@ async function render(name: string, element: React.ReactElement) {
       recorded: null,
       filename: "dxgi.dll",
     });
-    console.log(`  with nothing recorded only our override is removed: ${
-      noRecord[0].action === "clear" && noRecord[0].value === "%command% -dx12"}`);
-    console.log(`  leaving them alone is always on offer, and changes nothing: ${
-      noRecord[noRecord.length - 1].action === "keep" &&
-      noRecord[noRecord.length - 1].value === null}`);
+    check("with nothing recorded only our override is removed", Boolean(noRecord[0].action === "clear" && noRecord[0].value === "%command% -dx12"));
+    check("leaving them alone is always on offer, and changes nothing", Boolean(noRecord[noRecord.length - 1].action === "keep" &&
+      noRecord[noRecord.length - 1].value === null));
     // Steam will not report launch options on every client build, and leaning
     // on that one getter is what made the first version of this dialog inert:
     // it offered nothing, so removing OptiScaler left its own override behind.
     // Unknown values are left unchanged; removal must not guess at user options.
     const blind = lo.launchChoices({ current: null, recorded: null, filename: "dxgi.dll" });
-    console.log(`  an unreadable field is left unchanged: ${
-      blind.map((c) => c.action).join(",") === "keep" && blind[0].value === null}`);
-    console.log(`  but a record still answers it: ${
-      lo.launchChoices({ current: null, recorded: "mangohud %command%", filename: "dxgi.dll" })[0]
-        .action === "restore"}`);
+    check("an unreadable field is left unchanged", Boolean(blind.map((c) => c.action).join(",") === "keep" && blind[0].value === null));
+    check("but a record still answers it", Boolean(lo.launchChoices({ current: null, recorded: "mangohud %command%", filename: "dxgi.dll" })[0]
+        .action === "restore"));
     // Somebody else's launch options, no override of ours in them.
-    console.log(`  a field with none of our override in it is not touched: ${
-      lo.launchChoices({ current: "mangohud %command%", recorded: null, filename: "dxgi.dll" })
-        .map((c) => c.action).join(",") === "keep"}`);
-    console.log(`  a game with no launch options has nothing to ask: ${
-      !lo.hasLaunchQuestion("1091500", { current: "", recorded: "", filename: "dxgi.dll" })}`);
-    console.log(`  and neither has a game Steam does not own: ${
-      !lo.hasLaunchQuestion(null, { current: ours, recorded: "", filename: "dxgi.dll" })}`);
+    check("a field with none of our override in it is not touched", Boolean(lo.launchChoices({ current: "mangohud %command%", recorded: null, filename: "dxgi.dll" })
+        .map((c) => c.action).join(",") === "keep"));
+    check("a game with no launch options has nothing to ask", Boolean(!lo.hasLaunchQuestion("1091500", { current: "", recorded: "", filename: "dxgi.dll" })));
+    check("and neither has a game Steam does not own", Boolean(!lo.hasLaunchQuestion(null, { current: ours, recorded: "", filename: "dxgi.dll" })));
     // A remembered answer that no longer applies must not be forced through.
-    console.log(`  a remembered choice that no longer applies falls back: ${
-      lo.resolveChoice(wasEmpty, "restore")?.action === "clear" &&
-      lo.resolveChoice(noRecord, "keep")?.action === "keep"}`);
+    check("a remembered choice that no longer applies falls back", Boolean(lo.resolveChoice(wasEmpty, "restore")?.action === "clear" &&
+      lo.resolveChoice(noRecord, "keep")?.action === "keep"));
     // A game Steam does not own has no choices at all, and asking for one back
     // must not be a crash on the way to the dialog.
-    console.log(`  nothing to choose between resolves to nothing: ${
-      lo.resolveChoice([], "restore") === undefined}`);
+    check("nothing to choose between resolves to nothing", Boolean(lo.resolveChoice([], "restore") === undefined));
 
     // A value just accepted by Steam wins over the config-file fallback until
     // that source catches up; otherwise a remounted Setup panel can flip back
@@ -1468,11 +1496,9 @@ async function render(name: string, element: React.ReactElement) {
       },
     };
     setLaunchOptions(600000, 'gamescope --mangoapp %command%');
-    console.log(`  a recent Steam setter beats a stale read: ${
-      await currentLaunchOptions("600000") === "gamescope --mangoapp %command%"}`);
+    check("a recent Steam setter beats a stale read", Boolean(await currentLaunchOptions("600000") === "gamescope --mangoapp %command%"));
     steamSeen = 'gamescope --mangoapp %command%';
-    console.log(`  the recent value retires once Steam agrees: ${
-      await currentLaunchOptions("600000") === "gamescope --mangoapp %command%"}`);
+    check("the recent value retires once Steam agrees", Boolean(await currentLaunchOptions("600000") === "gamescope --mangoapp %command%"));
     (globalThis as any).SteamClient = undefined;
 
     // -- the dialog itself ---------------------------------------------------
@@ -1494,16 +1520,12 @@ async function render(name: string, element: React.ReactElement) {
       />
     );
     const promptText = prompt.host.textContent!;
-    console.log(`  removing still says what happens to the files: ${
-      promptText.includes("2 files it set aside")}`);
-    console.log(`  and now asks about the launch options: ${
-      findAll(prompt.host, '[data-mock="DropdownItem"][data-label="Steam launch options"]')
-        .length === 1}`);
-    console.log(`  naming what will be put back: ${
-      promptText.includes("gamemoderun %command%")}`);
-    console.log(`  with a way to stop being asked: ${
-      findAll(prompt.host, '[data-mock="ToggleField"][data-label="Remember my choice"]')
-        .length === 1}`);
+    check("removing still says what happens to the files", Boolean(promptText.includes("2 files it set aside")));
+    check("and now asks about the launch options", Boolean(findAll(prompt.host, '[data-mock="DropdownItem"][data-label="Steam launch options"]')
+        .length === 1));
+    check("naming what will be put back", Boolean(promptText.includes("gamemoderun %command%")));
+    check("with a way to stop being asked", Boolean(findAll(prompt.host, '[data-mock="ToggleField"][data-label="Remember my choice"]')
+        .length === 1));
     // Picking one has to be visible on the control and change what the dialog
     // explains, or the dropdown is decoration.
     await act(async () => {
@@ -1512,9 +1534,8 @@ async function render(name: string, element: React.ReactElement) {
     await settle();
     const picked = findAll(
       prompt.host, '[data-mock="DropdownItem"][data-label="Steam launch options"]')[0];
-    console.log(`  picking one is reflected back: ${
-      picked.getAttribute("data-selected") === "keep" &&
-      prompt.host.textContent!.includes("Steam keeps passing")}`);
+    check("picking one is reflected back", Boolean(picked.getAttribute("data-selected") === "keep" &&
+      prompt.host.textContent!.includes("Steam keeps passing")));
 
     // A remembered answer is shown rather than applied invisibly, and the
     // question is not asked again.
@@ -1530,11 +1551,9 @@ async function render(name: string, element: React.ReactElement) {
         onConfirm={() => {}}
       />
     );
-    console.log(`  a remembered answer replaces the question: ${
-      findAll(remembered.host, '[data-mock="DropdownItem"]').length === 0 &&
-      remembered.host.textContent!.includes("asked to be remembered")}`);
-    console.log(`  and says where to take it back: ${
-      remembered.host.textContent!.includes("Settings")}`);
+    check("a remembered answer replaces the question", Boolean(findAll(remembered.host, '[data-mock="DropdownItem"]').length === 0 &&
+      remembered.host.textContent!.includes("asked to be remembered")));
+    check("and says where to take it back", Boolean(remembered.host.textContent!.includes("Settings")));
 
     // Nothing to decide: the dialog says so rather than showing an empty control.
     const nothing = await render(
@@ -1542,9 +1561,8 @@ async function render(name: string, element: React.ReactElement) {
       <RemovePrompt gameName="Test" filename="dxgi.dll" backedUp={0} launch={null}
         remembered={null} canRemember onConfirm={() => {}} />
     );
-    console.log(`  a game with none says so: ${
-      findAll(nothing.host, '[data-mock="DropdownItem"]').length === 0 &&
-      nothing.host.textContent!.includes("no launch options")}`);
+    check("a game with none says so", Boolean(findAll(nothing.host, '[data-mock="DropdownItem"]').length === 0 &&
+      nothing.host.textContent!.includes("no launch options")));
   }
 
   // -- PBZ identity keeps ordinary setup on the executable folder ----------
@@ -1598,17 +1616,15 @@ async function render(name: string, element: React.ReactElement) {
     await settle(80);
     const renamedSetup = findAll(renamed.host, '[data-mock="DialogButton"]')
       .find((node) => node.textContent?.includes("Do all three")) as HTMLElement | undefined;
-    console.log(`  an explicit wiki identity keeps normal guided setup available for a renamed shortcut: ${
-      Boolean(renamedSetup) && renamedSetup?.getAttribute("data-disabled") !== "true" &&
-      !renamed.host.textContent!.includes("Choose the required game folder before setup")}`);
+    check("an explicit wiki identity keeps normal guided setup available for a renamed shortcut", Boolean(Boolean(renamedSetup) && renamedSetup?.getAttribute("data-disabled") !== "true" &&
+      !renamed.host.textContent!.includes("Choose the required game folder before setup")));
     const renamedSetupText = renamed.host.textContent!;
-    console.log(`  PBZ Setup keeps its general wiki requirements without experiment or LSFG instructions: ${
-      renamedSetupText.includes("OptiScaler 0.9.5 or newer") &&
+    check("PBZ Setup keeps its general wiki requirements without experiment or LSFG instructions", Boolean(renamedSetupText.includes("OptiScaler 0.9.5 or newer") &&
       renamedSetupText.includes("PBZ/platform/steam") &&
       renamedSetupText.includes("100%") &&
       !renamedSetupText.toLowerCase().includes("experiment") &&
       !renamedSetupText.toUpperCase().includes("LSFG") &&
-      !renamedSetupText.toLowerCase().includes("frame generation off")}`);
+      !renamedSetupText.toLowerCase().includes("frame generation off")));
     await act(async () => renamed.root.unmount());
 
     fixtures.get_game = { ...fixtures.get_game,
@@ -1616,16 +1632,13 @@ async function render(name: string, element: React.ReactElement) {
     const installedPbz = await render("GameDetail (installed PBZ general Setup)",
       <GameDetail gamePath={shortcutPath} gameName="My shortcut" appid="1091500"
         status={fixtures.get_status} runningGame={null} onBack={() => {}} />);
-    await act(async () => {
-      (findAll(installedPbz.host, '[data-tab="install"]')[0] as HTMLElement).click();
-    });
+    await openTab(installedPbz.host, "install");
     await settle(80);
     const installedPbzText = installedPbz.host.textContent!;
-    console.log(`  installed PBZ Setup retains the wiki requirements without the old personal action: ${
-      installedPbzText.includes("PBZ/platform/steam") && installedPbzText.includes("100%") &&
+    check("installed PBZ Setup retains the wiki requirements without the old personal action", Boolean(installedPbzText.includes("PBZ/platform/steam") && installedPbzText.includes("100%") &&
       !installedPbzText.toLowerCase().includes("experiment") &&
       !installedPbzText.toUpperCase().includes("LSFG") &&
-      !installedPbzText.toLowerCase().includes("frame generation off")}`);
+      !installedPbzText.toLowerCase().includes("frame generation off")));
     await act(async () => installedPbz.root.unmount());
     fixtures.get_game = { ...fixtures.get_game,
       install: { ...fixtures.get_game.install, installed: false } };
@@ -1642,9 +1655,8 @@ async function render(name: string, element: React.ReactElement) {
     await settle(80);
     const missingSetup = findAll(missingExe.host, '[data-mock="DialogButton"]')
       .find((node) => node.textContent?.includes("Do all three")) as HTMLElement | undefined;
-    console.log(`  a missing main executable blocks regular guided setup: ${
-      missingSetup?.getAttribute("data-disabled") === "true" &&
-      missingExe.host.textContent!.includes("Choose the required game folder before setup")}`);
+    check("a missing main executable blocks regular guided setup", Boolean(missingSetup?.getAttribute("data-disabled") === "true" &&
+      missingExe.host.textContent!.includes("Choose the required game folder before setup")));
     await act(async () => missingExe.root.unmount());
 
     fixtures.get_auto_plan = previousPlan;
@@ -1656,9 +1668,8 @@ async function render(name: string, element: React.ReactElement) {
     await settle(80);
     const ordinarySetup = findAll(ordinary.host, '[data-mock="DialogButton"]')
       .find((node) => node.textContent?.includes("Do all three")) as HTMLElement | undefined;
-    console.log(`  an ordinary game keeps the regular setup path without a PBZ folder requirement: ${
-      Boolean(ordinarySetup) && ordinarySetup?.getAttribute("data-disabled") !== "true" &&
-      !ordinary.host.textContent!.includes("PBZ/platform/steam")}`);
+    check("an ordinary game keeps the regular setup path without a PBZ folder requirement", Boolean(Boolean(ordinarySetup) && ordinarySetup?.getAttribute("data-disabled") !== "true" &&
+      !ordinary.host.textContent!.includes("PBZ/platform/steam")));
     await act(async () => ordinary.root.unmount());
 
     fixtures.get_auto_plan = {
@@ -1680,9 +1691,8 @@ async function render(name: string, element: React.ReactElement) {
     await settle(80);
     const fuzzySetup = findAll(fuzzy.host, '[data-mock="DialogButton"]')
       .find((node) => node.textContent?.includes("Do all three")) as HTMLElement | undefined;
-    console.log(`  an unconfirmed fuzzy wiki match does not impose the PBZ target rule: ${
-      Boolean(fuzzySetup) && fuzzySetup?.getAttribute("data-disabled") !== "true" &&
-      !fuzzy.host.textContent!.includes("Choose the required game folder before setup")}`);
+    check("an unconfirmed fuzzy wiki match does not impose the PBZ target rule", Boolean(Boolean(fuzzySetup) && fuzzySetup?.getAttribute("data-disabled") !== "true" &&
+      !fuzzy.host.textContent!.includes("Choose the required game folder before setup")));
     await act(async () => fuzzy.root.unmount());
 
     const wrongPath = "/games/pinned-wrong-folder/ProjectPBZ/Binaries/Win64";
@@ -1705,14 +1715,11 @@ async function render(name: string, element: React.ReactElement) {
       <GameDetail gamePath="/games/pinned-wrong-folder" gameName="My shortcut" appid="1091500"
         status={fixtures.get_status} runningGame={null} onBack={() => {}} />);
     await settle(80);
-    await act(async () => {
-      (findAll(wrongSaved.host, '[data-tab="install"]')[0] as HTMLElement).click();
-    });
+    await openTab(wrongSaved.host, "install");
     await settle(80);
     const reapply = findAll(wrongSaved.host, '[data-mock="DialogButton"]')
       .find((node) => node.textContent?.trim() === "Set up again") as HTMLElement | undefined;
-    const autoTab = findAll(wrongSaved.host, '[data-tab="basic"]')[0] as HTMLElement | undefined;
-    await act(async () => autoTab?.click());
+    await openTab(wrongSaved.host, "basic");
     await settle(80);
     const automatic = findAll(wrongSaved.host, '[data-mock="ToggleField"][data-label="Automatic"]')[0];
     const previousApply = fixtures.apply_auto_settings;
@@ -1725,11 +1732,10 @@ async function render(name: string, element: React.ReactElement) {
       (findAll(automatic, "[data-toggle]")[0] as HTMLElement).click();
     });
     await settle(80);
-    console.log(`  a saved wrong folder blocks wiki re-apply and Automatic writes: ${
-      reapply?.getAttribute("data-disabled") === "true" &&
+    check("a saved wrong folder blocks wiki re-apply and Automatic writes", Boolean(reapply?.getAttribute("data-disabled") === "true" &&
       automatic?.getAttribute("data-disabled") === "true" &&
       autoApplyCalls === 0 &&
-      findAll(automatic, "[data-toggle]")[0]?.getAttribute("data-checked") === "false"}`);
+      findAll(automatic, "[data-toggle]")[0]?.getAttribute("data-checked") === "false"));
     fixtures.apply_auto_settings = previousApply;
     await act(async () => wrongSaved.root.unmount());
 
@@ -1753,19 +1759,20 @@ async function render(name: string, element: React.ReactElement) {
     const { InstallPanel } = await import("../src/components/InstallPanel");
     const pendingManual = await render("InstallPanel (saved wrong folder before wiki lookup)",
       <InstallPanel detail={fixtures.get_game} status={fixtures.get_status} appid="1091500"
-        live={fixtures.get_live_status} onChanged={async () => {}} />);
+        live={fixtures.get_live_status} running={false} onChanged={async () => {}} />);
     const reinstall = findAll(pendingManual.host, '[data-mock="ButtonItem"]')
       .find((node) => node.textContent?.includes("Reinstall as")) as HTMLButtonElement | undefined;
-    console.log(`  a saved wrong folder blocks manual reinstall before the wiki lookup returns: ${
-      reinstall?.getAttribute("data-disabled") === "true"}`);
+    check("a saved wrong folder blocks manual reinstall before the wiki lookup returns",
+      reinstall?.getAttribute("data-disabled") === "true");
     await act(async () => pendingManual.root.unmount());
     const pendingDetail = await render("GameDetail (saved wrong folder while wiki lookup is pending)",
       <GameDetail gamePath={pendingPath} gameName="My shortcut" appid="1091500"
         status={fixtures.get_status} runningGame={null} onBack={() => {}} />);
+    await openTab(pendingDetail.host, "install");
     const removeWrong = findAll(pendingDetail.host, '[data-mock="DialogButton"]')
       .find((node) => node.textContent?.trim() === "Remove") as HTMLButtonElement | undefined;
-    console.log(`  an existing install remains removable during the pending wiki lookup: ${
-      Boolean(removeWrong) && removeWrong?.getAttribute("data-disabled") !== "true"}`);
+    check("an existing install remains removable during the pending wiki lookup",
+      Boolean(removeWrong) && removeWrong?.getAttribute("data-disabled") !== "true");
     await act(async () => pendingDetail.root.unmount());
     await act(async () => { for (const resolve of pendingAnswers) resolve(previousPlan); });
     fixtures.get_game = previousGame;
@@ -1801,39 +1808,46 @@ async function render(name: string, element: React.ReactElement) {
       <GameDetail gamePath="/games/Cyberpunk 2077" gameName="Cyberpunk 2077" appid="1091500"
         status={fixtures.get_status} runningGame={null} onBack={() => {}} />,
     );
+    await openTab(recovery.host, "install");
     const restoreButton = () => findAll(recovery.host, '[data-mock="DialogButton"]')
       .find((node) => node.textContent?.includes("Restore previous install")) as HTMLElement;
 
     fixtures.rollback_install = { ok: true, launch_options: null };
+    shownModals.length = 0;
     await act(async () => restoreButton().click());
+    await respondLatestModal("ok");
     await settle(80);
-    console.log(`  null means unknown, so Steam is left untouched: ${
-      steamWrites.length === 0 && steamNow === "MANGOHUD=1 %command%"}`);
-    console.log(`  and the user gets manual recovery guidance: ${
+    check("null means unknown, so Steam is left untouched",
+      steamWrites.length === 0 && steamNow === "MANGOHUD=1 %command%");
+    check("and the user gets manual recovery guidance",
       recovery.host.textContent!.includes("left unchanged") &&
-      recovery.host.textContent!.includes("restore it manually")}`);
+      recovery.host.textContent!.includes("restore it manually"));
 
     rollbackDetail.install.rollback.metadata.launch_options = "";
     fixtures.rollback_install = { ok: true, launch_options: "" };
+    shownModals.length = 0;
     await act(async () => restoreButton().click());
+    await respondLatestModal("ok");
     await settle(80);
-    console.log(`  an empty string is a captured empty value, so Steam is cleared: ${
-      steamWrites.length === 1 && steamWrites[0] === "" && steamNow === ""}`);
+    check("an empty string is a captured empty value, so Steam is cleared",
+      steamWrites.length === 1 && steamWrites[0] === "" && steamNow === "");
 
     rollbackDetail.install.rollback.metadata.launch_options = "gamemoderun %command%";
     fixtures.rollback_install = { ok: true, launch_options: "gamemoderun %command%" };
     rejectSteamWrite = true;
+    shownModals.length = 0;
     await act(async () => restoreButton().click());
+    await respondLatestModal("ok");
     await settle(80);
-    console.log(`  a rejected Steam setter leaves a retry action visible: ${
-      recovery.host.textContent!.includes("Retry launch options")}`);
+    check("a rejected Steam setter leaves a retry action visible",
+      recovery.host.textContent!.includes("Retry launch options"));
     rejectSteamWrite = false;
     const retryLaunch = findAll(recovery.host, '[data-mock="DialogButton"]')
       .find((node) => node.textContent?.trim() === "Retry launch options") as HTMLElement;
     await act(async () => retryLaunch.click());
     await settle();
-    console.log(`  retry restores the exact saved value: ${
-      steamNow === "gamemoderun %command%" && steamWrites[steamWrites.length - 1] === steamNow}`);
+    check("retry restores the exact saved value",
+      steamNow === "gamemoderun %command%" && steamWrites[steamWrites.length - 1] === steamNow);
     await act(async () => recovery.root.unmount());
     fixtures.get_game = previousGame;
     fixtures.rollback_install = previousRollback;
@@ -1865,24 +1879,20 @@ async function render(name: string, element: React.ReactElement) {
       <GameDetail gamePath="/games/Cyberpunk 2077" gameName="Cyberpunk 2077" appid="1091500"
         status={fixtures.get_status} runningGame={null} onBack={() => {}} />);
     const downText = down.host.textContent!;
-    console.log(`  a download failure is not called a missing entry: ${
-      downText.includes("could not be downloaded") &&
-      !downText.includes("No wiki entry matched this game")}`);
-    console.log(`  the actual error is printed, not a generic one: ${
-      downText.includes("Network is unreachable")}`);
-    console.log(`  and it says the two are not the same thing: ${
-      downText.includes("not the same as your game being missing")}`);
-    console.log(`  there is something to press about it: ${
-      downText.includes("Try again")}`);
+    check("a download failure is not called a missing entry", Boolean(downText.includes("could not be downloaded") &&
+      !downText.includes("No wiki entry matched this game")));
+    check("the actual error is printed, not a generic one", Boolean(downText.includes("Network is unreachable")));
+    check("and it says the two are not the same thing", Boolean(downText.includes("not the same as your game being missing")));
+    check("there is something to press about it", Boolean(downText.includes("Try again")));
     // The same distinction after the install, where the row used to be a
     // permanent "no wiki entry matched this game".
     fixtures.get_game = detail;
     const downInstalled = await render("GameDetail (installed, wiki unreachable)",
       <GameDetail gamePath="/games/Cyberpunk 2077" gameName="Cyberpunk 2077" appid="1091500"
         status={fixtures.get_status} runningGame={null} onBack={() => {}} />);
-    console.log(`  an installed game says it too: ${
-      downInstalled.host.textContent!.includes("could not be downloaded") &&
-      !downInstalled.host.textContent!.includes("No wiki entry matched this game")}`);
+    await openTab(downInstalled.host, "install");
+    check("an installed game says it too", Boolean(downInstalled.host.textContent!.includes("could not be downloaded") &&
+      !downInstalled.host.textContent!.includes("No wiki entry matched this game")));
 
     // A list that downloaded and simply does not have this game is unchanged:
     // that is the ordinary case and nothing is wrong.
@@ -1895,9 +1905,9 @@ async function render(name: string, element: React.ReactElement) {
     const miss = await render("GameDetail (genuine miss)",
       <GameDetail gamePath="/games/Cyberpunk 2077" gameName="Cyberpunk 2077" appid="1091500"
         status={fixtures.get_status} runningGame={null} onBack={() => {}} />);
-    console.log(`  a game genuinely not on the list still says so: ${
-      miss.host.textContent!.includes("No wiki entry matched this game") &&
-      !miss.host.textContent!.includes("could not be downloaded")}`);
+    await openTab(miss.host, "install");
+    check("a game genuinely not on the list still says so", Boolean(miss.host.textContent!.includes("No wiki entry matched this game") &&
+      !miss.host.textContent!.includes("could not be downloaded")));
     fixtures.get_auto_plan = matched;
   }
 
@@ -1927,17 +1937,14 @@ async function render(name: string, element: React.ReactElement) {
     const swr = await render("GameDetail (stale list)",
       <GameDetail gamePath="/games/Cyberpunk 2077" gameName="Cyberpunk 2077" appid="1091500"
         status={fixtures.get_status} runningGame={null} onBack={() => {}} />);
-    console.log(`  a stale list still answers, from cache: ${
-      swr.host.textContent!.includes("old-revision")}`);
+    check("a stale list still answers, from cache", Boolean(swr.host.textContent!.includes("old-revision")));
 
     // Nothing new: the watch ends and the page is left alone.
     fixtures.wiki_status = { ...fixtures.wiki_status, revalidating: false };
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 2600));
-    });
+    await clock.advance(2600);
     await settle();
-    console.log(`  a refresh that brought nothing redraws nothing: ${
-      swr.host.textContent!.includes("old-revision")}`);
+    check("a refresh that brought nothing redraws nothing",
+      swr.host.textContent!.includes("old-revision"));
 
     // Something new: the fingerprint moves and the plan is rebuilt from it.
     fixtures.get_auto_plan = stale("new-revision");
@@ -1950,12 +1957,10 @@ async function render(name: string, element: React.ReactElement) {
     // First paint is the cached answer; the watch then sees a new fingerprint.
     fixtures.get_auto_plan = stale("newer-still");
     fixtures.wiki_status = { ...fixtures.wiki_status, revision: "newer-still" };
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 2600));
-    });
+    await clock.advance(2600);
     await settle();
-    console.log(`  a refresh that brought something rebuilds the plan: ${
-      fresh.host.textContent!.includes("newer-still")}`);
+    check("a refresh that brought something rebuilds the plan",
+      fresh.host.textContent!.includes("newer-still"));
 
     fixtures.get_auto_plan = matched;
     fixtures.get_game = detail;
@@ -1991,17 +1996,14 @@ async function render(name: string, element: React.ReactElement) {
       <GameDetail gamePath="/games/Cyberpunk 2077" gameName="Cyberpunk 2077" appid="1091500"
         status={fixtures.get_status} runningGame={null} onBack={() => {}} />);
     const pendingText = pending.host.textContent!;
-    console.log(`  it answers from the list row instead of waiting: ${
-      pendingText.includes("can be set up automatically") &&
-      !pendingText.includes("Checking the OptiScaler wiki")}`);
-    console.log(`  and says the fuller answer is still coming: ${
-      pendingText.includes("Still reading this game's own entry")}`);
+    check("it answers from the list row instead of waiting", Boolean(pendingText.includes("can be set up automatically") &&
+      !pendingText.includes("Checking the OptiScaler wiki")));
+    check("and says the fuller answer is still coming", Boolean(pendingText.includes("Still reading this game's own entry")));
     // The page is what names the filename to install as, so acting in that
     // window would install under the default name when the entry says
     // otherwise. The wait is on the button alone, and only while the watch is
     // still running — never once it has given up.
-    console.log(`  the install button waits for it, and says why: ${
-      pendingText.includes("Reading this game's entry…")}`);
+    check("the install button waits for it, and says why", Boolean(pendingText.includes("Reading this game's entry…")));
 
     // When the page lands the revision moves, and the answer is rebuilt.
     fixtures.get_auto_plan = {
@@ -2014,16 +2016,12 @@ async function render(name: string, element: React.ReactElement) {
       plan: { ...matched.plan, filename: "winmm.dll" },
     };
     fixtures.wiki_status = { ...fixtures.wiki_status, revision: "list.2" };
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 2600));
-    });
+    await clock.advance(2600);
     await settle();
-    console.log(`  the page arriving replaces it with the fuller one: ${
-      pending.host.textContent!.includes("winmm.dll") &&
-      !pending.host.textContent!.includes("Still reading this game's own entry")}`);
-    console.log(`  and releases the button: ${
-      !pending.host.textContent!.includes("Reading this game's entry…") &&
-      pending.host.textContent!.includes("Do all three")}`);
+    check("the page arriving replaces it with the fuller one", Boolean(pending.host.textContent!.includes("winmm.dll") &&
+      !pending.host.textContent!.includes("Still reading this game's own entry")));
+    check("and releases the button", Boolean(!pending.host.textContent!.includes("Reading this game's entry…") &&
+      pending.host.textContent!.includes("Do all three")));
 
     fixtures.get_auto_plan = matched;
     fixtures.get_game = detail;
@@ -2055,15 +2053,11 @@ async function render(name: string, element: React.ReactElement) {
     const never = await render("GameDetail (page never arrives)",
       <GameDetail gamePath="/games/Cyberpunk 2077" gameName="Cyberpunk 2077" appid="1091500"
         status={fixtures.get_status} runningGame={null} onBack={() => {}} />);
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 2600));
-    });
+    await clock.advance(2600);
     await settle();
     const neverText = never.host.textContent!;
-    console.log(`  it stops claiming to still be reading: ${
-      !neverText.includes("Still reading this game's own entry")}`);
-    console.log(`  and lets the install go ahead with what it has: ${
-      !neverText.includes("Reading this game's entry…") && neverText.includes("Do all three")}`);
+    check("it stops claiming to still be reading", Boolean(!neverText.includes("Still reading this game's own entry")));
+    check("and lets the install go ahead with what it has", Boolean(!neverText.includes("Reading this game's entry…") && neverText.includes("Do all three")));
     fixtures.get_auto_plan = matched;
     fixtures.get_game = detail;
     fixtures.wiki_status = { ...fixtures.wiki_status, revision: "aaaaaaaaaaaa" };
@@ -2099,14 +2093,11 @@ async function render(name: string, element: React.ReactElement) {
       <GameDetail gamePath="/games/Cyberpunk 2077" gameName="Cyberpunk 2077" appid="1091500"
         status={fixtures.get_status} runningGame={null} onBack={() => {}} />);
     const afterFirst = asked;
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 9000));
-    });
+    await clock.advance(9000);
     await settle();
-    console.log(`  it reloads once, not once every two seconds: ${
-      asked - afterFirst <= 1} (${asked - afterFirst} reloads in 9s)`);
-    console.log(`  and the panel is still showing the plan, not a spinner: ${
-      !loop.host.textContent!.includes("Checking the OptiScaler wiki")}`);
+    check("it reloads once, not once every two seconds",
+      asked - afterFirst <= 1, `${asked - afterFirst} reloads in 9s`);
+    check("and the panel is still showing the plan, not a spinner", Boolean(!loop.host.textContent!.includes("Checking the OptiScaler wiki")));
     fixtures.get_auto_plan = matched;
     fixtures.get_game = detail;
     fixtures.wiki_status = {
@@ -2123,15 +2114,11 @@ async function render(name: string, element: React.ReactElement) {
     const stuck = await render("GameDetail (backend hangs)",
       <GameDetail gamePath="/games/Cyberpunk 2077" gameName="Cyberpunk 2077" appid="1091500"
         status={fixtures.get_status} runningGame={null} onBack={() => {}} />);
-    console.log(`  it says it is checking, at first: ${
-      stuck.host.textContent!.includes("Checking the OptiScaler wiki")}`);
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 8600));
-    });
+    check("it says it is checking, at first", Boolean(stuck.host.textContent!.includes("Checking the OptiScaler wiki")));
+    await clock.advance(8600);
     await settle();
-    console.log(`  but gives up showing the wait rather than hanging on it: ${
-      !stuck.host.textContent!.includes("Checking the OptiScaler wiki") &&
-      stuck.host.textContent!.includes("Manual setup")}`);
+    check("but gives up showing the wait rather than hanging on it", Boolean(!stuck.host.textContent!.includes("Checking the OptiScaler wiki") &&
+      stuck.host.textContent!.includes("Manual setup")));
     fixtures.get_auto_plan = matched;
     fixtures.get_game = detail;
   }
@@ -2144,31 +2131,25 @@ async function render(name: string, element: React.ReactElement) {
     const { takePendingTarget } = await import("../src/navigation");
     takePendingTarget();
     const settings = await render("ManagerPage (settings)", <ManagerPage />);
-    const tabIds = findAll(settings.host, "[data-tab]").map((n) => n.getAttribute("data-tab"));
-    console.log(`  the main page has a settings tab: ${tabIds.includes("settings")}`);
+    const tabIds = findAll(settings.host, "[data-tab-button]").map((n) => n.getAttribute("data-tab-button"));
+    check("the main page has a settings tab", tabIds.includes("settings"));
+    await openTab(settings.host, "settings");
     const settingsBody = findAll(settings.host, '[data-tab="settings"]')[0];
     const settingsText = settingsBody.textContent!;
-    console.log(`  it carries the switch that stops answers being kept: ${
-      findAll(settingsBody, '[data-mock="ToggleField"][data-label="Remember my choices"]')
-        .length === 1}`);
-    console.log(`  it lists what is remembered, in words: ${
-      settingsText.includes("when OptiScaler is removed") &&
-      settingsText.includes("Put back what was there before the install")}`);
-    console.log(`  each one can be put back to a question: ${
-      findAll(settingsBody, '[data-forget="remove_launch_options"]').length === 1}`);
-    console.log(`  unanswered questions are not listed: ${
-      findAll(settingsBody, '[data-forget="launch_options"]').length === 0}`);
-    console.log(`  and the bundled OptiScaler version is stated: ${
-      settingsText.includes("0.9.4")}`);
+    check("it carries the switch that stops answers being kept", Boolean(findAll(settingsBody, '[data-mock="ToggleField"][data-label="Remember my choices"]')
+        .length === 1));
+    check("it lists what is remembered, in words", Boolean(settingsText.includes("when OptiScaler is removed") &&
+      settingsText.includes("Put back what was there before the install")));
+    check("each one can be put back to a question", Boolean(findAll(settingsBody, '[data-forget="remove_launch_options"]').length === 1));
+    check("unanswered questions are not listed", Boolean(findAll(settingsBody, '[data-forget="launch_options"]').length === 0));
+    check("and the bundled OptiScaler version is stated", Boolean(settingsText.includes("0.9.4")));
     // Where the wiki's actual state is readable without opening a log.
-    console.log(`  it reports the compatibility list: ${
-      settingsText.includes("685 games on the list")}`);
-    console.log(`  and offers to download it again: ${
-      settingsText.includes("Download it again")}`);
+    check("it reports the compatibility list", Boolean(settingsText.includes("685 games on the list")));
+    check("and offers to download it again", Boolean(settingsText.includes("Download it again")));
     // Available and current are different questions once answers come from
     // cache: a list can be perfectly usable and months old, and a refresh can
     // be failing behind it without anything breaking.
-    console.log(`  it says how old the list is: ${settingsText.includes("hours ago")}`);
+    check("it says how old the list is", Boolean(settingsText.includes("hours ago")));
   }
 
   {
@@ -2179,30 +2160,37 @@ async function render(name: string, element: React.ReactElement) {
       error: "URLError: <urlopen error [Errno 101] Network is unreachable>",
     };
     const offlineSettings = await render("ManagerPage (offline wiki)", <ManagerPage />);
+    await openTab(offlineSettings.host, "settings");
     const offlineText = findAll(offlineSettings.host, '[data-tab="settings"]')[0].textContent!;
-    console.log(`  a Deck that never downloaded one uses the bundled copy: ${
-      offlineText.includes("bundled with the plugin")}`);
-    console.log(`  and says the refresh behind it failed, without calling it broken: ${
-      offlineText.includes("last refresh did not go through") &&
+    check("a Deck that never downloaded one uses the bundled copy", Boolean(offlineText.includes("bundled with the plugin")));
+    check("and says the refresh behind it failed, without calling it broken", Boolean(offlineText.includes("last refresh did not go through") &&
       offlineText.includes("Network is unreachable") &&
-      offlineText.includes("685 games on the list")}`);
+      offlineText.includes("685 games on the list")));
     fixtures.wiki_status = {
       ...fixtures.wiki_status, source: "cache", age: 3600, error: null,
     };
     // It is plugin-wide, so it must not turn up in the sidebar.
-    console.log(`  the quick panel does not carry it: ${
-      !findAll(qp.host, "[data-tab]").some((n) => n.getAttribute("data-tab") === "settings")}`);
+    check("the quick panel does not carry it", Boolean(!findAll(qp.host, "[data-tab]").some((n) => n.getAttribute("data-tab") === "settings")));
   }
 
   console.log("\n=== backend calls made ===");
   console.log("  " + Array.from(new Set(calls)).join(", "));
 
-  const real = errors.filter((e) => !e.includes("not wrapped in act"));
-  console.log(`\n=== React errors/warnings: ${real.length} ===`);
-  real.slice(0, 12).forEach((e) => console.log("  ! " + e.slice(0, 300)));
+  for (const view of mountedViews) {
+    try {
+      await act(async () => { view.root.unmount(); });
+      view.host.remove();
+    } catch {
+      /* already unmounted */
+    }
+  }
+  clock.restore();
+
+  console.log(`\n=== React errors/warnings: ${errors.length} ===`);
+  errors.slice(0, 12).forEach((e) => console.log("  ! " + e.slice(0, 300)));
   if (behaviorFailures.length) {
     console.log(`\n=== behavior checks failed: ${behaviorFailures.length} ===`);
-    behaviorFailures.forEach((label) => console.log(`  ! ${label}`));
+    behaviorFailures.forEach((label) => console.log("  ! " + label));
   }
-  process.exit(real.length > 0 || behaviorFailures.length > 0 ? 1 : 0);
+  process.exit(errors.length > 0 || behaviorFailures.length > 0 ? 1 : 0);
 })();

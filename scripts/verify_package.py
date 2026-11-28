@@ -53,13 +53,19 @@ async def verify():
  prior=files(target)
  point=await service.create_restore_point(str(target),str(game),options)
  assert point['ok'] and point['available'],point
- experiment=await service.setup_deck_experiment(str(target),str(game))
- assert experiment['ok'],experiment
+ configured=await service.write_config(str(target),[
+  {'section':'FrameGen','key':'Enabled','value':'false'},
+  {'section':'FrameGen','key':'FGInput','value':'nofg'},
+  {'section':'FrameGen','key':'FGOutput','value':'nofg'},
+ ])
+ assert configured['ok'],configured
+ community=await service.set_fsr4_build(str(target),constants.FSR4_STEAM_DECK_BUILD_ID)
+ assert community['ok'],community
  ini=IniFile(target/'OptiScaler.ini')
  assert ini.get('FrameGen','Enabled')=='false'
  assert ini.get('FrameGen','FGInput')==ini.get('FrameGen','FGOutput')=='nofg'
  assert ini.get('FSR','Fsr4ForceEnableInt8')=='1'
- assert fsr4build.identify(target/constants.FFX_UPSCALER_DLL)['id']=='4.1.2-lite-exact-20261105'
+ assert fsr4build.identify(target/constants.FFX_UPSCALER_DLL)['id']=='4.1.2-lite-exact-20261122'
  assert ini.get('FSR','Fsr4Update')=='true'
  assert installer.pe_file_version(target/constants.FFX_UPSCALER_DLL)[:3]==(4,1,1)
  # A stock restore point must not prevent direct fallback to the older build.
@@ -67,7 +73,7 @@ async def verify():
  legacy=await service.set_fsr4_build(str(target),'4.1.1b');assert legacy['ok'],legacy
  assert fsr4build.identify(target/constants.FFX_UPSCALER_DLL)['id']=='4.1.1b'
  assert {key:IniFile(target/'OptiScaler.ini').get('FrameGen',key) for key in framegen}==framegen
- modern=await service.set_fsr4_build(str(target),'4.1.2-lite-exact-20261105');assert modern['ok'],modern
+ modern=await service.set_fsr4_build(str(target),'4.1.2-lite-exact-20261122');assert modern['ok'],modern
  reapplied=await service.apply_auto_settings(str(target),str(game),'Phantom Blade Zero')
  assert reapplied['ok'],reapplied
  assert IniFile(target/'OptiScaler.ini').get('FrameGen','FGInput')=='nofg'
@@ -88,9 +94,10 @@ async def verify():
  removed=await service.uninstall(str(target));assert removed['ok'],removed
  assert files(target)==original,'Remove did not restore original bytes'
  assert not (target/restorepoint.RESTORE_DIR).exists()
- assert service.settings.snapshot_game(str(game))=={'target':None,'auto':None,'experiment':None}
+ snap=service.settings.snapshot_game(str(game))
+ assert snap.get('target') is None and snap.get('auto') is None and snap.get('experiment') is None,snap
  print(json.dumps({'ok':True,'runtime':constants.OPTISCALER_VERSION,'inventory_files':len(provenance['files']),
-  'community':'4.1.2 Lite Exact + legacy 4.1.1b archive and DLL hashes verified','lifecycle':'install/experiment/reapply/stock restore/rollback/Remove',
+  'community':'4.1.2 Lite Exact + legacy 4.1.1b archive and DLL hashes verified','lifecycle':'install/fsr4-build/reapply/stock restore/rollback/Remove',
   'network':'not used','real_game_gpu':'not tested'}))
 asyncio.run(verify())
 '''
@@ -113,6 +120,8 @@ def main():
                         'Decky OptiScaler/defaults/live-build.json'}
             if not required.issubset(names):
                 raise AssertionError('Native bridge or its identity metadata is missing')
+            if 'Decky OptiScaler/py_modules/optiscaler/live_fields.json' in names:
+                raise AssertionError('Unused live_fields.json must not be shipped inside the plugin zip')
             build = json.loads(zf.read('Decky OptiScaler/defaults/live-build.json'))
             profile = json.loads(zf.read('Decky OptiScaler/defaults/live-profile.json'))
             import hashlib

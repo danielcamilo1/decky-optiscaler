@@ -5,7 +5,7 @@ folder. A receipt confirms that the native menu path accepted a configuration re
 Runtime backend, FG state and telemetry are reported independently.
 """
 
-import hashlib
+from collections import OrderedDict
 import json
 import math
 import os
@@ -15,7 +15,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import constants
+from . import constants, fsutil
 
 ASI_NAME = "decky_optiscaler_live.asi"
 PLUGIN_SUBDIR = "plugins"
@@ -176,11 +176,7 @@ def _plugin_root():
 
 
 def _sha256(path):
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as handle:
-        for block in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
+    return fsutil.sha256_file(path)
 
 
 def _read_json(path):
@@ -293,34 +289,6 @@ def asi_current(target_dir, source, plugin_root=None):
         return None
 
 
-def install_plugin_asi(target_dir, source, name, logger=None):
-    """Install an ASI only after checking the live artifact's pinned identity."""
-    if not isinstance(name, str) or not name or name in (".", "..") or "/" in name or "\\" in name:
-        return {"ok": False, "error": f"invalid ASI filename: {name!r}"}
-    source = Path(source)
-    if not source.is_file() or source.is_symlink():
-        return {"ok": False, "error": f"{name} missing at {source}"}
-    if name == ASI_NAME:
-        try:
-            validate_live_source(source)
-        except ValueError as exc:
-            return {"ok": False, "error": str(exc), "supported": False}
-    from .installer import atomic_copy, require_stopped_target
-
-    target = Path(target_dir).resolve()
-    destination = target / PLUGIN_SUBDIR / name
-    require_stopped_target(target)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    atomic_copy(source, destination, target_dir=target)
-    if logger:
-        logger.info("installed %s at %s", name, destination)
-    return {"ok": True, "path": str(destination)}
-
-
-def install_asi(target_dir, source, logger=None):
-    return install_plugin_asi(target_dir, source, ASI_NAME, logger)
-
-
 def remove_asi(target_dir, logger=None, allow_owned_asi=False, owned_paths=()):
     """Remove only the live files a manifest proves this install owns."""
     from .installer import (
@@ -359,12 +327,17 @@ def ini_requirements():
     return [{"section": "Plugins", "key": "LoadAsiPlugins", "value": "true"}]
 
 
+_LOG_LOAD_CACHE_MAX = 64
+_LOG_LOAD_CACHE_LOCK = threading.Lock()
+_LOG_LOAD_CACHE = OrderedDict()
+
+
 def load_enabled(target_dir):
     ini = Path(target_dir) / constants.INI_NAME
     if not ini.is_file():
         return None
     try:
-        text = ini.read_text(encoding="utf-8", errors="replace")
+        text = ini.read_text(encoding="utf-8-sig", errors="replace")
     except OSError:
         return None
     section = None
@@ -383,16 +356,39 @@ def load_enabled(target_dir):
 
 def loaded_by_optiscaler(target_dir):
     log = Path(target_dir) / constants.LOG_NAME
-    if not log.is_file():
+    try:
+        st = log.stat()
+    except OSError:
         return None
+    if not stat.S_ISREG(st.st_mode):
+        return None
+    key = (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+    with _LOG_LOAD_CACHE_LOCK:
+        if key in _LOG_LOAD_CACHE:
+            _LOG_LOAD_CACHE.move_to_end(key)
+            return _LOG_LOAD_CACHE[key]
     try:
         with log.open("r", encoding="utf-8", errors="replace") as handle:
             head = handle.read(400_000)
     except OSError:
         return None
     if ASI_NAME.lower() in head.lower():
-        return True
-    return False if "for *.asi" in head else None
+        result = True
+    else:
+        result = False if "for *.asi" in head else None
+    try:
+        st_after = log.stat()
+        key_after = (st_after.st_dev, st_after.st_ino, st_after.st_size,
+                     st_after.st_mtime_ns, st_after.st_ctime_ns)
+    except OSError:
+        key_after = None
+    if key_after == key:
+        with _LOG_LOAD_CACHE_LOCK:
+            _LOG_LOAD_CACHE[key] = result
+            _LOG_LOAD_CACHE.move_to_end(key)
+            while len(_LOG_LOAD_CACHE) > _LOG_LOAD_CACHE_MAX:
+                _LOG_LOAD_CACHE.popitem(last=False)
+    return result
 
 
 def _parse_status(text):
@@ -585,10 +581,7 @@ def _live_control_preflight(target_dir, source, plugin_root, install_base_ready=
     if legacy:
         return True, False, "Upgrade the legacy live ASI while the game is stopped before sending live changes."
     try:
-        installer._preflight_live_control(
-            target_dir, live_asi=source, plugin_root=plugin_root,
-            reject_command_alias=True,
-        )
+        installer._check_live_command_aliases(target_dir)
     except (OSError, ValueError) as exc:
         # A stopped install can adopt and preserve a single old mailbox alias;
         # the running bridge must not publish a second Wine-equivalent slot.

@@ -19,7 +19,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from pathlib import PurePosixPath
 
-from . import constants, fsr4build, live, schema
+from . import constants, fsr4build, fsutil, live, schema
 from .inifile import IniFile
 from .constants import (
     OPTIPATCHER_NAME,
@@ -115,15 +115,7 @@ def _payload_nested_names(payload_root=None):
 
 def _relative_name(name):
     """Normalize a manifest or transaction path without accepting traversal."""
-    if not isinstance(name, str) or not name or "\\" in name or "\x00" in name:
-        raise ValueError(f"invalid managed path: {name!r}")
-    path = PurePosixPath(name)
-    if path.is_absolute() or any(part in ("", ".", "..") for part in path.parts):
-        raise ValueError(f"invalid managed path: {name!r}")
-    normalized = path.as_posix()
-    if normalized != name:
-        raise ValueError(f"invalid managed path: {name!r}")
-    return normalized
+    return fsutil.relative_name(name, label="managed path")
 
 
 def _validate_owned_name(name, directory=False):
@@ -151,25 +143,7 @@ def _legacy_backup_target(name):
 
 def _safe_path(target, name):
     """Return a target-contained path, refusing symlinked parent components."""
-    normalized = _relative_name(name)
-    root = Path(target).resolve()
-    path = root
-    for part in PurePosixPath(normalized).parts[:-1]:
-        path = path / part
-        try:
-            mode = path.lstat().st_mode
-        except FileNotFoundError:
-            continue
-        if stat.S_ISLNK(mode):
-            raise ValueError(f"managed path crosses a symlink: {normalized}")
-        if not stat.S_ISDIR(mode):
-            raise ValueError(f"managed path parent is not a directory: {normalized}")
-    result = root.joinpath(*PurePosixPath(normalized).parts)
-    try:
-        result.resolve(strict=False).relative_to(root)
-    except ValueError as exc:
-        raise ValueError(f"managed path leaves install target: {normalized}") from exc
-    return result
+    return fsutil.safe_path(target, name, label="managed path")
 
 
 def _install_relative_path(target_dir, destination):
@@ -197,23 +171,11 @@ def _install_relative_path(target_dir, destination):
 
 def _remove_path(path):
     """Remove a path itself without following a final symlink."""
-    path = Path(path)
-    try:
-        mode = path.lstat().st_mode
-    except FileNotFoundError:
-        return False
-    if stat.S_ISLNK(mode) or not stat.S_ISDIR(mode):
-        path.unlink()
-    else:
-        shutil.rmtree(path)
-    return True
+    return fsutil.remove_path(path)
 
 
 def _existing_mode(path):
-    try:
-        return Path(path).lstat().st_mode
-    except FileNotFoundError:
-        return None
+    return fsutil.existing_mode(path)
 
 
 def _require_path_type(path, directory=False, allow_missing=True):
@@ -378,13 +340,7 @@ def _atomic_json(path, data):
         os.replace(temporary, path)
         return
 
-    fd, temporary = tempfile.mkstemp(prefix=".decky-optiscaler-manifest-", dir=path.parent)
-    os.close(fd)
-    try:
-        Path(temporary).write_text(json.dumps(data, indent=2), encoding="utf-8")
-        os.replace(temporary, path)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
+    fsutil.atomic_json(path, data, indent=2, prefix=".decky-optiscaler-manifest-")
 
 
 def _looks_like_optiscaler(path):
@@ -513,10 +469,16 @@ def _transaction_paths(target, extra_names=(), include_known=True):
                       *live.CONTROL_FILES})
     manifest = read_manifest(target)
     if manifest and include_known:
+        manifest_dirs = manifest.get("dirs", [])
         names.update(manifest.get("files", []))
-        names.update(manifest.get("dirs", []))
-    if manifest and include_known:
+        names.update(manifest_dirs)
         names.update(manifest.get("backups", {}).keys())
+        for directory in LEGACY_PAYLOAD_DIRS:
+            if directory in manifest_dirs:
+                names.update(
+                    nested for nested in LEGACY_PAYLOAD_NESTED_FILES
+                    if nested.startswith(directory + "/")
+                )
     if isinstance(extra_names, str):
         extra_names = (extra_names,)
     for name in extra_names or ():
@@ -1372,6 +1334,8 @@ def detect(target_dir):
         "backup_dir": str(backup_dir(target)),
         "backed_up": [],
         "launch_record": {"recorded": False, "value": ""},
+        "manifest_error": None,
+        "launch_record_error": None,
         "fsr4": {},
         # REFramework, for the RE Engine games that need it. Reported from the
         # folder rather than from the manifest so a copy the user put there
@@ -1383,7 +1347,10 @@ def detect(target_dir):
     if not target.is_dir():
         return result
 
-    result["launch_record"] = read_launch_record(target)
+    try:
+        result["launch_record"] = read_launch_record(target)
+    except ValueError as exc:
+        result["launch_record_error"] = str(exc)
 
     ini = target / INI_NAME
     result["ini_present"] = ini.is_file()
@@ -1403,12 +1370,19 @@ def detect(target_dir):
 
     stash = backup_dir(target)
     if stash.is_dir():
-        result["backed_up"] = sorted(p.name for p in stash.iterdir())
+        try:
+            result["backed_up"] = sorted(p.name for p in stash.iterdir())
+        except OSError:
+            pass
 
     present = [name for name in PROXY_FILENAMES if (target / name).is_file()]
     result["candidates"] = present
 
-    manifest = read_manifest(target)
+    try:
+        manifest = read_manifest(target)
+    except ValueError as exc:
+        manifest = None
+        result["manifest_error"] = str(exc)
     if manifest and manifest.get("filename"):
         name = manifest["filename"]
         if (target / name).is_file():
@@ -1628,6 +1602,9 @@ def atomic_copy(source, destination, target_dir=None):
                 raise ValueError("managed INI transaction cannot replace another game file")
         else:
             require_stopped_target(target)
+    if target_dir is None:
+        fsutil.atomic_copy(source, destination)
+        return
     try:
         mode = destination.lstat().st_mode
     except FileNotFoundError:
@@ -1635,30 +1612,26 @@ def atomic_copy(source, destination, target_dir=None):
     if mode is not None and not stat.S_ISREG(mode):
         raise ValueError(f"refusing to replace non-regular file: {destination}")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    if target_dir is not None:
-        target = Path(target_dir).resolve()
-        state = getattr(_TRANSACTIONS, "targets", {}).get(str(target))
-        if state is None:
-            raise RuntimeError("target copy is not protected by an active transaction")
-        while True:
-            staged = destination.with_name(f"{TRANSACTION_COPY_PREFIX}{uuid.uuid4().hex}")
-            relative_stage = staged.relative_to(target).as_posix()
-            _safe_path(target, relative_stage)
-            if not _path_exists(staged):
-                break
-        _snapshot_into(target, state["journal"], (relative_stage,), state["records"])
-        _persist_transaction(state, target)
-        descriptor = os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        os.close(descriptor)
-        name = str(staged)
-    else:
-        fd, name = tempfile.mkstemp(prefix=".decky-optiscaler-", dir=destination.parent)
-        os.close(fd)
+    target = Path(target_dir).resolve()
+    state = getattr(_TRANSACTIONS, "targets", {}).get(str(target))
+    if state is None:
+        raise RuntimeError("target copy is not protected by an active transaction")
+    while True:
+        staged = destination.with_name(f"{TRANSACTION_COPY_PREFIX}{uuid.uuid4().hex}")
+        relative_stage = staged.relative_to(target).as_posix()
+        _safe_path(target, relative_stage)
+        if not _path_exists(staged):
+            break
+    _snapshot_into(target, state["journal"], (relative_stage,), state["records"])
+    _persist_transaction(state, target)
+    descriptor = os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    os.close(descriptor)
+    name = str(staged)
     try:
         if source.is_symlink() or not source.is_file():
             raise FileNotFoundError(f"copy source is not a regular file: {source}")
         shutil.copy2(source, name)
-        if target_dir is not None and active[str(target)].get("intent") != TRANSACTION_INTENT_MANAGED_INI:
+        if active[str(target)].get("intent") != TRANSACTION_INTENT_MANAGED_INI:
             require_stopped_target(target_dir)
         os.replace(name, destination)
     finally:
@@ -1740,28 +1713,28 @@ def runtime_current(target_dir):
     """Whether the installed proxy bytes match this plugin's pinned runtime."""
     if pending_target_transaction(target_dir):
         return False
-    manifest = read_manifest(target_dir)
+    try:
+        manifest = read_manifest(target_dir)
+    except (ValueError, OSError):
+        return False
     filename = manifest.get("filename") if manifest else None
     if filename not in PROXY_FILENAMES:
         filename = detect(target_dir).get("filename")
     if not filename:
         return False
-    path = _safe_path(target_dir, filename)
+    try:
+        path = _safe_path(target_dir, filename)
+    except (ValueError, OSError):
+        return False
     if path.is_symlink() or not path.is_file():
         return False
     expected = getattr(constants, "RUNTIME_DLL_SHA256", "")
     if not expected:
         return False
-    import hashlib
-
-    digest = hashlib.sha256()
     try:
-        with path.open("rb") as handle:
-            for block in iter(lambda: handle.read(1 << 20), b""):
-                digest.update(block)
+        return fsutil.sha256_file(path) == expected
     except OSError:
         return False
-    return digest.hexdigest() == expected
 
 
 def _replace_fsr4(target, source, recorded, enable_int8=False, fsr4_update="auto"):
@@ -2029,13 +2002,7 @@ def _stash(target, path, logger=None):
 
 
 def _sha256_file(path):
-    import hashlib
-
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as handle:
-        for block in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
+    return fsutil.sha256_file(path)
 
 
 def _casefold_root_child(target, name, description, allow_alias=False):
@@ -2108,6 +2075,18 @@ def _simple_ini_values(path):
                 raise ValueError(f"OptiScaler.ini repeats a load-path setting: {identity[0]}.{identity[1]}")
             values[identity] = value.strip()
     return values
+
+
+def _check_live_command_aliases(target):
+    """Reject noncanonical case-fold aliases for the live command mailbox."""
+    target = Path(target).resolve()
+    for name in (live.CMD_FILE, live.CMD_TEMP_FILE):
+        path = _casefold_root_child(
+            target, name, f"live-control file {name}", allow_alias=False,
+        )
+        mode = _existing_mode(path)
+        if mode is not None and not stat.S_ISREG(mode):
+            raise ValueError(f"Cannot safely inspect live-control path: {path}")
 
 
 def _preflight_live_control(target, ini_path=None, live_asi=None,
@@ -2412,6 +2391,8 @@ def install(target_dir, payload_root, filename=DEFAULT_PROXY, preserve_ini=True,
         from . import restorepoint
 
         point = restorepoint.info(target)
+        if point.get("corrupt"):
+            raise ValueError(point.get("error") or "Existing restore point is corrupt.")
         if not point.get("available"):
             raise ValueError("Create a complete restore point before upgrading this managed install.")
         restorepoint.validate_metadata(point.get("metadata"))

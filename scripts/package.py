@@ -20,7 +20,7 @@ INCLUDE_FILES = ["plugin.json", "package.json", "main.py", "README.md", "LICENSE
                  "docs/phantom-blade-zero.md", "docs/steam-deck-fsr4.md", "docs/live-control.md"]
 INCLUDE_DIRS = ["dist", "py_modules", "bin", "defaults"]
 
-EXCLUDE_NAMES = {"__pycache__", ".DS_Store", "node_modules", ".git"}
+EXCLUDE_NAMES = {"__pycache__", ".DS_Store", "node_modules", ".git", "live_fields.json"}
 EXCLUDE_SUFFIXES = {".pyc", ".pyo", ".map", ".tmp"}
 
 

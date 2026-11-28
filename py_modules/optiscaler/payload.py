@@ -5,7 +5,6 @@ py7zr) cannot read, so extraction is delegated to whichever archiver the system
 provides. SteamOS carries both p7zip and bsdtar.
 """
 
-import hashlib
 import json
 import os
 import stat
@@ -15,6 +14,7 @@ import tempfile
 import time
 from pathlib import Path
 
+from . import fsutil
 from .constants import OPTISCALER_VERSION, PAYLOAD_SHA256
 
 EXTRACTORS = [
@@ -28,7 +28,6 @@ BSDTAR = ["bsdtar", "-xf"]
 
 MARKER = "OptiScaler.dll"
 COMMIT_MARKER = ".decky-optiscaler-payload.json"
-_HASH_CACHE = {}
 _PINNED_FILES = None
 REQUIRED_NESTED_FILES = (
     "D3D12_Optiscaler/D3D12Core.dll",
@@ -136,20 +135,10 @@ def _inventory_state(root):
             return None
         if size <= 0 or size != expected["bytes"]:
             return None
-        # mtime and length alone can survive an in-place replacement on some
-        # filesystems. Include inode/device and ctime so the fast path is only
-        # reused while the file's stat identity remains stable.
-        key = (str(path), stat_result.st_dev, stat_result.st_ino, size,
-               stat_result.st_mtime_ns, stat_result.st_ctime_ns)
-        digest = _HASH_CACHE.get(key)
-        if digest is None:
-            try:
-                digest = sha256(path)
-            except OSError:
-                return None
-            if len(_HASH_CACHE) > 512:
-                _HASH_CACHE.clear()
-            _HASH_CACHE[key] = digest
+        try:
+            digest = fsutil.sha256_file(path)
+        except OSError:
+            return None
         if digest != expected["sha256"]:
             return None
         files[name] = {"bytes": size, "sha256": digest}
@@ -208,36 +197,19 @@ def matches_file(path, expected):
         return False
     if st.st_size != expected["bytes"]:
         return False
-    key = (str(path), st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
-    digest = _HASH_CACHE.get(key)
-    if digest is None:
-        try:
-            digest = sha256(path)
-        except OSError:
-            return False
-        if len(_HASH_CACHE) > 512:
-            _HASH_CACHE.clear()
-        _HASH_CACHE[key] = digest
+    try:
+        digest = fsutil.sha256_file(path)
+    except OSError:
+        return False
     return digest == expected["sha256"]
 
 
 def _remove_path(path):
-    path = Path(path)
-    if path.is_symlink() or (path.exists() and not path.is_dir()):
-        path.unlink()
-    elif path.is_dir():
-        shutil.rmtree(path)
+    fsutil.remove_path(path)
 
 
 def sha256(path, chunk=1 << 20):
-    digest = hashlib.sha256()
-    with open(path, "rb") as handle:
-        while True:
-            block = handle.read(chunk)
-            if not block:
-                break
-            digest.update(block)
-    return digest.hexdigest()
+    return fsutil.compute_sha256(path, chunk=chunk)
 
 
 def available_extractor():
@@ -324,7 +296,7 @@ class Payload:
     def verify_archive(self):
         if not self.archive.is_file():
             raise FileNotFoundError(f"bundled archive missing: {self.archive}")
-        actual = sha256(self.archive)
+        actual = fsutil.sha256_file(self.archive)
         if actual != PAYLOAD_SHA256:
             raise ValueError(
                 f"archive checksum mismatch: expected {PAYLOAD_SHA256}, got {actual}"
@@ -362,8 +334,9 @@ class Payload:
                         "inventory": state,
                         "committed_at": time.time(),
                     }
-                    (staged / COMMIT_MARKER).write_text(
-                        json.dumps(marker, sort_keys=True), encoding="utf-8"
+                    fsutil.atomic_json(
+                        staged / COMMIT_MARKER, marker, indent=None, sort_keys=True,
+                        prefix=".decky-optiscaler-marker-",
                     )
                     if not _valid_commit_marker(staged):
                         errors.append(f"{command[0]}: extracted payload failed inventory validation")

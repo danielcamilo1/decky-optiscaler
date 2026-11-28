@@ -27,15 +27,13 @@ import {
   findModuleByExport,
 } from "@decky/ui";
 import type { Patch } from "@decky/ui";
+import { t } from "./i18n";
 import { openManager } from "./navigation";
 
 const MENU_LABEL = "OptiScaler Settings";
 /** Marks our injected node so repeated renders do not stack duplicates. */
 const MARKER = "decky-optiscaler-menu-item";
 const LOG = "[decky-optiscaler]";
-
-/** What the finder settled on, so the UI can say whether the entry exists. */
-export let menuPatchState: "patched" | "not-found" | "failed" | "idle" = "idle";
 
 function openSettings(appid: number) {
   // The app id alone: the page looks the folder up. It travels through the
@@ -55,7 +53,7 @@ function spliceMenuItem(items: any[], appid: number) {
   );
   const item = (
     <MenuItem key={MARKER} onSelected={() => openSettings(appid)}>
-      {MENU_LABEL}
+      {t(MENU_LABEL)}
     </MenuItem>
   );
   if (propertiesIdx >= 0) items.splice(propertiesIdx, 0, item);
@@ -132,13 +130,17 @@ function findLibraryContextMenu(): any {
 export function patchLibraryContextMenu(): () => void {
   const LibraryContextMenu = findLibraryContextMenu();
   if (!LibraryContextMenu?.prototype?.render) {
-    menuPatchState = "not-found";
     console.warn(`${LOG} library context menu not found; no Steam menu entry this session`);
     return () => {};
   }
 
   let inner: Patch | undefined;
   let outer: Patch | undefined;
+  const protoPatches: Patch[] = [];
+  const patchedPrototypes = new WeakSet<object>();
+  // Shared mutable ref updated on every outer render so nested prototype
+  // patches never keep the first opened menu's appid trapped in a closure.
+  const currentAppidRef: { current: number | undefined } = { current: undefined };
 
   try {
     outer = afterPatch(
@@ -157,6 +159,7 @@ export function patchLibraryContextMenu(): () => void {
         } catch {
           appid = undefined;
         }
+        currentAppidRef.current = appid;
 
         try {
           if (!inner) {
@@ -164,34 +167,40 @@ export function patchLibraryContextMenu(): () => void {
             // element's `type` is patched to get at it on the way through.
             inner = afterPatch(component, "type", (_: any, ret: any) => {
               try {
-                afterPatch(ret.type.prototype, "render", (_a: any, rendered: any) => {
-                  try {
-                    const items = rendered?.props?.children?.[0];
-                    if (!Array.isArray(items) || !isAppContextMenu(items)) return rendered;
-                    removeExisting(items);
-                    patchMenuItems(items, appid);
-                  } catch {
-                    /* leave the menu untouched on any shape change */
-                  }
-                  return rendered;
-                });
-
-                // Steam refreshes the overview behind an open menu.
-                afterPatch(
-                  ret.type.prototype,
-                  "shouldComponentUpdate",
-                  ([nextProps]: any[], shouldUpdate: any) => {
+                const proto = ret?.type?.prototype;
+                if (proto && !patchedPrototypes.has(proto)) {
+                  patchedPrototypes.add(proto);
+                  const renderPatch = afterPatch(proto, "render", (_a: any, rendered: any) => {
                     try {
-                      const items = nextProps?.children;
-                      if (!Array.isArray(items) || !isAppContextMenu(items)) return shouldUpdate;
+                      const items = rendered?.props?.children?.[0];
+                      if (!Array.isArray(items) || !isAppContextMenu(items)) return rendered;
                       removeExisting(items);
-                      if (shouldUpdate === true) patchMenuItems(items, appid);
+                      patchMenuItems(items, currentAppidRef.current);
                     } catch {
-                      /* wrong menu, probably */
+                      /* leave the menu untouched on any shape change */
                     }
-                    return shouldUpdate;
-                  },
-                );
+                    return rendered;
+                  });
+                  protoPatches.push(renderPatch);
+
+                  // Steam refreshes the overview behind an open menu.
+                  const scuPatch = afterPatch(
+                    proto,
+                    "shouldComponentUpdate",
+                    ([nextProps]: any[], shouldUpdate: any) => {
+                      try {
+                        const items = nextProps?.children;
+                        if (!Array.isArray(items) || !isAppContextMenu(items)) return shouldUpdate;
+                        removeExisting(items);
+                        if (shouldUpdate === true) patchMenuItems(items, currentAppidRef.current);
+                      } catch {
+                        /* wrong menu, probably */
+                      }
+                      return shouldUpdate;
+                    },
+                  );
+                  protoPatches.push(scuPatch);
+                }
               } catch (err) {
                 console.warn(`${LOG} could not patch the menu body`, err);
               }
@@ -201,7 +210,7 @@ export function patchLibraryContextMenu(): () => void {
             const items = component.props.children;
             if (isAppContextMenu(items)) {
               removeExisting(items);
-              patchMenuItems(items, appid);
+              patchMenuItems(items, currentAppidRef.current);
             }
           }
         } catch (err) {
@@ -210,15 +219,21 @@ export function patchLibraryContextMenu(): () => void {
         return component;
       },
     );
-    menuPatchState = "patched";
     console.info(`${LOG} library context menu patched`);
   } catch (err) {
-    menuPatchState = "failed";
     console.warn(`${LOG} could not patch the library context menu`, err);
     return () => {};
   }
 
   return () => {
+    currentAppidRef.current = undefined;
+    for (const patch of protoPatches.splice(0)) {
+      try {
+        patch.unpatch();
+      } catch {
+        /* already gone */
+      }
+    }
     try {
       inner?.unpatch();
     } catch {

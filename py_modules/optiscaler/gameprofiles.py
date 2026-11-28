@@ -1,5 +1,6 @@
 """Small, source-backed exceptions which must also work without the wiki cache."""
 
+import re
 from pathlib import Path
 from .constants import OPTISCALER_VERSION
 
@@ -9,6 +10,21 @@ PBZ_STEPS = [
     "Install beside the main PBZ.exe in PBZ/platform/steam (not the usual Unreal Binaries folder).",
     "Keep the game's Super Resolution Output Scale at 100%; change only the upscaler preset.",
 ]
+_RELEASE_VERSION_RE = re.compile(r"^v?(\d+(?:\.\d+)*)$", re.IGNORECASE)
+
+
+def _release_version_tuple(version):
+    """Parse a stable dotted numeric version, rejecting prerelease suffixes."""
+    text = str(version or "").strip()
+    match = _RELEASE_VERSION_RE.fullmatch(text)
+    if not match:
+        return None
+    return tuple(int(part) for part in match.group(1).split("."))
+
+
+def _runtime_at_least(version, minimum=(0, 9, 5)):
+    parsed = _release_version_tuple(version)
+    return parsed is not None and parsed >= minimum
 
 
 def is_pbz(name):
@@ -20,6 +36,11 @@ def is_pbz(name):
 def has_pbz_identity(game_path=None, name=None, wiki_identity=None, extra_names=None):
     root_name = Path(game_path).name if game_path else None
     return any(is_pbz(value) for value in [name, root_name, wiki_identity, *(extra_names or [])])
+
+
+def is_pbz_game(name, game_path=None, entry_name=None):
+    """Return whether a game matches Phantom Blade Zero by name, path, or wiki entry."""
+    return has_pbz_identity(game_path=game_path, name=name, wiki_identity=entry_name)
 
 
 def target_for(game_path, name=None, wiki_identity=None, extra_names=None):
@@ -69,7 +90,7 @@ def constrain(plan, result):
     if not (is_pbz(result.get("game")) and result.get("required_target") == PBZ_TARGET):
         return plan
     # The reviewed official release contains the PBZ ExtendedSearch and input fixes.
-    supported = OPTISCALER_VERSION == "0.9.5"
+    supported = _runtime_at_least(OPTISCALER_VERSION, (0, 9, 5))
     plan.update(required_version="0.9.5", required_target=PBZ_TARGET,
                 manual_steps=list(PBZ_STEPS), runtime_supported=supported,
                 blocked_reason=None if supported else "Phantom Blade Zero requires the pinned 0.9.5+ compatibility fixes. Upgrade this plugin first.")

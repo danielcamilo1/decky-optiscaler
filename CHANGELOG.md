@@ -1,5 +1,27 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- Automatic Simplified Chinese (`zh-CN`) and English UI localization with system/Steam locale auto-detection and manual override in **Plugin Settings**.
+- Updated bundled community **FSR 4.1.2 Lite (`4.1.2l-exact`)** build to `dll-2026-11-22`, while keeping prior `dll-2026-11-05` installs hash-recognized for verification, upgrade, restore, and removal.
+- Verified HTTPS mirror fallback (`github.chenc.dev`, `xsadwsd.kdns.fr`) for compatibility-list refreshes after the official GitHub Wiki origin fails, scoped strictly to the public list with verified TLS, HTTPS-only redirects, raw Markdown table validation, and 3-second timeouts.
+- Offline backend unit and RPC contract test suite (`scripts/test_units.py`), expanded UI flow and localization harnesses (`testharness/ui-flows.tsx`, `testharness/i18n.tsx`), virtual clock test utilities, and `tsconfig.test.json` strict typechecking.
+
+### Changed
+
+- Expanded native live-control ASI path buffers and unified 1024-character config-path caps across `directory.h`, `identity.h`, and `live.cpp` with `.status.tmp` validation; prior schema-7 live ASIs (`0.0.7.1-testing` / `0.0.7.2-testing`) remain recognized for seamless upgrade and removal.
+- Split `SetupChecklist` into modular setup components, clarified **Plugin Settings** vs per-game **Settings** labels, and consolidated topic guides.
+- Moved generated `live_fields.json` under `asi/generated/` and expanded CI and release workflows to run `test_units.py`, `ui-flows.tsx`, `i18n.tsx`, and test typechecking.
+
+### Fixed
+
+- Hardened backend filesystem operations, per-target locking, atomic writes (`fsutil.py`), serialized FSR 4 archive extraction caching, legacy `Licenses/` snapshot handling, and cached file hashing.
+- Hardened wiki and download transport to require verified HTTPS TLS contexts (removing unverified fallback), reject insecure redirects across dual-stack and IPv4 paths, reject HTML responses when expecting raw Markdown, and write cache files atomically.
+- Fixed Steam launch-options reconciliation and ownership tracking, stale wiki launch-flag cleanup, `applied_launch` restore-point metadata persistence, and manual `.asi` installation flows.
+- Fixed frontend live-backend switching, float input validation, i18n preference subscription/sync races, and per-game async state races.
+
 ## [0.0.7.2-testing] - 2026-11-23
 
 **Pre-release.** Everything in 0.0.7.1-testing, plus one install fix. The call
@@ -76,8 +98,6 @@ taken first, and the game's page offers a rollback.
 Newest first. Each release ships `Decky OptiScaler.zip` for Decky Loader's
 *Install from URL* (Developer mode). The experimental 0.0.8-pbz entries above
 document earlier builds; historical releases below bundle **0.9.4**.
-
-## [Unreleased]
 
 ## [0.0.7] - 2026-09-18
 

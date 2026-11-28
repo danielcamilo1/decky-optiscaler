@@ -1,7 +1,9 @@
+import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { JSDOM } from "jsdom";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "http://localhost" });
@@ -17,21 +19,38 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 globalThis.SteamClient = undefined;
 globalThis.appStore = undefined;
 
-const result = await build({
-  entryPoints: [path.join(dir, process.env.HARNESS || "run.tsx")],
-  bundle: true,
-  format: "esm",
-  platform: "node",
-  target: "node20",
-  jsx: "automatic",
-  outfile: path.join(dir, ".bundle.mjs"),
-  external: ["react", "react-dom", "react-dom/client", "react-dom/test-utils", "react-icons/fa"],
-  alias: {
-    "@decky/ui": path.join(dir, "mock-decky-ui.tsx"),
-    "@decky/api": path.join(dir, "mock-decky-api.ts"),
-  },
-  logLevel: "warning",
-});
+// Keep temporary bundles inside testharness/ so Node ESM resolves external
+// react/react-dom packages from the workspace node_modules, while giving each
+// concurrent harness process a unique filename and removing it on exit.
+const outfile = path.join(dir, `.bundle-${process.pid}-${crypto.randomUUID()}.mjs`);
+const cleanup = () => {
+  try {
+    fs.rmSync(outfile, { force: true });
+  } catch {
+    // ignore best-effort cleanup errors
+  }
+};
+process.on("exit", cleanup);
 
-void result;
-await import(path.join(dir, ".bundle.mjs"));
+try {
+  const result = await build({
+    entryPoints: [path.join(dir, process.env.HARNESS || "run.tsx")],
+    bundle: true,
+    format: "esm",
+    platform: "node",
+    target: "node20",
+    jsx: "automatic",
+    outfile,
+    external: ["react", "react-dom", "react-dom/client", "react-dom/test-utils", "react-icons/fa"],
+    alias: {
+      "@decky/ui": path.join(dir, "mock-decky-ui.tsx"),
+      "@decky/api": path.join(dir, "mock-decky-api.ts"),
+    },
+    logLevel: "warning",
+  });
+
+  void result;
+  await import(pathToFileURL(outfile).href);
+} finally {
+  cleanup();
+}

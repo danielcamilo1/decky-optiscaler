@@ -1,8 +1,11 @@
 import { ButtonItem, Focusable, PanelSection, PanelSectionRow } from "@decky/ui";
+import { toaster } from "@decky/api";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listAllGames } from "../api";
 import { lastPlayed } from "../hooks/useRunningGame";
-import type { Game } from "../types";
+import { t as translate, useI18n } from "../i18n";
+import { resolveGame } from "../shortcuts";
+import type { Game, RunningGame } from "../types";
 import { Centered, Notice, Pill, RowButton } from "./Common";
 import { TabStrip } from "./TabStrip";
 
@@ -21,11 +24,19 @@ const PAGE_SIZE = 20;
  * will say — the previous "show only the ones set up" button could not help
  * with a game that is not set up yet, which is the whole reason to be here.
  */
-export function GamesList({ onOpenGame }: { onOpenGame: (game: Game) => void }) {
+export function GamesList({
+  onOpenGame,
+  runningGame,
+}: {
+  onOpenGame: (game: Game) => void;
+  runningGame?: RunningGame | null;
+}) {
+  const { t } = useI18n();
   const [games, setGames] = useState<Game[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [shown, setShown] = useState(PAGE_SIZE);
   const [filter, setFilter] = useState("all");
+  const [openingRunning, setOpeningRunning] = useState(false);
   /** The first row of the page just revealed, so it can take focus. */
   const pageAnchor = useRef<HTMLDivElement | null>(null);
   const pendingFocus = useRef(false);
@@ -68,19 +79,101 @@ export function GamesList({ onOpenGame }: { onOpenGame: (game: Game) => void }) 
     return map;
   }, [games]);
 
+  const runningMatch = useMemo(() => {
+    if (!runningGame || !games) return null;
+    const id = String(runningGame.appid);
+    return games.find((game) => game.appid === id) ?? null;
+  }, [runningGame, games]);
+
+  const openRunningGame = useCallback(async () => {
+    if (!runningGame || openingRunning) return;
+    const appid = String(runningGame.appid);
+    if (runningMatch) {
+      onOpenGame({ ...runningMatch, appid });
+      return;
+    }
+    setOpeningRunning(true);
+    try {
+      const resolved = await resolveGame(runningGame.appid);
+      if (resolved.found && resolved.path) {
+        onOpenGame({
+          appid,
+          name: resolved.name ?? runningGame.name,
+          path: resolved.path,
+          source: "steam",
+          size_on_disk: 0,
+        });
+      } else {
+        toaster.toast({
+          title: t("Could not open running game"),
+          body: t(
+            "This game's install folder could not be found. Pick it from the list or add its folder under Libraries.",
+          ),
+        });
+      }
+    } catch (exc) {
+      toaster.toast({
+        title: t("Could not open running game"),
+        body: String(exc),
+      });
+    } finally {
+      setOpeningRunning(false);
+    }
+  }, [runningGame, runningMatch, openingRunning, onOpenGame, t]);
+
+  const runningBanner = runningGame ? (
+    <PanelSection title={t("Running now")}>
+      <RowButton
+        label={t("Running now · {name}", { name: runningGame.name })}
+        description={
+          openingRunning
+            ? t("Opening game settings…")
+            : runningMatch?.installed
+              ? t("OptiScaler · {filename} · Open settings", {
+                  filename: runningMatch.filename ?? "",
+                })
+              : t("Open OptiScaler setup and settings")
+        }
+        right={
+          <span>
+            <Pill tone="info">{t("running")}</Pill>
+            {runningMatch?.installed ? <Pill tone="success">{t("ON")}</Pill> : null}
+          </span>
+        }
+        disabled={openingRunning}
+        onClick={() => void openRunningGame()}
+      />
+    </PanelSection>
+  ) : null;
+
   if (error) {
     return (
-      <PanelSection title="Games">
-        <PanelSectionRow>
-          <Notice tone="error" title="Could not read your libraries">
-            {error}
-          </Notice>
-        </PanelSectionRow>
-      </PanelSection>
+      <>
+        {runningBanner}
+        <PanelSection title={t("Games")}>
+          <PanelSectionRow>
+            <Notice tone="error" title={t("Could not read your libraries")}>
+              {error}
+            </Notice>
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <ButtonItem layout="below" onClick={() => void load()}>
+              {t("Try again")}
+            </ButtonItem>
+          </PanelSectionRow>
+        </PanelSection>
+      </>
     );
   }
 
-  if (games === null) return <Centered>Scanning your libraries…</Centered>;
+  if (games === null) {
+    return (
+      <>
+        {runningBanner}
+        <Centered>{t("Scanning your libraries…")}</Centered>
+      </>
+    );
+  }
 
   const filtered = filterGames(games, filter, played);
   const visible = filtered.slice(0, shown);
@@ -88,18 +181,21 @@ export function GamesList({ onOpenGame }: { onOpenGame: (game: Game) => void }) 
   const setUpCount = games.filter((game) => game.installed).length;
   const anyPlayed = Array.from(played.values()).some((value) => value !== null);
   const tabs = [
-    ...(anyPlayed ? [{ id: "recent", title: "Recent" }] : []),
-    { id: "setup", title: "Set up", badge: setUpCount },
-    { id: "all", title: "All", badge: games.length },
+    ...(anyPlayed ? [{ id: "recent", title: t("Recent") }] : []),
+    { id: "setup", title: t("Set up"), badge: setUpCount },
+    { id: "all", title: t("All"), badge: games.length },
   ];
   /** Index of the first row of the most recently revealed page. */
   const anchorIndex = shown - PAGE_SIZE;
 
   return (
     <>
+      {runningBanner}
+
       <TabStrip
         tabs={tabs}
         marker="filter"
+        variant="filter"
         active={filter}
         onChange={(id) => {
           setFilter(id);
@@ -110,10 +206,10 @@ export function GamesList({ onOpenGame }: { onOpenGame: (game: Game) => void }) 
       <PanelSection>
         {visible.length === 0 ? (
           <PanelSectionRow>
-            <Notice tone="info" title={filter === "setup" ? "None set up yet" : "No games found"}>
+            <Notice tone="info" title={filter === "setup" ? t("None set up yet") : t("No games found")}>
               {filter === "setup"
-                ? "No game has OptiScaler installed yet. Pick one under All and set it up."
-                : "No games were detected in your Steam libraries. Add a folder under Libraries if your games live somewhere else."}
+                ? t("No game has OptiScaler installed yet. Pick one under All and set it up.")
+                : t("No games were detected in your Steam libraries. Add a folder under Libraries if your games live somewhere else.")}
             </Notice>
           </PanelSectionRow>
         ) : (
@@ -127,7 +223,7 @@ export function GamesList({ onOpenGame }: { onOpenGame: (game: Game) => void }) 
                     ? `OptiScaler · ${game.filename}`
                     : describePlayed(played.get(game.path)) ?? game.library ?? undefined
                 }
-                right={game.installed ? <Pill color="#2f6b3f">ON</Pill> : null}
+                right={game.installed ? <Pill tone="success">{t("ON")}</Pill> : null}
                 onClick={() => onOpenGame(game)}
               />
             );
@@ -151,7 +247,10 @@ export function GamesList({ onOpenGame }: { onOpenGame: (game: Game) => void }) 
                 setShown((value) => value + PAGE_SIZE);
               }}
             >
-              Show next {Math.min(PAGE_SIZE, remaining)} of {remaining} more
+              {t("Show next {count} of {remaining} more", {
+                count: Math.min(PAGE_SIZE, remaining),
+                remaining,
+              })}
             </ButtonItem>
           </PanelSectionRow>
         ) : null}
@@ -159,10 +258,11 @@ export function GamesList({ onOpenGame }: { onOpenGame: (game: Game) => void }) 
         {visible.length > PAGE_SIZE ? (
           <PanelSectionRow>
             <Focusable
+              onClick={() => setShown(PAGE_SIZE)}
               onActivate={() => setShown(PAGE_SIZE)}
               style={{ padding: "6px 0", fontSize: "12px", opacity: 0.7 }}
             >
-              Back to the first {PAGE_SIZE}
+              {t("Back to the first {count}", { count: PAGE_SIZE })}
             </Focusable>
           </PanelSectionRow>
         ) : null}
@@ -185,9 +285,11 @@ function filterGames(games: Game[], filter: string, played: Map<string, number |
 function describePlayed(when: number | null | undefined) {
   if (!when) return undefined;
   const days = Math.floor((Date.now() / 1000 - when) / 86400);
-  if (days <= 0) return "played today";
-  if (days === 1) return "played yesterday";
-  if (days < 30) return `played ${days} days ago`;
+  if (days <= 0) return translate("played today");
+  if (days === 1) return translate("played yesterday");
+  if (days < 30) return translate("played {days} days ago", { days });
   const months = Math.floor(days / 30);
-  return months === 1 ? "played a month ago" : `played ${months} months ago`;
+  return months === 1
+    ? translate("played a month ago")
+    : translate("played {months} months ago", { months });
 }

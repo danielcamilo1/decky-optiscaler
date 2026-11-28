@@ -104,8 +104,8 @@ def parse_vdf(text):
     return root
 
 
-def _local_configs(home):
-    """Every Steam account's localconfig.vdf on this machine, newest first."""
+def _userdata_config_files(home, filename):
+    """Every Steam account's ``config/<filename>`` on this machine, newest first."""
     found = []
     for root in steam_roots(home):
         userdata = root / "userdata"
@@ -116,30 +116,7 @@ def _local_configs(home):
         except OSError:
             continue
         for entry in entries:
-            config = entry / "config" / "localconfig.vdf"
-            if not config.is_file():
-                continue
-            try:
-                found.append((config.stat().st_mtime, config))
-            except OSError:
-                continue
-    found.sort(key=lambda pair: -pair[0])
-    return [config for _, config in found]
-
-
-def _shortcut_files(home):
-    """Every account's shortcuts.vdf on this machine, newest first."""
-    found = []
-    for root in steam_roots(home):
-        userdata = root / "userdata"
-        if not userdata.is_dir():
-            continue
-        try:
-            entries = sorted(userdata.iterdir())
-        except OSError:
-            continue
-        for entry in entries:
-            path = entry / "config" / "shortcuts.vdf"
+            path = entry / "config" / filename
             if not path.is_file():
                 continue
             try:
@@ -148,6 +125,16 @@ def _shortcut_files(home):
                 continue
     found.sort(key=lambda pair: -pair[0])
     return [path for _, path in found]
+
+
+def _local_configs(home):
+    """Every Steam account's localconfig.vdf on this machine, newest first."""
+    return _userdata_config_files(home, "localconfig.vdf")
+
+
+def _shortcut_files(home):
+    """Every account's shortcuts.vdf on this machine, newest first."""
+    return _userdata_config_files(home, "shortcuts.vdf")
 
 
 def parse_binary_vdf(data):

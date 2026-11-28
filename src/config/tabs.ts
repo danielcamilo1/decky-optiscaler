@@ -1,4 +1,5 @@
 import { GENERATED_OPTIONS } from "./generatedSchema";
+import { t } from "../i18n";
 import type { OptionMeta } from "../types";
 
 export interface TabDefinition {
@@ -52,8 +53,7 @@ export const TABS: TabDefinition[] = [
     id: "framegen",
     title: "Frame Gen",
     sections: ["FrameGen", "FSRFG", "XeFG", "Nukems", "FSRFGInputs"],
-    blurb:
-      "Pick an FG input (where frames come from) and an FG output (which generator draws them).",
+    blurb: "FG input (frame source) and FG output (frame generator).",
   },
   {
     id: "upscaling",
@@ -70,13 +70,13 @@ export const TABS: TabDefinition[] = [
       "QualityOverrides",
       "DRS",
     ],
-    blurb: "Which upscaler backend replaces the one the game asks for.",
+    blurb: "Upscaler backend that replaces the game's built-in upscaler.",
   },
   {
     id: "hudfix",
     title: "HUD Fix",
     sections: ["OptiFG"],
-    blurb: "Fixes UI ghosting and flicker when frame generation is active.",
+    blurb: "Reduces UI ghosting and flicker during frame generation.",
   },
   {
     id: "image",
@@ -96,7 +96,7 @@ export const TABS: TabDefinition[] = [
       "ProcessFilter",
       "Libraries",
     ],
-    blurb: "Per-game workarounds. Only touch these if the wiki entry tells you to.",
+    blurb: "Per-game workarounds — change only if the wiki recommends it.",
   },
   { id: "overlay", title: "Overlay", sections: ["Menu", "Log"] },
 ];
@@ -111,15 +111,6 @@ export const FEATURED: Record<string, string[]> = {
   overlay: ["Menu.OverlayMenu", "Menu.ShowFps", "Log.LogToFile"],
 };
 
-/** Quick controls shown in the Quick Access panel while a game is running. */
-export const QUICK_KEYS = [
-  "FrameGen.Enabled",
-  "FrameGen.FGInput",
-  "FrameGen.FGOutput",
-  "Upscalers.Dx12Upscaler",
-  "Framerate.FramerateLimit",
-];
-
 const BY_ID = new Map<string, OptionMeta>();
 const BY_SECTION = new Map<string, OptionMeta[]>();
 
@@ -132,7 +123,7 @@ for (const option of GENERATED_OPTIONS) {
 
 export const optionById = (id: string): OptionMeta | undefined => BY_ID.get(id);
 export const optionsInSection = (section: string): OptionMeta[] => BY_SECTION.get(section) ?? [];
-export const sectionTitle = (section: string): string => SECTION_TITLES[section] ?? section;
+export const sectionTitle = (section: string): string => t(SECTION_TITLES[section] ?? section);
 
 /** Sections that exist in the INI but are not on any tab. */
 export const UNGROUPED_SECTIONS = Array.from(BY_SECTION.keys()).filter(

@@ -1,6 +1,7 @@
 import { DialogButton, Focusable } from "@decky/ui";
 import { useState } from "react";
 import type { ReactNode } from "react";
+import { useI18n } from "../i18n";
 
 /**
  * One compact row instead of a stack of PanelSections.
@@ -19,6 +20,7 @@ export function DetailHeader({
   onBack?: () => void;
   action?: ReactNode;
 }) {
+  const { t } = useI18n();
   return (
     <Focusable
       style={{
@@ -36,7 +38,7 @@ export function DetailHeader({
       {onBack ? (
         <DialogButton
           onClick={onBack}
-          onOKActionDescription="Back to the games list"
+          onOKActionDescription={t("Back to the games list")}
           {...({ "data-back": "games" } as Record<string, string>)}
           style={{
             width: "auto",
@@ -46,7 +48,7 @@ export function DetailHeader({
             padding: "3px 9px",
           }}
         >
-          ‹ Back
+          {t("‹ Back")}
         </DialogButton>
       ) : null}
       <span
@@ -84,6 +86,7 @@ export function ModeSwitch({
   advanced: boolean;
   onChange: (advanced: boolean) => void;
 }) {
+  const { t } = useI18n();
   const [focused, setFocused] = useState(false);
 
   const segment = (label: string, on: boolean) => (
@@ -106,7 +109,7 @@ export function ModeSwitch({
   return (
     <DialogButton
       onClick={() => onChange(!advanced)}
-      onOKActionDescription={advanced ? "Show basic settings" : "Show every option"}
+      onOKActionDescription={advanced ? t("Show basic settings") : t("Show every option")}
       // Neither the focus handlers nor the harness marker are declared props:
       // Steam's button forwards what it does not recognise to the element it
       // renders, so both go through one cast rather than by widening its type.
@@ -128,8 +131,8 @@ export function ModeSwitch({
         whiteSpace: "nowrap",
       }}
     >
-      {segment("Basic", !advanced)}
-      {segment("Advanced", advanced)}
+      {segment(t("Basic"), !advanced)}
+      {segment(t("Advanced"), advanced)}
     </DialogButton>
   );
 }

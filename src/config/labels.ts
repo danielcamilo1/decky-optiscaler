@@ -50,7 +50,7 @@ export const FG_OUTPUT_LABELS: Record<string, string> = {
 // ("FSR " + the SDK's own version name), so these are the versions the
 // bundled release reports rather than a fixed list.
 export const FSR_BACKEND_LABELS: Record<string, string> = {
-  "0": "FSR 4.0.2",
+  "0": "FSR 4.1.2 (Auto / SDK 2.4)",
   "1": "FSR 3.1.5",
   "2": "FSR 2.3.4",
 };

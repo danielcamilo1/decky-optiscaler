@@ -8,6 +8,8 @@ picked in the UI, and the wiki plan builder for keys mined out of prose, where
 the need is greater still.
 """
 
+import math
+
 from .live import FFX_FG_MAX, FFX_UPSCALER_MAX
 from .schema_generated import OPTIONS
 
@@ -72,6 +74,9 @@ INDEX_RANGES = {
 
 def valid(meta, value):
     """Validate a value against one option's metadata; 'auto' is always allowed."""
+    text = value if isinstance(value, str) else str(value)
+    if "\r" in text or "\n" in text or "\x00" in text:
+        return False
     if value == "auto":
         return True
     bounds = INDEX_RANGES.get((meta.get("section"), meta.get("key")))
@@ -80,7 +85,7 @@ def valid(meta, value):
         return number is not None and bounds[0] <= number <= bounds[1]
     kind = meta.get("type")
     if kind == "bool":
-        return value.lower() in ("true", "false")
+        return isinstance(value, str) and value.lower() in ("true", "false")
     if kind == "enum":
         options = meta.get("options") or []
         return not options or value in options
@@ -94,7 +99,9 @@ def valid(meta, value):
     if kind == "float":
         try:
             number = float(value)
-        except ValueError:
+        except (TypeError, ValueError):
+            return False
+        if not math.isfinite(number):
             return False
         return _in_range(meta, number)
     return True

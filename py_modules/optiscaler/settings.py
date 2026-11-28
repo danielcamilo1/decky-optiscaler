@@ -2,6 +2,8 @@
 
 import copy
 import json
+import os
+import tempfile
 import threading
 from pathlib import Path
 
@@ -11,8 +13,6 @@ class Settings:
         "custom_libraries": [],   # [{"path": str, "name": str}]
         "game_targets": {},       # game_path -> chosen install directory
         "wiki_entries": {},        # game_path -> pinned compatibility entry name
-        "expanded_libraries": [],
-        "last_library": None,
         "prefs": {},              # small UI choices the user asked to remember
     }
 
@@ -36,12 +36,26 @@ class Settings:
             self._data = merged
 
     def save(self):
+        tmp_path = None
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self.path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(self._data, indent=2), encoding="utf-8")
-            tmp.replace(self.path)
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=self.path.parent,
+                prefix=f".{self.path.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as handle:
+                tmp_path = Path(handle.name)
+                handle.write(json.dumps(self._data, indent=2))
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp_path, self.path)
+            tmp_path = None
         except Exception:
+            if tmp_path is not None:
+                tmp_path.unlink(missing_ok=True)
             self._data = copy.deepcopy(self._saved_data)
             raise
         self._saved_data = copy.deepcopy(self._data)
@@ -131,6 +145,7 @@ class Settings:
             prefs = dict(self._data.get("prefs", {}))
             targets[str(game_path)] = str(target_dir)
             prefs.pop(f"runtime-upgrade-hold:{Path(target_dir).resolve()}", None)
+            prefs.pop(f"rollback_launch_pending:{game_path}", None)
             key = f"auto_mode:{game_path}"
             if auto_mode:
                 prefs[key] = True
@@ -140,14 +155,25 @@ class Settings:
             self._data["prefs"] = prefs
             self.save()
 
+    def get_rollback_launch_pending(self, game_path):
+        """Whether a rolled-back game still has saved launch options awaiting Steam confirmation."""
+        if not game_path:
+            return False
+        return bool(self.get_pref(f"rollback_launch_pending:{game_path}", False))
+
+    def set_rollback_launch_pending(self, game_path, pending):
+        """Mark or clear pending Steam launch-option confirmation after a rollback."""
+        if not game_path:
+            return
+        self.set_pref(f"rollback_launch_pending:{game_path}", True if pending else None)
+
     def snapshot_game(self, game_path):
-        """Only the keys an experiment owns; never snapshot another game's settings."""
+        """Only the keys a managed install owns; never snapshot another game's settings."""
         with self._lock:
             prefs = self._data.get("prefs", {})
             return {
                 "target": self._data.get("game_targets", {}).get(str(game_path)),
                 "auto": prefs.get(f"auto_mode:{game_path}"),
-                "experiment": prefs.get(f"deck-experiment:{game_path}"),
             }
 
     def restore_game(self, game_path, snapshot, *, runtime_hold=None):
@@ -165,12 +191,13 @@ class Settings:
                 targets.pop(str(game_path), None)
             else:
                 targets[str(game_path)] = snapshot["target"]
-            for field, key in (("auto", f"auto_mode:{game_path}"),
-                               ("experiment", f"deck-experiment:{game_path}")):
-                if snapshot.get(field) is None:
-                    prefs.pop(key, None)
-                else:
-                    prefs[key] = snapshot[field]
+            auto_key = f"auto_mode:{game_path}"
+            if snapshot.get("auto") is None:
+                prefs.pop(auto_key, None)
+            else:
+                prefs[auto_key] = snapshot["auto"]
+            # Legacy snapshots may still carry an `experiment` key; accept them
+            # cleanly without writing new `deck-experiment:*` entries.
             self._data = {**before, "game_targets": targets, "prefs": prefs}
             try:
                 self.save()

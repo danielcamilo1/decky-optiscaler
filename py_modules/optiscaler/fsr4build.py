@@ -4,10 +4,13 @@ Both archive and DLL hashes are verified. The DLL's version resource alone
 cannot distinguish community 4.1.1b from the bundled SDK.
 """
 
+import os
 import shutil
+import tempfile
+import threading
 from pathlib import Path, PurePosixPath
 
-from . import payload, wiki
+from . import fsutil, payload, wiki
 from .constants import (
     FFX_UPSCALER_DLL,
     FSR4_BUILDS,
@@ -15,6 +18,7 @@ from .constants import (
     FSR4_BUNDLED_FILE_SHA256,
     FSR4_BUNDLED_FILE_BYTES,
     FSR4_INT8_MIN_SDK_VERSION,
+    FSR4_PRIOR_BUILDS,
 )
 
 #: What the release itself carries, described the same way the downloadable
@@ -34,10 +38,24 @@ BUNDLED_BUILD = {
 # again for an answer that has not changed. Same trick live.py uses for the ASI.
 _digests = {}
 
+_build_locks_guard = threading.Lock()
+_build_locks = {}
+
+
+def _build_lock(cache_dir, build_id):
+    """Per-(cache_dir, build_id) lock serializing shared FSR4 cache writes."""
+    key = (str(Path(cache_dir).resolve()), str(build_id))
+    with _build_locks_guard:
+        lock = _build_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _build_locks[key] = lock
+        return lock
+
 
 def builds():
-    """Every build this plugin knows about, the release's own included."""
-    return [BUNDLED_BUILD, *FSR4_BUILDS]
+    """Every build this plugin knows about, including bundled and prior pinned builds."""
+    return [BUNDLED_BUILD, *FSR4_BUILDS, *FSR4_PRIOR_BUILDS]
 
 
 def find(build_id):
@@ -56,20 +74,11 @@ def url_for(source):
 
 
 def digest(path):
-    """SHA-256 of a file, remembered by size and mtime."""
-    path = Path(path)
+    """SHA-256 of a file, remembered in the shared stat-fingerprint LRU cache."""
     try:
-        stat = path.stat()
+        return fsutil.sha256_file(path, hasher=payload.sha256)
     except OSError:
         return None
-    key = (str(path), stat.st_size, stat.st_mtime_ns)
-    found = _digests.get(key)
-    if found is None:
-        found = payload.sha256(path)
-        if len(_digests) >= 8:
-            _digests.pop(next(iter(_digests)))
-        _digests[key] = found
-    return found
 
 
 def identify(path):
@@ -128,56 +137,77 @@ def fetch(build, cache_dir, logger=None):
         raise ValueError("unknown FSR 4 build")
     if build["id"] == FSR4_BUNDLED_BUILD_ID:
         raise ValueError("the bundled build comes from the release, not from the mirror")
+    if not build.get("sources"):
+        raise ValueError("FSR 4 build is recognised for compatibility only and cannot be installed")
 
-    unpacked = cached_path(cache_dir, build)
-    if _matches(unpacked, build):
-        return unpacked
-
-    cache = Path(cache_dir) / build["id"]
-    errors = []
-    for source in build["sources"]:
-        archive = cache / source["asset"]
-        try:
-            if not (archive.is_file() and digest(archive) == source["archive_sha256"]):
-                archive.unlink(missing_ok=True)
-                url = url_for(source)
-                if logger:
-                    logger.info("downloading FSR 4 %s from %s", build["id"], url)
-                wiki.download(url, archive, timeout=300)
-                if digest(archive) != source["archive_sha256"]:
-                    archive.unlink(missing_ok=True)
-                    raise ValueError(f"{source['asset']} archive checksum mismatch")
-
-            # Never let files from an earlier extraction satisfy this attempt.
-            target = unpacked.parent
-            if target.exists():
-                shutil.rmtree(target)
-            payload.extract_archive(archive, target, logger)
-            selected = build.get("archive_path")
-            if selected:
-                relative = PurePosixPath(selected)
-                if relative.is_absolute() or ".." in relative.parts or "\\" in selected:
-                    raise ValueError("Invalid pinned FSR archive path")
-                produced = target.joinpath(*relative.parts)
-                if produced.is_symlink() or not produced.is_file():
-                    raise ValueError(f"{source['asset']} did not contain the pinned {selected}")
-            else:
-                produced = next((p for p in target.rglob(build["file"]) if p.is_file()), None)
-            if produced is None:
-                raise ValueError(f"{source['asset']} did not contain {build['file']}")
-            if not _matches(produced, build):
-                raise ValueError(f"{build['file']} DLL checksum mismatch")
-            if produced != unpacked:
-                shutil.move(str(produced), str(unpacked))
-            if logger:
-                logger.info("FSR 4 %s ready at %s", build["id"], unpacked)
+    with _build_lock(cache_dir, build["id"]):
+        unpacked = cached_path(cache_dir, build)
+        if _matches(unpacked, build):
             return unpacked
-        except Exception as exc:
-            unpacked.unlink(missing_ok=True)
-            errors.append(f"{source['repo']}: {exc}")
-            if logger:
-                logger.warning("FSR 4 source failed: %s", errors[-1])
-    raise RuntimeError("Could not fetch verified FSR 4 build: " + "; ".join(errors))
+
+        cache = Path(cache_dir) / build["id"]
+        cache.mkdir(parents=True, exist_ok=True)
+        errors = []
+        for source in build["sources"]:
+            archive = cache / source["asset"]
+            staging = None
+            staged_dll = None
+            try:
+                if not (archive.is_file() and digest(archive) == source["archive_sha256"]):
+                    archive.unlink(missing_ok=True)
+                    url = url_for(source)
+                    if logger:
+                        logger.info("downloading FSR 4 %s from %s", build["id"], url)
+                    wiki.download(url, archive, timeout=300)
+                    if digest(archive) != source["archive_sha256"]:
+                        archive.unlink(missing_ok=True)
+                        raise ValueError(f"{source['asset']} archive checksum mismatch")
+
+                # Extract into an isolated staging directory so files from an earlier
+                # attempt cannot leak and concurrent readers of `unpacked` stay intact.
+                staging = Path(tempfile.mkdtemp(prefix=".extract-", dir=cache))
+                payload.extract_archive(archive, staging, logger)
+                selected = build.get("archive_path")
+                if selected:
+                    relative = PurePosixPath(selected)
+                    if relative.is_absolute() or ".." in relative.parts or "\\" in selected:
+                        raise ValueError("Invalid pinned FSR archive path")
+                    produced = staging.joinpath(*relative.parts)
+                    if produced.is_symlink() or not produced.is_file():
+                        raise ValueError(f"{source['asset']} did not contain the pinned {selected}")
+                else:
+                    produced = next((p for p in staging.rglob(build["file"]) if p.is_file()), None)
+                if produced is None:
+                    raise ValueError(f"{source['asset']} did not contain {build['file']}")
+                if not _matches(produced, build):
+                    raise ValueError(f"{build['file']} DLL checksum mismatch")
+
+                unpacked.parent.mkdir(parents=True, exist_ok=True)
+                fd, staged_name = tempfile.mkstemp(
+                    prefix=f".{build['file']}.",
+                    suffix=".tmp",
+                    dir=unpacked.parent,
+                )
+                os.close(fd)
+                staged_dll = Path(staged_name)
+                os.replace(produced, staged_dll)
+                if not _matches(staged_dll, build):
+                    raise ValueError(f"{build['file']} DLL checksum mismatch")
+                os.replace(staged_dll, unpacked)
+                staged_dll = None
+                if logger:
+                    logger.info("FSR 4 %s ready at %s", build["id"], unpacked)
+                return unpacked
+            except Exception as exc:
+                errors.append(f"{source['repo']}: {exc}")
+                if logger:
+                    logger.warning("FSR 4 source failed: %s", errors[-1])
+            finally:
+                if staged_dll is not None:
+                    staged_dll.unlink(missing_ok=True)
+                if staging is not None:
+                    shutil.rmtree(staging, ignore_errors=True)
+        raise RuntimeError("Could not fetch verified FSR 4 build: " + "; ".join(errors))
 
 
 def reaches_fsr4_by(ffx_version):
