@@ -23,6 +23,7 @@ from pathlib import Path
 
 from .constants import (
     COMPAT_CACHE_TTL,
+    COMPAT_LIST_MIRRORS,
     COMPAT_LIST_PAGE,
     DEFAULT_PROXY,
     PROXY_FILENAMES,
@@ -36,6 +37,9 @@ USER_AGENT = "decky-optiscaler/0.1 (+https://github.com/SteamDeckHomebrew)"
 # that a wiki which is simply unreachable is asked once rather than on every
 # question, short enough that coming back onto a network is noticed.
 PAGE_RETRY_AFTER = 300
+
+# Three sources, each with an IPv4 retry, normally fit the UI's 20s watch.
+COMPAT_FETCH_TIMEOUT = 3
 
 NOISE_WORDS = {
     "the", "a", "an", "of", "and",
@@ -644,15 +648,24 @@ class WikiClient:
         """
         self.last_attempt = time.time()
         origin = f"{WIKI_RAW_BASE}/{COMPAT_LIST_PAGE}"
-        try:
-            markdown = _http_get(origin, raw_markdown=True)
-            if re.search(r"<(?:html|!doctype\s+html)\b", markdown, re.IGNORECASE):
-                raise ValueError("compatibility list returned HTML instead of raw Markdown")
-            entries = parse_compat_list(markdown)
-            if not entries:
-                raise ValueError("compatibility list downloaded but parsed to zero rows")
-        except Exception as exc:  # network, TLS, disk, decoding — all non-fatal
-            self.last_error = f"{type(exc).__name__}: {exc}"
+        failures = []
+        # Mirrors are scoped to this public list. Binary downloads and detail
+        # pages keep their existing source/transport policies.
+        for prefix in ("", *COMPAT_LIST_MIRRORS):
+            url = prefix + origin.removeprefix("https://") if prefix else origin
+            try:
+                markdown = _http_get(url, timeout=COMPAT_FETCH_TIMEOUT, raw_markdown=True)
+                if re.search(r"<(?:html|!doctype\s+html)\b", markdown, re.IGNORECASE):
+                    raise ValueError("compatibility list returned HTML instead of raw Markdown")
+                entries = parse_compat_list(markdown)
+                if not entries:
+                    raise ValueError("compatibility list downloaded but parsed to zero rows")
+            except Exception as exc:  # network, TLS, disk, decoding — all non-fatal
+                failures.append(f"{url}: {type(exc).__name__}: {exc}")
+                continue
+            break
+        else:
+            self.last_error = "; ".join(failures)
             return {"ok": False, "changed": False, "count": 0, "error": self.last_error}
 
         after = fingerprint(entries)

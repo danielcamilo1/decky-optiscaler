@@ -1201,41 +1201,56 @@ def check_wiki_cache():
         shutil.rmtree(root, ignore_errors=True)
 
 
-def check_wiki_hardening():
-    """Wiki refresh must enforce HTTPS, verified TLS, and raw Markdown validation."""
+def check_wiki_mirrors():
+    """A blocked origin must refresh through a mirror without losing good data."""
     from unittest.mock import patch, MagicMock
     from email.message import Message
     import ssl
     from optiscaler import wiki
 
-    print("\nWiki transport hardening")
+    print("\nWiki mirror fallback")
     table = ("| Game | Compatibility | Inputs |\n|---|---|---|\n"
              "| [Cyberpunk 2077](Cyberpunk-2077) | OK | DLSS |\n")
     origin = f"{wiki.WIKI_RAW_BASE}/{wiki.COMPAT_LIST_PAGE}"
-    with tempfile.TemporaryDirectory(prefix="optiscaler-wiki-harden-") as temporary:
+    urls = [origin] + [prefix + origin.removeprefix("https://") for prefix in wiki.COMPAT_LIST_MIRRORS]
+    with tempfile.TemporaryDirectory(prefix="optiscaler-mirrors-") as temporary:
         client = wiki.WikiClient(Path(temporary))
         with patch.object(wiki, "_http_get", return_value=table) as get:
             result = client.revalidate()
-            check("a working origin refreshes cleanly from the official wiki",
-                  result["ok"] and result["count"] == 1
+            check("a working origin never contacts a mirror", result["ok"]
                   and get.call_count == 1 and get.call_args.args[0] == origin
                   and get.call_args.kwargs.get("raw_markdown") is True)
 
-        before = client.list_cache.read_bytes()
-        revision = client.revision()
         failures = [TimeoutError("blocked"),
                     urllib.error.HTTPError(origin, 403, "Forbidden", {}, None),
                     "<html><body>\n" + table + "</body></html>", "", "not a table"]
         for failure in failures:
-            with patch.object(wiki, "_http_get", side_effect=[failure]):
+            with patch.object(wiki, "_http_get", side_effect=[failure, table]) as get:
                 result = client.revalidate()
-                check(f"origin {type(failure).__name__} failure preserves cache unchanged",
-                      not result["ok"] and client.list_cache.read_bytes() == before
-                      and client.revision() == revision and client.status()["available"]
-                      and bool(client.last_error))
+                calls = get.call_args_list
+                check(f"origin {type(failure).__name__} failure reaches a valid mirror",
+                      result["ok"] and result["count"] == 1 and client.last_error is None
+                      and [c.args[0] for c in calls] == urls[:2])
+                check("wiki attempts use short timeouts without unverified TLS override",
+                      all(c.kwargs["timeout"] == wiki.COMPAT_FETCH_TIMEOUT for c in calls)
+                      and all(not c.kwargs.get("allow_unverified", False) for c in calls))
 
+        with patch.object(wiki, "_http_get", side_effect=[TimeoutError("blocked"),
+                          "<html>unavailable</html>", table]) as get:
+            check("an invalid first mirror falls through to the next",
+                  client.revalidate()["ok"] and [c.args[0] for c in get.call_args_list] == urls)
+
+        before = client.list_cache.read_bytes()
+        revision = client.revision()
+        with patch.object(wiki, "_http_get", side_effect=TimeoutError("all blocked")):
+            result = client.revalidate()
+            check("total failure keeps the cache and its fetched time unchanged",
+                  not result["ok"] and client.list_cache.read_bytes() == before
+                  and client.revision() == revision and client.status()["available"])
+            check("total failure identifies every attempted source",
+                  all(url in result["error"] for url in urls))
         with patch.object(wiki, "_http_get", return_value=table) as get:
-            check("a later refresh clears the old error",
+            check("a later refresh retries the origin and clears the old error",
                   client.revalidate()["ok"] and client.last_error is None
                   and get.call_count == 1 and get.call_args.args[0] == origin)
 
@@ -1249,24 +1264,39 @@ def check_wiki_hardening():
                 ("default", verified), ("unverified", unverified)])), \
             patch.object(wiki, "_open", side_effect=ssl.SSLError("bad certificate")) as opened:
         try:
-            wiki._http_get(origin)
+            wiki._http_get(urls[1])
         except ssl.SSLError:
             pass
         check("TLS failure never falls back to or reuses an unverified context",
               opened.call_count == 1 and opened.call_args.args[2] is verified)
 
+    with tempfile.TemporaryDirectory(prefix="optiscaler-mirror-timeouts-") as temporary:
+        waits = []
+        def stalled_sources(request, timeout, context, binary=False, **policy):
+            if request.full_url != urls[-1]:
+                waits.append(timeout)
+                raise TimeoutError("blackholed source")
+            return table
+        with patch.object(wiki, "_ssl_context", verified), \
+                patch.object(wiki, "_ssl_context_kind", "default"), \
+                patch.object(wiki, "_open", side_effect=stalled_sources):
+            client = wiki.WikiClient(temporary)
+            result = client.revalidate()
+            check("the final mirror updates after both earlier sources exhaust IPv4 retries",
+                  result["ok"] and result["changed"] and len(waits) == 4
+                  and sum(waits) == 12 and client.status()["entry_count"] == 1)
+
     # Redirect checks run before the next hop, for both normal and IPv4 opens.
     handler = wiki._HTTPSOnlyRedirectHandler()
-    request = wiki.urllib.request.Request(origin)
-    for destination in ("http://example.invalid/list", "ftp://example.invalid/list"):
+    request = wiki.urllib.request.Request(urls[1])
+    for destination in ("http://mirror.invalid/list", "ftp://mirror.invalid/list"):
         try:
             handler.redirect_request(request, None, 302, "Found", {}, destination)
-            check("insecure redirects are rejected", False)
+            check("insecure mirror redirects are rejected", False)
         except urllib.error.URLError:
-            check("insecure redirects are rejected", True)
-    https_dest = "https://raw.githubusercontent.com/wiki/optiscaler/OptiScaler/Compatibility-List.md"
-    check("HTTPS redirects remain usable", handler.redirect_request(
-        request, None, 302, "Found", {}, https_dest).full_url == https_dest)
+            check("insecure mirror redirects are rejected", True)
+    check("HTTPS mirror redirects remain usable", handler.redirect_request(
+        request, None, 302, "Found", {}, urls[2]).full_url == urls[2])
 
     headers = Message()
     headers["Content-Type"] = "text/html; charset=utf-8"
@@ -2274,7 +2304,7 @@ def main():
         check_wiki_failure_reporting()
         check_wiki_cache()
         check_wiki_transport()
-        check_wiki_hardening()
+        check_wiki_mirrors()
         check_wiki_tls()
         check_version_pin()
         check_optipatcher()

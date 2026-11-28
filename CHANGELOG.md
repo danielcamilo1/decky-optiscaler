@@ -6,6 +6,7 @@
 
 - Automatic Simplified Chinese (`zh-CN`) and English UI localization with system/Steam locale auto-detection and manual override in **Plugin Settings**.
 - Updated bundled community **FSR 4.1.2 Lite (`4.1.2l-exact`)** build to `dll-2026-11-22`, while keeping prior `dll-2026-11-05` installs hash-recognized for verification, upgrade, restore, and removal.
+- Verified HTTPS mirror fallback (`github.chenc.dev`, `xsadwsd.kdns.fr`) for compatibility-list refreshes after the official GitHub Wiki origin fails, scoped strictly to the public list with verified TLS, HTTPS-only redirects, raw Markdown table validation, and 3-second timeouts.
 - Offline backend unit and RPC contract test suite (`scripts/test_units.py`), expanded UI flow and localization harnesses (`testharness/ui-flows.tsx`, `testharness/i18n.tsx`), virtual clock test utilities, and `tsconfig.test.json` strict typechecking.
 
 ### Changed

@@ -322,6 +322,12 @@ FSR4_PRIOR_BUILDS = (
 WIKI_RAW_BASE = "https://raw.githubusercontent.com/wiki/optiscaler/OptiScaler"
 WIKI_HTML_BASE = "https://github.com/optiscaler/OptiScaler/wiki"
 COMPAT_LIST_PAGE = "Compatibility-List.md"
+# Public raw-file proxies used only after the compatibility-list origin fails.
+# These services accept the original host/path without its https:// prefix.
+COMPAT_LIST_MIRRORS = (
+    "https://github.chenc.dev/",
+    "https://xsadwsd.kdns.fr/",
+)
 COMPAT_CACHE_TTL = 24 * 60 * 60  # seconds
 
 STEAM_ROOTS = [
