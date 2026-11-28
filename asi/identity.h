@@ -407,7 +407,7 @@ static bool ReadWStringAt(uintptr_t config, size_t offset, wchar_t* output, size
     const wchar16* remote = value.capacity <= 7 ? value.bx.buf : value.bx.ptr;
     if (!remote || value.size > (SIZE_MAX / sizeof(wchar16)) - 1) return false;
     size_t bytes = (value.size + 1) * sizeof(wchar16);
-    wchar16 temporary[512];
+    wchar16 temporary[kPathCapacity];
     if (value.size + 1 > sizeof(temporary) / sizeof(temporary[0]) ||
         !ReadBytes(remote, temporary, bytes) || !ConfigPointerMatches(config)) return false;
     if (temporary[value.size] != 0) return false;
@@ -446,10 +446,10 @@ static bool ValidateConfigAt(uintptr_t config) {
         (config & 0xfu) || !ConfigPointerMatches(config) ||
         config > UINTPTR_MAX - sizeof(Config) ||
         !CheckMemory(reinterpret_cast<const void*>(config), sizeof(Config), false)) return false;
-    wchar_t filename[512], absolutePath[512];
-    if (!ReadWStringAt(config, offsetof(Config, fileName), filename, 512) ||
+    wchar_t filename[kPathCapacity], absolutePath[kPathCapacity];
+    if (!ReadWStringAt(config, offsetof(Config, fileName), filename, kPathCapacity) ||
         !WStringEqualNoCase(filename, L"OptiScaler.ini")) return false;
-    if (!ReadWStringAt(config, offsetof(Config, absoluteFileName), absolutePath, 512) ||
+    if (!ReadWStringAt(config, offsetof(Config, absoluteFileName), absolutePath, kPathCapacity) ||
         !IsAbsoluteWindowsPath(absolutePath) ||
         !WideEndsWithNoCase(absolutePath, L"\\OptiScaler.ini")) return false;
     int32_t shortcut = 0, fpsShortcut = 0, fgShortcut = 0;

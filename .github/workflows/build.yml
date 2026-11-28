@@ -44,7 +44,7 @@ jobs:
       - name: Check generated ASI layout is up to date
         run: |
           python3 scripts/generate_asi_layout.py
-          git diff --exit-code -- asi/generated py_modules/optiscaler/live_fields.json
+          git diff --exit-code -- asi/generated
 
       - name: Verify native bridge identity
         run: |
@@ -52,10 +52,15 @@ jobs:
           python3 scripts/verify_runtime_profile.py
 
       - name: Typecheck
-        run: npx tsc --noEmit
+        run: |
+          npx tsc --noEmit
+          npx tsc -p tsconfig.test.json --noEmit
 
       - name: Build frontend
         run: pnpm build
+
+      - name: Offline backend unit and RPC contract tests
+        run: python3 scripts/test_units.py
 
       - name: Steam Deck FSR4 lifecycle
         run: python3 scripts/test_fsr4.py
@@ -71,30 +76,17 @@ jobs:
       - name: Backend selftest
         run: python3 scripts/selftest.py
 
-      # The harnesses assert by printing; "React errors/warnings: 0" is the pass
-      # condition, so the output is checked rather than the exit code.
-      - name: UI harness
+      - name: UI harnesses
         run: |
-          set -o pipefail
-          HARNESS=run.tsx node testharness/build-and-run.mjs 2>&1 | tee harness.log
-          grep -q "React errors/warnings: 0" harness.log
-
-      - name: All-options harness
-        run: |
-          set -o pipefail
-          HARNESS=all-options.tsx node testharness/build-and-run.mjs 2>&1 | tee all-options.log
-          grep -q "real React errors: 0" all-options.log
-
-      # This one exits non-zero on a failed check, so its status is enough.
-      - name: Live-controls harness
-        run: HARNESS=live-fields.tsx node testharness/build-and-run.mjs
-
-      - name: Queue, launch options and recovery UI regressions
-        run: |
+          HARNESS=run.tsx node testharness/build-and-run.mjs
+          HARNESS=all-options.tsx node testharness/build-and-run.mjs
+          HARNESS=live-fields.tsx node testharness/build-and-run.mjs
           HARNESS=use-config.tsx node testharness/build-and-run.mjs
           HARNESS=launch-options.tsx node testharness/build-and-run.mjs
           HARNESS=recovery-ui.tsx node testharness/build-and-run.mjs
           HARNESS=auto-upgrade.tsx node testharness/build-and-run.mjs
+          HARNESS=ui-flows.tsx node testharness/build-and-run.mjs
+          HARNESS=i18n.tsx node testharness/build-and-run.mjs
 
       - name: Package
         run: python3 scripts/package.py

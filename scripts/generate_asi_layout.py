@@ -22,7 +22,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 REF = ROOT / "asi" / "optiscaler_ref"
 OUT_HEADER = ROOT / "asi" / "generated" / "config_mirror.h"
-OUT_JSON = ROOT / "py_modules" / "optiscaler" / "live_fields.json"
+OUT_JSON = ROOT / "asi" / "generated" / "live_fields.json"
 
 # C++ types we know how to mirror, with the spelling used in the mirror header.
 SCALARS = {

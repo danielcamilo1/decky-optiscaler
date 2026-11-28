@@ -21,6 +21,16 @@ from optiscaler.inifile import IniFile
 from optiscaler.service import OptiScalerService
 
 
+def _tempdir_is_case_sensitive():
+    with tempfile.TemporaryDirectory(prefix='decky-case-probe-') as tmp:
+        root = Path(tmp)
+        (root / 'CaseProbe.tmp').write_bytes(b'1')
+        return not (root / 'caseprobe.tmp').exists()
+
+
+CASE_SENSITIVE_FS = _tempdir_is_case_sensitive()
+
+
 def tree(path):
     return {str(p.relative_to(path)): p.read_bytes() for p in path.rglob('*')
             if p.is_file() and restorepoint.RESTORE_DIR not in p.parts}
@@ -200,7 +210,7 @@ class RecoveryTests(unittest.TestCase):
 from pathlib import Path
 sys.path.insert(0, sys.argv[1])
 from optiscaler import constants, installer, payload
-root = Path(sys.argv[2]); source = Path(sys.argv[3]); target = Path(sys.argv[4])
+root = Path(sys.argv[2]); source = Path(sys.argv[3]); target = Path(sys.argv[4]).resolve()
 runtime = json.loads(Path(sys.argv[5]).read_text())['files']
 payload._PINNED_FILES = {
  name: {'bytes': (source / name).stat().st_size,
@@ -211,7 +221,7 @@ constants.RUNTIME_DLL_SHA256 = hashlib.sha256((source / 'OptiScaler.dll').read_b
 original = installer.atomic_copy
 def stop_after_dinput8(src, dst, *args, **kwargs):
  result = original(src, dst, *args, **kwargs)
- if Path(dst) == target / constants.REFRAMEWORK_DLL:
+ if Path(dst).resolve() == target / constants.REFRAMEWORK_DLL:
   os._exit(86)
  return result
 installer.atomic_copy = stop_after_dinput8
@@ -243,11 +253,11 @@ installer.install(target, source, reframework_files=[source / constants.REFRAMEW
 from pathlib import Path
 sys.path.insert(0, sys.argv[1])
 from optiscaler import installer
-target = Path(sys.argv[2])
+target = Path(sys.argv[2]).resolve()
 original = installer.atomic_copy
 def stop_after_returning_legacy_file(src, dst, *args, **kwargs):
  result = original(src, dst, *args, **kwargs)
- if Path(dst) == target / 'Licenses' / 'game.txt':
+ if Path(dst).resolve() == target / 'Licenses' / 'game.txt':
   os._exit(87)
  return result
 installer.atomic_copy = stop_after_returning_legacy_file
@@ -584,7 +594,7 @@ with installer.target_transaction(target, require_stopped=True):
         self.assertTrue(rolled['ok'], rolled)
         self.assertEqual(rolled['launch_options'], 'LSFG=1 %command%')
         self.assertEqual(self.service.settings.snapshot_game(game_path),
-                         {'target': 'old target', 'auto': False, 'experiment': None})
+                         {'target': 'old target', 'auto': False})
         self.assertTrue(self.service.settings.get_pref('auto_mode:/games/other'))
 
     def test_snapshot_restores_originals_first_adopted_after_snapshot(self):
@@ -668,12 +678,12 @@ with installer.target_transaction(target, require_stopped=True):
     def test_rollback_commit_marker_failure_restores_game_preferences(self):
         self.install()
         game = '/games/rollback-commit-failure'
-        snapshot_settings = {'target': 'snapshot target', 'auto': False, 'experiment': False}
+        snapshot_settings = {'target': 'snapshot target', 'auto': False}
         restorepoint.create(self.game, {
             'game_path': game, 'game_settings': snapshot_settings,
             'launch_options': 'snapshot options',
         })
-        before_settings = {'target': 'current target', 'auto': True, 'experiment': True}
+        before_settings = {'target': 'current target', 'auto': True}
         self.service.settings.restore_game(game, before_settings)
         before_files = tree(self.game)
 
@@ -683,32 +693,36 @@ with installer.target_transaction(target, require_stopped=True):
         self.assertEqual(self.service.settings.snapshot_game(game), before_settings)
         self.assertEqual(tree(self.game), before_files)
 
-    def test_experiment_commit_marker_failure_restores_game_preferences(self):
+    def test_fsr4_build_commit_marker_failure_preserves_files_and_preferences(self):
         root = self.root / 'Phantom Blade Zero'
         target = self.prepare_pbz_install(root)
         game = str(root)
-        before_settings = {'target': 'current target', 'auto': True, 'experiment': False}
+        before_settings = {'target': 'current target', 'auto': True}
         self.service.settings.restore_game(game, before_settings)
         before_files = tree(target)
 
-        with patch.object(fsr4build, 'fetch', return_value='synthetic-fsr4.dll'), \
-             patch.object(installer, 'install_fsr4_build', return_value={'build': {}}), \
-             patch.object(self.service, '_write_config_sync', return_value={
-                 'ok': True, 'applied': [], 'rejected': [],
-             }):
+        dll = self.root / 'synthetic-fsr4.dll'
+        dll.write_bytes(b'synthetic community lite dll')
+        fake_build = dict(
+            fsr4build.find(constants.FSR4_STEAM_DECK_BUILD_ID),
+            file_bytes=dll.stat().st_size,
+            file_sha256=hashlib.sha256(dll.read_bytes()).hexdigest(),
+        )
+        with patch.object(fsr4build, 'FSR4_BUILDS', [fake_build]), \
+             patch.object(fsr4build, 'fetch', return_value=dll):
             self.assert_service_commit_failure(lambda: asyncio.run(
-                self.service.setup_deck_experiment(str(target), game)))
+                self.service.set_fsr4_build(str(target), fake_build['id'])))
 
         self.assertEqual(self.service.settings.snapshot_game(game), before_settings)
         self.assertEqual(tree(target), before_files)
 
     def test_uninstall_commit_marker_failure_restores_game_preferences(self):
         game = '/games/uninstall-commit-failure'
-        original_settings = {'target': 'original target', 'auto': False, 'experiment': True}
+        original_settings = {'target': 'original target', 'auto': False}
         self.service.settings.restore_game(game, original_settings)
         installed = asyncio.run(self.service.install(str(self.game), game_path=game))
         self.assertTrue(installed['ok'], installed)
-        before_settings = {'target': 'current target', 'auto': True, 'experiment': False}
+        before_settings = {'target': 'current target', 'auto': True}
         self.service.settings.restore_game(game, before_settings)
         before_files = tree(self.game)
 
@@ -725,7 +739,7 @@ with installer.target_transaction(target, require_stopped=True):
                                 launch_options='LSFG=1 %command%', auto_mode=False))
         self.assertFalse(result['ok'], result)
         self.assertEqual(tree(self.game), self.original)
-        self.assertEqual(self.service.settings.snapshot_game(game), {'target': None, 'auto': None, 'experiment': None})
+        self.assertEqual(self.service.settings.snapshot_game(game), {'target': None, 'auto': None})
 
     def test_actual_old_runtime_requires_complete_prepared_snapshot(self):
         self.install()
@@ -1000,6 +1014,7 @@ with installer.target_transaction(sys.argv[2], include_known=False):
         self.assertEqual(ini.stat().st_mode & 0o777, 0o640)
         self.assertFalse(list(self.game.glob('.decky-optiscaler-tx-*')))
 
+    @unittest.skipUnless(CASE_SENSITIVE_FS, 'requires a case-sensitive filesystem')
     def test_managed_ini_recovers_canonical_absent_and_existing_case_alias(self):
         self.install()
         canonical = self.game / constants.INI_NAME
@@ -1039,6 +1054,7 @@ with installer.target_transaction(target,
         self.assertEqual(stat.S_IMODE(alias.stat().st_mode), 0o604)
         self.assertFalse(list(self.game.glob('.decky-optiscaler-tx-*')))
 
+    @unittest.skipUnless(CASE_SENSITIVE_FS, 'requires a case-sensitive filesystem')
     def test_managed_ini_refuses_two_existing_casefold_aliases_before_journaling(self):
         self.install()
         canonical = self.game / constants.INI_NAME
@@ -1379,14 +1395,14 @@ with installer.target_transaction(target, require_stopped=True):
         self.service.settings.set_target(game, 'old target')
         self.service.settings.set_pref('auto_mode:' + game, True)
         original_settings = self.service.settings.path.read_bytes()
-        replace = Path.replace; failed = False
+        replace = os.replace; failed = False
         def refuse(path, destination):
             nonlocal failed
             if Path(destination) == self.service.settings.path and not failed:
                 failed = True
                 raise OSError('injected settings commit failure')
             return replace(path, destination)
-        with patch.object(Path, 'replace', new=refuse):
+        with patch('os.replace', side_effect=refuse):
             result = asyncio.run(self.service.install(str(self.game), game_path=game,
                                 launch_options='LSFG=1 %command%', auto_mode=False))
         self.assertTrue(failed)
@@ -1416,8 +1432,12 @@ with installer.target_transaction(target, require_stopped=True):
         path = self.game / restorepoint.RESTORE_DIR / restorepoint.SNAPSHOT_FILE
         record = json.loads(path.read_text()); record['entries'].pop()
         path.write_text(json.dumps(record))
+        # Corrupt snapshots must still fail closed on write/restore operations
+        # (even when read-only restorepoint.info() fault-isolates per [CD-03]).
         with self.assertRaises(ValueError):
-            restorepoint.info(self.game)
+            restorepoint.restore(self.game)
+        with self.assertRaises(ValueError):
+            restorepoint.create(self.game, metadata)
 
     def test_restore_point_refuses_a_different_manifest_game_before_writing(self):
         self.install()
@@ -1596,7 +1616,8 @@ with installer.target_transaction(target, require_stopped=True):
                     return {'recommendation': {}, 'plan': {'available': True, 'filename': 'dxgi.dll',
                         'optipatcher': False, 'settings': [], 'framegen': {'input': 'fsrfg', 'output': 'fsr3'}}}
                 self.service.get_auto_plan = AsyncMock(side_effect=plan)
-                await self.service._mutation_lock.acquire()
+                target_lock = self.service._target_lock(str(self.game))
+                await target_lock.acquire()
                 try:
                     coro = (self.service.apply_auto_settings(str(self.game), game, 'Test') if operation == 'apply'
                             else self.service.auto_install(str(self.game), game, 'Test'))
@@ -1605,7 +1626,7 @@ with installer.target_transaction(target, require_stopped=True):
                     await asyncio.sleep(0)
                     ini.set('FrameGen', 'FGInput', fg_input); ini.set('FrameGen', 'FGOutput', fg_output); ini.save()
                 finally:
-                    self.service._mutation_lock.release()
+                    target_lock.release()
                 result = await task
                 self.assertTrue(result['ok'], result)
                 values = IniFile(self.game / constants.INI_NAME)
@@ -1862,6 +1883,37 @@ with installer.target_transaction(sys.argv[2],include_known=False):
         self.assertFalse(licenses.exists())
         self.assertEqual(tree(self.game), self.original)
 
+    def test_legacy_licenses_uninstall_failure_rolls_back_nested_license_and_manifest(self):
+        self.install()
+        licenses = self.game / 'Licenses'
+        licenses.mkdir(mode=0o750)
+        directx_license = licenses / 'DirectX_LICENSE.txt'
+        original_bytes = b'legacy DirectX license content'
+        directx_license.write_bytes(original_bytes)
+        manifest = installer.read_manifest(self.game)
+        self.assertNotIn('Licenses/DirectX_LICENSE.txt', manifest['files'])
+        manifest['dirs'] = [*manifest['dirs'], 'Licenses']
+        manifest_path = self.game / constants.MANIFEST_NAME
+        manifest_path.write_text(json.dumps(manifest))
+        before = filesystem_state(self.game)
+        before_manifest = manifest_path.read_bytes()
+
+        unlinked_before_failure = []
+
+        def fail_after_license_unlink(*args, **kwargs):
+            unlinked_before_failure.append((directx_license.exists(), licenses.exists()))
+            raise RuntimeError('simulated uninstall failure after legacy license removal')
+
+        with patch.object(live, 'remove_asi', side_effect=fail_after_license_unlink):
+            with self.assertRaisesRegex(RuntimeError, 'simulated uninstall failure'):
+                installer.uninstall(self.game)
+
+        self.assertEqual(unlinked_before_failure, [(False, False)])
+        self.assertTrue(licenses.is_dir())
+        self.assertEqual(directx_license.read_bytes(), original_bytes)
+        self.assertEqual(manifest_path.read_bytes(), before_manifest)
+        self.assertEqual(filesystem_state(self.game), before)
+
     def test_running_target_is_rejected_before_mutation(self):
         before = tree(self.game)
         with patch.object(live, 'status', return_value={'attached': True}):
@@ -2088,31 +2140,54 @@ with installer.target_transaction(sys.argv[2],include_known=False):
         self.assertNotIn('required_target', plan)
         self.assertFalse(unrelated.get('required_target'))
 
-    def test_non_pbz_game_can_install_snapshot_but_cannot_start_pbz_experiment(self):
+    def test_fsr4_build_lifecycle_and_legacy_experiment_restorepoint_metadata_read(self):
         root = self.root / 'PBZ test server'
         target = self.prepare_pbz_install(root)
         self.assertTrue(restorepoint.info(target)['available'])
 
-        with patch.object(fsr4build, 'fetch', side_effect=AssertionError('fetch should not run')):
-            result = asyncio.run(self.service.setup_deck_experiment(
-                str(target), str(root), 'PBZ test server'))
+        # Existing restore points created by older builds carry `experiment` in
+        # game_settings; reading and validating them must stay backward-compatible.
+        legacy_meta = {
+            'game_path': str(root),
+            'game_settings': {'target': str(target), 'auto': True, 'experiment': True},
+            'launch_options': 'LSFG=1 %command%',
+        }
+        validated = restorepoint.validate_metadata(legacy_meta)
+        self.assertEqual(validated['game_settings']['experiment'], True)
 
-        self.assertFalse(result['ok'], result)
+        # Production FSR4 build switching preserves explicit nofg settings.
+        written = asyncio.run(self.service.write_config(str(target), [
+            {'section': 'FrameGen', 'key': 'Enabled', 'value': 'false'},
+            {'section': 'FrameGen', 'key': 'FGInput', 'value': 'nofg'},
+            {'section': 'FrameGen', 'key': 'FGOutput', 'value': 'nofg'},
+        ]))
+        self.assertTrue(written['ok'], written)
+        dll = self.root / 'community-lite.dll'
+        dll.write_bytes(b'synthetic community lite dll')
+        fake_build = dict(
+            fsr4build.find(constants.FSR4_STEAM_DECK_BUILD_ID),
+            file_bytes=dll.stat().st_size,
+            file_sha256=hashlib.sha256(dll.read_bytes()).hexdigest(),
+        )
+        with patch.object(fsr4build, 'FSR4_BUILDS', [fake_build]), \
+             patch.object(fsr4build, 'fetch', return_value=dll):
+            switched = asyncio.run(self.service.set_fsr4_build(str(target), fake_build['id']))
+        self.assertTrue(switched['ok'], switched)
+        ini = IniFile(target / constants.INI_NAME)
+        self.assertEqual(ini.get('FrameGen', 'FGInput'), 'nofg')
+        self.assertEqual(ini.get('FSR', 'Fsr4ForceEnableInt8'), '1')
 
-    def test_exact_pbz_name_allows_experiment_for_a_renamed_game_path(self):
+    def test_exact_pbz_name_grants_pbz_identity_for_a_renamed_game_path(self):
         root = self.root / 'Renamed Steam shortcut'
-        target = self.prepare_pbz_install(root)
-        with patch.object(fsr4build, 'fetch', return_value='synthetic-fsr4.dll'), \
-             patch.object(installer, 'install_fsr4_build', return_value={'build': {}}), \
-             patch.object(self.service, '_write_config_sync', return_value={
-                 'ok': True, 'applied': [], 'rejected': [],
-             }):
-            result = asyncio.run(self.service.setup_deck_experiment(
-                str(target), str(root), 'Phantom Blade Zero'))
-
-        self.assertTrue(result['ok'], result)
-        self.assertTrue(self.service.settings.get_pref(
-            'deck-experiment:' + str(root), False))
+        canonical = root / 'platform/steam'
+        canonical.mkdir(parents=True)
+        (canonical / 'PBZ.exe').write_bytes(b'MZ')
+        detail = asyncio.run(self.service.get_game(str(root), 'Phantom Blade Zero'))
+        self.assertTrue(detail['pbz_identity'])
+        self.assertEqual(detail['pbz_target'], str(canonical))
+        non_pbz = asyncio.run(self.service.get_game(str(root), 'PBZ test server'))
+        self.assertFalse(non_pbz['pbz_identity'])
+        self.assertIsNone(non_pbz['pbz_target'])
 
     def test_fuzzy_pbz_wiki_match_does_not_grant_pbz_profile_or_target_identity(self):
         root = self.root / 'Phantom Blade Zero fan game'
@@ -2209,6 +2284,100 @@ with installer.target_transaction(sys.argv[2],include_known=False):
         self.assertTrue(installed['ok'], installed)
         self.assertTrue(configured['ok'], configured)
         self.assertEqual(written, frame_changes)
+
+    def test_restore_point_persists_and_returns_applied_launch_metadata(self):
+        cases = (
+            ('non_empty', {'flags': ['-dx11'], 'extraOverrides': []}),
+            ('with_overrides', {'flags': ['-dx11', '-nolauncher'], 'extraOverrides': ['nvngx']}),
+            ('empty_record', {'flags': [], 'extraOverrides': []}),
+        )
+        for label, applied_launch in cases:
+            with self.subTest(label=label):
+                target = self.root / f'applied-launch-{label}'
+                target.mkdir()
+                (target / 'dxgi.dll').write_bytes(b'original proxy')
+                installer.install(target, self.source)
+                game_path = f'/games/{label}'
+                point = asyncio.run(self.service.create_restore_point(
+                    str(target), game_path, 'WINEDLLOVERRIDES="dxgi=n,b" %command% -dx11',
+                    applied_launch=applied_launch,
+                ))
+                self.assertTrue(point['ok'], point)
+                info = restorepoint.info(target)
+                self.assertTrue(info['available'])
+                self.assertIn('applied_launch', info['metadata'])
+                self.assertEqual(info['metadata']['applied_launch'], applied_launch)
+                rolled = asyncio.run(self.service.rollback_install(str(target), game_path))
+                self.assertTrue(rolled['ok'], rolled)
+                self.assertEqual(rolled['applied_launch'], applied_launch)
+                self.assertIsNotNone(rolled['applied_launch'])
+
+    def test_upgrade_runtime_persists_applied_launch_in_restore_point(self):
+        self.prepare_auto_upgrade()
+        applied_launch = {'flags': ['-dx11'], 'extraOverrides': ['nvngx']}
+        result = asyncio.run(self.service.upgrade_runtime(
+            str(self.game), str(self.game), 'wrapper %command% -dx11',
+            applied_launch=applied_launch,
+        ))
+        self.assertTrue(result['ok'], result)
+        self.assertTrue(result['upgraded'])
+        info = restorepoint.info(self.game)
+        self.assertEqual(info['metadata']['applied_launch'], applied_launch)
+        rolled = asyncio.run(self.service.rollback_install(str(self.game), str(self.game)))
+        self.assertTrue(rolled['ok'], rolled)
+        self.assertEqual(rolled['applied_launch'], applied_launch)
+
+    def test_legacy_restore_point_without_applied_launch_validates_and_rolls_back(self):
+        self.install()
+        game_path = '/games/legacy-applied-launch'
+        legacy_meta = {
+            'game_path': game_path,
+            'game_settings': {'target': None, 'auto': False},
+            'launch_options': 'LSFG=1 %command%',
+        }
+        self.assertEqual(restorepoint.validate_metadata(legacy_meta), legacy_meta)
+        with_none = {**legacy_meta, 'applied_launch': None}
+        self.assertEqual(restorepoint.validate_metadata(with_none), with_none)
+        point = restorepoint.create(self.game, legacy_meta)
+        self.assertTrue(point['available'])
+        self.assertNotIn('applied_launch', restorepoint.info(self.game)['metadata'])
+        rolled = asyncio.run(self.service.rollback_install(str(self.game), game_path))
+        self.assertTrue(rolled['ok'], rolled)
+        self.assertIsNone(rolled['applied_launch'])
+
+    def test_restore_point_rejects_malformed_applied_launch(self):
+        self.install()
+        game_path = '/games/invalid-applied-launch'
+        base = {
+            'game_path': game_path,
+            'game_settings': {'target': None, 'auto': False},
+            'launch_options': '',
+        }
+        malformed_cases = (
+            ('string', '-dx11'),
+            ('list', ['-dx11']),
+            ('int', 123),
+            ('bool', True),
+            ('empty_dict', {}),
+            ('missing_extra_overrides', {'flags': []}),
+            ('missing_flags', {'extraOverrides': []}),
+            ('extra_key', {'flags': [], 'extraOverrides': [], 'extra': []}),
+            ('flags_not_list', {'flags': '-dx11', 'extraOverrides': []}),
+            ('overrides_not_list', {'flags': [], 'extraOverrides': 'nvngx'}),
+            ('flags_none', {'flags': None, 'extraOverrides': []}),
+            ('flag_non_string', {'flags': [123], 'extraOverrides': []}),
+            ('flag_none_item', {'flags': [None], 'extraOverrides': []}),
+            ('override_non_string', {'flags': [], 'extraOverrides': [True]}),
+        )
+        for label, bad in malformed_cases:
+            with self.subTest(label=label):
+                with self.assertRaises(ValueError):
+                    restorepoint.validate_metadata({**base, 'applied_launch': bad})
+                result = asyncio.run(self.service.create_restore_point(
+                    str(self.game), game_path, '', applied_launch=bad,
+                ))
+                self.assertFalse(result['ok'], result)
+                self.assertFalse(restorepoint.info(self.game)['available'])
 
 
 class PayloadCompletionTests(unittest.TestCase):

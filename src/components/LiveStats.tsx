@@ -7,17 +7,10 @@ import {
 } from "../config/basic";
 import { hasVerifiedLiveRuntime } from "../liveControl";
 import { UPSCALER_LABELS } from "../config/labels";
+import { useI18n } from "../i18n";
 import type { LiveStatus } from "../types";
 import { KeyValue } from "./Common";
 
-/**
- * What the game is doing right now, read out of OptiScaler itself.
- *
- * Read-only on purpose. Changing things live belongs next to the control that
- * changes them — the frame-generation state sits with the toggle, and the
- * upscaler switch appears beside the upscaler dropdown once one is picked — so
- * this is only the report: frame rate and the upscaler that is actually up.
- */
 /**
  * One number, labelled, sized to be read at a glance over a running game.
  *
@@ -82,24 +75,17 @@ function Tile({
 }
 
 /**
- * The answers `LiveStats` gives, laid out to be read rather than scrolled past:
- * what the frame rate is, whether frame generation is on, and which upscaler
- * the game actually ended up with.
+ * Compact telemetry tiles for the ~310px Quick Access column.
  *
- * The Quick Access panel opens over a running game, so these sit at the top of
- * it and the controls that change them follow underneath.
- *
- * When a frame counter can be matched to both intervals, frame generation
- * splits its rate in two and both are shown. If only core intervals are
- * available, the panel says "present path FPS" (or the measured interval) and
- * does not turn one interval into a generated-frame multiplier. The actual FG
- * object state is also kept separate from the configured setting.
+ * Uses "Est. FPS" when only core intervals are reported (while LivePanel's
+ * diagnostic telemetry keeps the exact "Present path FPS" wording).
  */
 export function LiveTiles({ live }: { live: LiveStatus | null }) {
+  const { t } = useI18n();
   if (!hasVerifiedLiveRuntime(live)) return null;
   const rate = (value: number | null | undefined) =>
     typeof value === "number" && value > 0 ? value.toFixed(0) : "—";
-  const fg = typeof live.fg_enabled === "boolean" ? (live.fg_enabled ? "ON" : "OFF") : "—";
+  const fg = typeof live.fg_enabled === "boolean" ? (live.fg_enabled ? t("ON") : t("OFF")) : "—";
   const rates = liveFrameRates(live);
   const coreIntervals = live.telemetry_ready === true && live.telemetry_source === "core_intervals";
   const presentPathFps = livePresentPathFps(live);
@@ -113,9 +99,9 @@ export function LiveTiles({ live }: { live: LiveStatus | null }) {
     <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", padding: "2px 0 4px" }}>
       {rates ? (
         <>
-          <Tile label="base fps" value={rate(rates.base)} grow={0.7} min={76} />
+          <Tile label={t("base fps")} value={rate(rates.base)} grow={0.7} min={76} />
           <Tile
-            label="with fg"
+            label={t("with fg")}
             value={rate(rates.total)}
             color={rates.generating ? "#7fd08a" : undefined}
             grow={0.7}
@@ -124,32 +110,30 @@ export function LiveTiles({ live }: { live: LiveStatus | null }) {
         </>
       ) : coreIntervals ? (
         presentPathFps !== null ? (
-          <Tile label="present path fps" value={presentPathFps.toFixed(1)} grow={0.9} min={98} />
+          <Tile label={t("Est. FPS")} value={presentPathFps.toFixed(1)} grow={0.9} min={84} />
         ) : presentMs !== null ? (
-          <Tile label="present interval" value={`${presentMs.toFixed(2)} ms`} grow={0.9} min={98} />
+          <Tile label={t("present interval")} value={`${presentMs.toFixed(2)} ms`} grow={0.9} min={98} />
         ) : (
-          <Tile label="present path fps" value="—" grow={0.9} min={98} />
+          <Tile label={t("Est. FPS")} value="—" grow={0.9} min={84} />
         )
       ) : (
-        <Tile label="fps" value={rate(live.fps)} grow={0.7} min={76} />
+        <Tile label={t("fps")} value={rate(live.fps)} grow={0.7} min={76} />
       )}
       <Tile
-        label="frame gen"
+        label={t("frame gen")}
         value={fg}
-        // Frame generation on and not generating is the state that otherwise
-        // shows up as two identical frame rates and no reason for them.
         sub={
           rates && rates.base === null
-            ? "no reading"
+            ? t("no reading")
             : rates && !rates.generating
-              ? "idle"
+              ? t("idle")
               : undefined
         }
         color={rates?.generating ? "#7fd08a" : undefined}
         grow={0.9}
         min={80}
       />
-      <Tile label="upscaler" value={upscaler ?? "—"} grow={1.4} min={100} />
+      <Tile label={t("upscaler")} value={upscaler ?? "—"} grow={1.4} min={100} />
       {ffxFg ? (
         <Tile label="FFX FG" value={ffxFg} grow={1} min={100} />
       ) : null}
@@ -157,86 +141,160 @@ export function LiveTiles({ live }: { live: LiveStatus | null }) {
   );
 }
 
-export function LiveStats({ live }: { live: LiveStatus | null }) {
+/**
+ * Shared key-value telemetry list used by both LiveStats (player view) and
+ * LivePanel (diagnostic view). Uses the three-way frame-rate branch so
+ * `core_intervals` never renders a misleading "Frame rate: unknown" row.
+ */
+export function LiveTelemetryList({
+  live,
+  diagnostic = false,
+}: Readonly<{
+  live: LiveStatus | null;
+  diagnostic?: boolean;
+}>) {
+  const { t } = useI18n();
   if (!hasVerifiedLiveRuntime(live) || !live) return null;
 
-  const upscalerName = liveUpscalerLabel(live) ?? "unknown";
-  // A status file written by an older build of the in-game plugin has none of
-  // these fields, so every one of them is treated as optional.
+  const ms = (value: number | null | undefined) =>
+    typeof value === "number" && value > 0 ? `${value.toFixed(2)} ms` : "—";
+  const fpsText = (value: number | null | undefined) =>
+    typeof value === "number" && value > 0 ? `${value.toFixed(1)} fps` : "—";
+
   const rates = liveFrameRates(live);
   const coreIntervals = live.telemetry_ready === true && live.telemetry_source === "core_intervals";
   const presentPathFps = livePresentPathFps(live);
-  // The counter on its own does not say which rate it counted, so what is
-  // labelled the frame rate here is the derived total wherever there is one.
-  const fps = coreIntervals
-    ? null
-    : rates?.total ?? (typeof live.fps === "number" ? live.fps : null);
+  const upscalerName = liveUpscalerLabel(live) ?? t("unknown");
 
   return (
-    <PanelSection title="In-game now">
-      <PanelSectionRow>
-        <div style={{ padding: "2px 0" }}>
+    <div style={{ padding: "2px 0" }}>
+      {rates ? (
+        <>
           <KeyValue
-            label={rates ? "Frame rate, with FG" : "Frame rate"}
-            value={fps === null || fps <= 0 ? "unknown" : <b>{fps.toFixed(1)} fps</b>}
+            label={diagnostic ? t("Presented rate") : t("Frame rate, with FG")}
+            value={diagnostic ? fpsText(rates.total) : <b>{rates.total.toFixed(1)} fps</b>}
           />
-          {live.fg_enabled !== null ? (
-            <KeyValue
-              label="Frame generation active"
-              value={live.fg_enabled ? "on" : "off"}
-            />
-          ) : null}
-          {typeof live.configured_fg_enabled === "boolean" ? (
-            <KeyValue
-              label="Frame generation configured"
-              value={live.configured_fg_enabled ? "on" : "off"}
-            />
-          ) : null}
-          {coreIntervals ? (
-            <KeyValue
-              label="Present path FPS"
-              value={
-                presentPathFps === null
-                  ? "unavailable"
+          <KeyValue
+            label={diagnostic ? t("Rendered rate") : t("Rendered")}
+            value={
+              rates.base === null ? (
+                t("not reported by the in-game plugin")
+              ) : diagnostic ? (
+                fpsText(rates.base)
+              ) : (
+                <>
+                  <b>{rates.base.toFixed(1)} fps</b>
+                  {rates.generating ? "" : t(" (no frames being generated)")}
+                </>
+              )
+            }
+          />
+        </>
+      ) : coreIntervals ? (
+        <>
+          <KeyValue
+            label={t("Present path FPS")}
+            value={
+              presentPathFps === null
+                ? t("unavailable")
+                : diagnostic
+                  ? fpsText(presentPathFps)
                   : <b>{presentPathFps.toFixed(1)} fps</b>
-              }
-            />
-          ) : null}
-          {live.ffx_fg_versions?.length ? (
+            }
+          />
+          {!diagnostic && typeof live.presented_ms === "number" && live.presented_ms > 0 ? (
             <KeyValue
-              label="FFX frame generator"
-              value={liveFfxFgLabel(live) ?? "not identified by the runtime"}
-            />
-          ) : null}
-          {rates ? (
-            <KeyValue
-              label="Rendered"
-              value={
-                rates.base === null ? (
-                  "not reported by the in-game plugin"
-                ) : (
-                  <>
-                    <b>{rates.base.toFixed(1)} fps</b>
-                    {rates.generating ? "" : " (no frames being generated)"}
-                  </>
-                )
-              }
-            />
-          ) : null}
-          {coreIntervals && typeof live.presented_ms === "number" && live.presented_ms > 0 ? (
-            <KeyValue
-              label="Present interval"
+              label={t("Present interval")}
               value={`${live.presented_ms.toFixed(2)} ms`}
             />
           ) : null}
-          <KeyValue label="Upscaler" value={upscalerName} />
+        </>
+      ) : (
+        <KeyValue
+          label={diagnostic ? t("Frame counter rate") : t("Frame rate")}
+          value={
+            diagnostic
+              ? fpsText(live.fps)
+              : typeof live.fps === "number" && live.fps > 0
+                ? <b>{live.fps.toFixed(1)} fps</b>
+                : t("unknown")
+          }
+        />
+      )}
+
+      {live.fg_enabled !== null ? (
+        <KeyValue
+          label={t("Frame generation active")}
+          value={live.fg_enabled ? t("on") : t("off")}
+        />
+      ) : null}
+      {typeof live.configured_fg_enabled === "boolean" ? (
+        <KeyValue
+          label={t("Frame generation configured")}
+          value={live.configured_fg_enabled ? t("on") : t("off")}
+        />
+      ) : null}
+      {live.ffx_fg_versions?.length ? (
+        <KeyValue
+          label={t("FFX frame generator")}
+          value={liveFfxFgLabel(live) ?? t("not identified by the runtime")}
+        />
+      ) : null}
+
+      {diagnostic ? (
+        <>
+          {live.telemetry_ready === true ? (
+            <KeyValue
+              label={t("Intervals")}
+              value={t("{present} present · {fg} fg", {
+                present: ms(live.presented_ms),
+                fg: ms(live.rendered_ms),
+              })}
+            />
+          ) : null}
+          <KeyValue
+            label={t("In-game plugin")}
+            value={
+              live.schema === null || live.schema === undefined
+                ? t("did not report a version")
+                : `${t("format {schema}", { schema: live.schema })}${
+                    live.asi_current === false
+                      ? t(" · older than the one shipped here")
+                      : live.asi_current
+                        ? t(" · current")
+                        : ""
+                  }`
+            }
+          />
+          {rates && !rates.generating ? (
+            <KeyValue
+              label={t("Frame generation")}
+              value={t("on, but no frames are being generated")}
+            />
+          ) : null}
+        </>
+      ) : (
+        <>
+          <KeyValue label={t("Upscaler")} value={upscalerName} />
           {live.pending_backend ? (
             <KeyValue
-              label="Switching to"
+              label={t("Switching to")}
               value={UPSCALER_LABELS[live.pending_backend] ?? live.pending_backend}
             />
           ) : null}
-        </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+export function LiveStats({ live }: { live: LiveStatus | null }) {
+  const { t } = useI18n();
+  if (!hasVerifiedLiveRuntime(live) || !live) return null;
+  return (
+    <PanelSection title={t("In-game now")}>
+      <PanelSectionRow>
+        <LiveTelemetryList live={live} />
       </PanelSectionRow>
     </PanelSection>
   );

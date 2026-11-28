@@ -1,4 +1,3 @@
-import React from "react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import assert from "node:assert/strict";
@@ -57,6 +56,7 @@ Object.assign(fixtures, {
   write_config: (dir: string, changes: { section: string; key: string; value: string }[]) =>
     writeBackend(dir, changes),
   create_restore_point: { ok: true, available: true },
+  get_pref: (key: string, fallback?: unknown) => ({ key, value: fallback ?? null }),
   set_fsr4_build: (dir: string, build: string) => {
     builds.set(dir, build);
     return { ok: true };
@@ -126,7 +126,7 @@ async function run() {
   let firstRead = deferred<ConfigResult>();
   let secondRead = deferred<ConfigResult>();
   let reads = 0;
-  readBackend = (dir) => ++reads === 1 ? firstRead.promise : secondRead.promise;
+  readBackend = (_dir) => ++reads === 1 ? firstRead.promise : secondRead.promise;
   const first = await mount("initial-a", dir1);
   const second = await mount("initial-b", dir1);
   assert.equal(reads, 2, "both hooks should issue an initial read");
@@ -194,7 +194,7 @@ async function run() {
   let oldRead = deferred<ConfigResult>();
   let authoritativeRead = deferred<ConfigResult>();
   reads = 0;
-  readBackend = (dir) => ++reads === 1 ? oldRead.promise : authoritativeRead.promise;
+  readBackend = (_dir) => ++reads === 1 ? oldRead.promise : authoritativeRead.promise;
   const stale = await mount("stale-read", dir4);
   let reload!: Promise<void>;
   await act(async () => { reload = stale.hook.authoritativeReload(); await Promise.resolve(); });
@@ -323,8 +323,10 @@ async function run() {
     const calls = invocations.slice(invocationStart);
     const snapshot = calls.find((call) => call.name === "create_restore_point");
     const buildCall = calls.find((call) => call.name === "set_fsr4_build");
-    assert.ok(snapshot && buildCall && calls.indexOf(snapshot) < calls.indexOf(buildCall), "Basic FSR4 must snapshot before replacing files");
-    assert.equal(buildCall.args[1], "4.1.2-lite-exact-20261105", "Basic selects the pinned latest community build");
+    assert.ok(snapshot, "Basic FSR4 must create a restore point");
+    assert.ok(buildCall, "Basic FSR4 must call set_fsr4_build");
+    assert.ok(calls.indexOf(snapshot) < calls.indexOf(buildCall), "Basic FSR4 must snapshot before replacing files");
+    assert.equal(buildCall.args[1], "4.1.2-lite-exact-20261122", "Basic selects the pinned latest community build");
     assert.equal(snapshot.args[2], launchOptions, "the snapshot must receive Steam's current launch string");
     assert.deepEqual(getTargetLiveRecord(dir8).restartKeys, [], "a stopped-game FSR change leaves no restart warning");
     assert.equal(getTargetLiveRecord(dir8).live, null, "a stopped-game FSR change clears its old live receipt");

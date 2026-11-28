@@ -85,13 +85,28 @@ function upscalerPreset(
   };
 }
 
-export const STEAM_DECK_FSR4_BUILD_ID = "4.1.2-lite-exact-20261105";
+export const STEAM_DECK_FSR4_BUILD_ID = "4.1.2-lite-exact-20261122";
+export const PRIOR_COMMUNITY_FSR4_BUILD_IDS = ["4.1.2-lite-exact-20261105"] as const;
+
+export function isPriorCommunityLiteBuild(buildId?: string | null): boolean {
+  return Boolean(
+    buildId && (PRIOR_COMMUNITY_FSR4_BUILD_IDS as readonly string[]).includes(buildId),
+  );
+}
+
+export function isCommunityFsr4Build(buildId?: string | null): boolean {
+  return (
+    buildId === STEAM_DECK_FSR4_BUILD_ID ||
+    buildId === "4.1.1b" ||
+    isPriorCommunityLiteBuild(buildId)
+  );
+}
 
 export const UPSCALER_PRESETS: Preset[] = [
   {
     id: "auto",
     label: "Auto (leave the game alone)",
-    description: "OptiScaler picks its own default for each API.",
+    description: "Let OptiScaler choose per API.",
     changes: [
       change("Upscalers", "Dx12Upscaler", AUTO),
       change("Upscalers", "Dx11Upscaler", AUTO),
@@ -107,7 +122,7 @@ export const UPSCALER_PRESETS: Preset[] = [
     // documents the preset for matching/validation; onEnableFsr4 applies it.
     id: "fsr4-int8",
     label: "FSR 4.1.2 Lite — community",
-    description: "Experimental Lite Exact build for Steam Deck / RDNA2 APUs. Keeps frame generation unchanged. Close the game first.",
+    description: "Experimental RDNA2/Steam Deck Lite build. Keeps frame gen; close game first.",
     changes: [
       change("Upscalers", "Dx12Upscaler", "fsr31"),
       change("Upscalers", "Dx11Upscaler", "fsr31_12"),
@@ -128,31 +143,31 @@ export const UPSCALER_PRESETS: Preset[] = [
   upscalerPreset(
     "fsr4",
     "FSR 3.X/4",
-    "Uses the installed FSR 4 library with automatic model selection. Bundled 4.1.2 includes APU INT8 Lite; verify the in-game watermark.",
+    "Uses installed FSR 4 library with auto model selection (verify in-game watermark).",
     "fsr31", "fsr31_12", "fsr31_12", true, "auto"
   ),
   upscalerPreset(
     "fsr31",
     "FSR 3.X",
-    "The same backend running FSR 3.1. Works on any GPU — the safe choice on a Steam Deck.",
+    "Runs FSR 3.1 on any GPU — safe fallback on Steam Deck.",
     "fsr31", "fsr31", "fsr31", false, false
   ),
   upscalerPreset(
     "fsr22",
     "FSR 2.2.1",
-    "Older FSR, most compatible.",
+    "Older FSR 2.2.1; widest compatibility.",
     "fsr22", "fsr22", "fsr22"
   ),
   upscalerPreset(
     "xess",
     "XeSS",
-    "Intel's upscaler. Often the best image quality on AMD hardware.",
+    "Intel XeSS — often sharpest on AMD GPUs.",
     "xess", "xess_12", "xess"
   ),
   upscalerPreset(
     "dlss",
     "DLSS",
-    "Nvidia only — needs a real DLSS-capable GPU.",
+    "Nvidia RTX / DLSS-capable GPUs only.",
     "dlss", "dlss", "dlss"
   ),
 ];
@@ -187,25 +202,25 @@ export const FG_PRESETS: Preset[] = [
   fgPreset(
     "fsrfg",
     "FSR FG",
-    "FG Input “FSR 3.1 FG” into FG Output “FSR FG”. The most broadly compatible pair.",
+    "FSR 3.1 FG → FSR FG. Most compatible.",
     "fsrfg", "fsrfg"
   ),
   fgPreset(
     "xefg",
     "XeFG",
-    "FG Input “FSR 3.1 FG” into FG Output “XeFG”. Supports 3X and 4X as well as 2X.",
+    "FSR 3.1 FG → XeFG. Supports 2X, 3X, and 4X.",
     "fsrfg", "xefg"
   ),
   fgPreset(
     "nukems",
     "FSR3-FG via Nukem's",
-    "FG Input “Nukem's DLSSG”. Uses the game's own DLSS-FG path — only for games that have it.",
+    "Nukem's DLSSG. Uses the game's DLSS-FG path.",
     "nukems", "nukems"
   ),
   fgPreset(
     "dlssg",
     "DLSSG via Streamline",
-    "FG Input “DLSSG via Streamline” into FG Output “FSR FG”. Only for games built on Streamline v2.",
+    "DLSSG (Streamline) → FSR FG. For Streamline v2 games.",
     "dlssg", "fsrfg"
   ),
 ];
@@ -307,6 +322,7 @@ export function supportsOfficialInt8(ffx?: { version?: string | null } | null): 
 
 /** The archive is tuned for RDNA2 integrated GPUs, rather than all RDNA2 cards. */
 export function isRdna2Apu(gpu: GpuInfo | null | undefined): boolean {
+  if (typeof gpu?.is_rdna2_apu === "boolean") return gpu.is_rdna2_apu;
   return gpu?.vendor === "amd" && gpu.generation === "RDNA2" &&
     /steam\s*deck|van\s*gogh|jupiter|galileo|rembrandt|\b(?:680m|660m|610m)\b/i.test(
       [gpu.name, ...(gpu.names ?? [])].filter(Boolean).join(" ")

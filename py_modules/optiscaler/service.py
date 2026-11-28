@@ -47,7 +47,9 @@ class OptiScalerService:
             self.plugin_dir / "defaults" / "compat-list.json",
         )
         self._payload_lock = asyncio.Lock()
-        self._mutation_lock = asyncio.Lock()
+        self._settings_lock = asyncio.Lock()
+        self._target_locks = {}
+        self._fsr4_build_locks = {}
         # Background wiki refreshes in flight, by key. Answers come from cache
         # and the network never sits in front of one; this is what keeps the
         # cache current behind them, single-flight so a page opened three times
@@ -55,6 +57,61 @@ class OptiScalerService:
         self._wiki_jobs = set()
 
     # -- helpers ---------------------------------------------------------
+    def _target_lock(self, target_dir):
+        """Per-normalized-target asyncio lock so one game's slow live ACK never
+        blocks mutations on other games or global plugin settings."""
+        key = str(Path(target_dir).resolve())
+        lock = self._target_locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._target_locks[key] = lock
+        return lock
+
+    def _fsr4_build_lock(self, build_id):
+        """Per-build asyncio lock serializing shared FSR4 cache preparation."""
+        key = str(build_id)
+        lock = self._fsr4_build_locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._fsr4_build_locks[key] = lock
+        return lock
+
+    def _safe_detect(self, target_dir):
+        """Run installer.detect with per-game ValueError fault isolation."""
+        try:
+            return installer.detect(target_dir)
+        except ValueError as exc:
+            self.log.warning("corrupted install metadata at %s: %s", target_dir, exc)
+            target = Path(target_dir)
+            return {
+                "path": str(target),
+                "installed": False,
+                "filename": None,
+                "managed": False,
+                "version": None,
+                "installed_at": None,
+                "ini_present": (target / INI_NAME).is_file(),
+                "ini_path": str(target / INI_NAME),
+                "log_present": (target / constants.LOG_NAME).is_file(),
+                "log_path": str(target / constants.LOG_NAME),
+                "candidates": [],
+                "extra_proxies": [],
+                "backup_dir": str(target / constants.BACKUP_DIR),
+                "backed_up": [],
+                "launch_record": {"recorded": False, "value": ""},
+                "fsr4": {
+                    "files": {},
+                    "ready": False,
+                    "required": list(constants.FSR4_SUPPORT_FILES),
+                },
+                "reframework": {
+                    "installed": (target / REFRAMEWORK_DLL).is_file(),
+                    "revision": None,
+                    "managed": False,
+                },
+                "manifest_error": str(exc),
+            }
+
     @staticmethod
     async def _run(func, *args, **kwargs):
         return await asyncio.to_thread(func, *args, **kwargs)
@@ -116,40 +173,63 @@ class OptiScalerService:
         self.refresh_wiki_if_stale()
 
     # -- status ----------------------------------------------------------
+    @staticmethod
+    def _system_locale():
+        for key in ("LC_ALL", "LC_MESSAGES", "LANG"):
+            raw = (os.environ.get(key) or "").strip()
+            if not raw:
+                continue
+            head = raw.split(".", 1)[0].split("@", 1)[0].strip().lower()
+            if head in ("", "c", "posix"):
+                continue
+            return raw
+        return None
+
     async def get_status(self):
         status = self.payload.status()
         status["optiscaler_version"] = OPTISCALER_VERSION
         status["proxy_filenames"] = PROXY_FILENAMES
         status["default_proxy"] = DEFAULT_PROXY
+        status["fsr4_default_build"] = constants.FSR4_STEAM_DECK_BUILD_ID
+        status["fsr4_community_settings"] = [dict(item) for item in constants.FSR4_COMMUNITY_SETTINGS]
+        status["locale"] = self._system_locale()
         return status
 
     # -- libraries -------------------------------------------------------
-    def _libraries(self):
-        """Steam library folders plus any the user added by hand."""
-        libraries = []
+    def _scan_libraries(self):
+        """Steam library folders plus custom ones, paired with their scanned games."""
+        scanned = []
         for path in steam.library_folders(self.home):
-            libraries.append(
+            found = steam.steam_games(path)
+            scanned.append((
                 {
                     "path": str(path),
                     "name": self._library_label(path),
                     "source": "steam",
-                    "game_count": len(steam.steam_games(path)),
+                    "game_count": len(found),
                     "available": True,
-                }
-            )
+                },
+                found,
+            ))
         for entry in self.settings.get("custom_libraries", []):
             path = Path(entry["path"])
             available = path.is_dir()
-            libraries.append(
+            found = steam.folder_games(path) if available else []
+            scanned.append((
                 {
                     "path": str(path),
                     "name": entry.get("name") or path.name,
                     "source": "custom",
-                    "game_count": len(steam.folder_games(path)) if available else 0,
+                    "game_count": len(found),
                     "available": available,
-                }
-            )
-        return libraries
+                },
+                found,
+            ))
+        return scanned
+
+    def _libraries(self):
+        """Steam library folders plus any the user added by hand."""
+        return [library for library, _ in self._scan_libraries()]
 
     async def list_libraries(self):
         return await self._run(self._libraries)
@@ -232,70 +312,18 @@ class OptiScalerService:
         target = Path(path).expanduser()
         if not target.is_dir():
             return {"ok": False, "error": f"Not a directory: {target}"}
-        added = await self._run(self.settings.add_library, str(target), name)
+        async with self._settings_lock:
+            added = await self._run(self.settings.add_library, str(target), name)
         if not added:
             return {"ok": False, "error": "That folder is already a library."}
         return {"ok": True, "path": str(target)}
 
     async def remove_custom_library(self, path):
-        removed = await self._run(self.settings.remove_library, path)
+        async with self._settings_lock:
+            removed = await self._run(self.settings.remove_library, path)
         return {"ok": removed}
 
-    async def browse(self, path=None):
-        """Directory listing used by the custom-library folder picker."""
-        def work():
-            if not path:
-                roots = [
-                    {"path": str(self.home), "name": "Home"},
-                    {"path": "/run/media", "name": "Removable media"},
-                    {"path": "/", "name": "Filesystem root"},
-                ]
-                return {
-                    "path": None,
-                    "parent": None,
-                    "entries": [r for r in roots if Path(r["path"]).is_dir()],
-                }
-            current = Path(path).expanduser()
-            if not current.is_dir():
-                return {"path": str(current), "parent": str(current.parent), "entries": []}
-            entries = []
-            try:
-                for child in sorted(current.iterdir(), key=lambda p: p.name.lower()):
-                    if child.is_dir() and not child.name.startswith("."):
-                        entries.append({"path": str(child), "name": child.name})
-            except PermissionError:
-                pass
-            return {
-                "path": str(current),
-                "parent": str(current.parent) if current.parent != current else None,
-                "entries": entries,
-            }
-
-        return await self._run(work)
-
     # -- games -----------------------------------------------------------
-    async def list_games(self, library_path, source="steam"):
-        def work():
-            games = (steam.steam_games(library_path) if source == "steam"
-                     else steam.folder_games(library_path))
-            for game in games:
-                target = self.settings.get_target(game["path"])
-                probe = target or game["path"]
-                detection = installer.detect(probe)
-                if not detection["installed"] and not target:
-                    # Cheap top-level probe missed it; look one level deeper.
-                    for candidate in steam.find_exe_dirs(game["path"])[:4]:
-                        found = installer.detect(candidate["path"])
-                        if found["installed"]:
-                            detection = found
-                            break
-                game["installed"] = detection["installed"]
-                game["filename"] = detection["filename"]
-                game["install_path"] = detection["path"] if detection["installed"] else None
-            return games
-
-        return await self._run(work)
-
     async def list_all_games(self):
         """Every detected game across every library, as one flat list.
 
@@ -306,10 +334,8 @@ class OptiScalerService:
         def work():
             seen = set()
             games = []
-            for library in self._libraries():
+            for library, found in self._scan_libraries():
                 source = library["source"]
-                found = (steam.steam_games(library["path"]) if source == "steam"
-                         else steam.folder_games(library["path"]))
                 for game in found:
                     if game["path"] in seen:
                         continue
@@ -318,16 +344,19 @@ class OptiScalerService:
                     game["source"] = source
                     target = self.settings.get_target(game["path"])
                     probe = target or game["path"]
-                    detection = installer.detect(probe)
+                    detection = self._safe_detect(probe)
                     if not detection["installed"] and not target:
                         for candidate in steam.find_exe_dirs(game["path"])[:4]:
-                            deeper = installer.detect(candidate["path"])
+                            deeper = self._safe_detect(candidate["path"])
                             if deeper["installed"]:
                                 detection = deeper
                                 break
                     game["installed"] = detection["installed"]
                     game["filename"] = detection["filename"]
                     game["install_path"] = detection["path"] if detection["installed"] else None
+                    diag = detection.get("manifest_error") or detection.get("launch_record_error")
+                    if diag:
+                        game["error"] = diag
                     games.append(game)
             # Set-up games first, then alphabetical - the ones already managed
             # are the ones being come back to.
@@ -350,12 +379,12 @@ class OptiScalerService:
 
             detection = None
             for candidate in candidates:
-                found = installer.detect(candidate["path"])
+                found = self._safe_detect(candidate["path"])
                 if found["installed"]:
                     detection = found
                     break
             if detection is None:
-                root = installer.detect(str(path))
+                root = self._safe_detect(str(path))
                 detection = root if root["installed"] else None
 
             if detection:
@@ -371,23 +400,45 @@ class OptiScalerService:
             else:
                 target = str(path)
 
-            info = installer.detect(target)
-            info["runtime_current"] = installer.runtime_current(target)
-            info["runtime_recovery_needed"] = installer.pending_target_transaction(target)
+            info = self._safe_detect(target)
+            try:
+                info["runtime_current"] = installer.runtime_current(target)
+            except ValueError as exc:
+                self.log.warning("corrupted runtime metadata at %s: %s", target, exc)
+                info["runtime_current"] = False
+                info.setdefault("manifest_error", str(exc))
+            try:
+                info["runtime_recovery_needed"] = installer.pending_target_transaction(target)
+            except ValueError as exc:
+                self.log.warning("corrupted transaction metadata at %s: %s", target, exc)
+                info["runtime_recovery_needed"] = True
+                info.setdefault("manifest_error", str(exc))
             info["runtime_upgrade_held"] = self.settings.get_pref(
                 _runtime_hold_key(target)) == constants.RUNTIME_DLL_SHA256
-            info["rollback"] = restorepoint.info(target)
+            try:
+                rollback = dict(restorepoint.info(target))
+            except ValueError as exc:
+                self.log.warning("corrupted restore point at %s: %s", target, exc)
+                rollback = {"available": False, "version": None, "metadata": {}, "error": str(exc)}
+            rollback["launch_pending"] = (
+                bool(rollback.get("available"))
+                and self.settings.get_rollback_launch_pending(str(path))
+            )
+            info["rollback"] = rollback
             ini_info = {"present": False, "legacy": False, "keys": 0}
             ini_path = Path(target) / INI_NAME
             if ini_path.is_file():
-                values = IniFile(ini_path).to_dict()
-                ini_info = {
-                    "present": True,
-                    # v0.9-final split FGType into FGInput/FGOutput; an ini that
-                    # still has FGType was written by an older tool.
-                    "legacy": any("FGType" in section for section in values.values()),
-                    "keys": sum(len(v) for v in values.values()),
-                }
+                try:
+                    values = IniFile(ini_path).to_dict()
+                    ini_info = {
+                        "present": True,
+                        # v0.9-final split FGType into FGInput/FGOutput; an ini that
+                        # still has FGType was written by an older tool.
+                        "legacy": any("FGType" in section for section in values.values()),
+                        "keys": sum(len(v) for v in values.values()),
+                    }
+                except OSError:
+                    pass
             return {
                 "ini_info": ini_info,
                 "wiki_entry": pinned_wiki_entry,
@@ -396,13 +447,16 @@ class OptiScalerService:
                 "path": str(path),
                 "name": name or path.name,
                 "target": target,
+                "is_pbz": bool(pbz_identity),
                 "pbz_identity": pbz_identity,
                 "pbz_target": pbz_target,
                 "target_is_saved": bool(saved_target),
                 "candidates": candidates,
                 "install": info,
                 "launch_option": installer.launch_option(info["filename"] or DEFAULT_PROXY),
-                "reframework": reframework.status(target),
+                "reframework": reframework.status(
+                    target, revision=info.get("reframework", {}).get("revision")
+                ),
                 "writable": os.access(target, os.W_OK) if Path(target).is_dir() else False,
             }
 
@@ -450,17 +504,20 @@ class OptiScalerService:
 
     async def set_wiki_entry(self, game_path, entry_name):
         """Pin a compatibility-list entry to a game, overriding name matching."""
-        await self._run(self.settings.set_wiki_entry, game_path, entry_name)
+        async with self._settings_lock:
+            await self._run(self.settings.set_wiki_entry, game_path, entry_name)
         return {"ok": True}
 
     # -- FSR4 support files ----------------------------------------------
-    def fsr4_build_cache(self):
+    def fsr4_build_cache(self, build_id=None):
         """Where downloaded FSR 4 builds live. Shared by every game, so a second
         game is a copy rather than a second download."""
         cache = self.runtime_dir / "fsr4-builds"
         # The experimental package can carry the exact same pinned archive as the downloader.
         # Seed only a verified archive; fetch() still verifies the extracted DLL independently.
         for build in fsr4build.FSR4_BUILDS:
+            if build_id is not None and build["id"] != build_id:
+                continue
             for source in build["sources"]:
                 bundled = self.plugin_dir / "bin" / source["asset"]
                 if bundled.is_file() and fsr4build.digest(bundled) == source["archive_sha256"]:
@@ -487,9 +544,9 @@ class OptiScalerService:
         """Enable the pinned community upscaler and INT8 settings together."""
         try:
             build = fsr4build.find(build_id)
-            if build is None:
+            if build is None or not build.get("sources"):
                 raise ValueError("Unsupported Steam Deck FSR 4 build")
-            async with self._mutation_lock:
+            async with self._target_lock(target_dir):
                 await self._run(installer.require_stopped_install, target_dir)
                 if not await self._run(installer.runtime_current, target_dir):
                     raise ValueError("Upgrade the game runtime before choosing this FSR preset.")
@@ -497,7 +554,9 @@ class OptiScalerService:
                 if not point.get("available"):
                     raise ValueError("Create a restore point before changing the FSR build.")
                 self._validate_restore_metadata(point.get("metadata"))
-                dll = await self._run(fsr4build.fetch, build, self.fsr4_build_cache(), self.log)
+                async with self._fsr4_build_lock(build["id"]):
+                    cache = await self._run(self.fsr4_build_cache, build["id"])
+                    dll = await self._run(fsr4build.fetch, build, cache, self.log)
                 # Installer checks again: the game may have started during download.
                 result = await self._run(
                     installer.install_fsr4_build, target_dir, dll, build, self.log, True
@@ -507,13 +566,31 @@ class OptiScalerService:
             self.log.exception("FSR 4 setup failed for %s", target_dir)
             return {"ok": False, "error": str(exc)}
 
-    async def restore_fsr4_build(self, target_dir):
+    async def restore_fsr4_build(self, target_dir, apply_official_preset=False):
+        """Restore the bundled official FSR 4 DLL, optionally applying the official
+        FSR 3.X/4 INI preset atomically in the same stopped-game transaction."""
         try:
             payload_root = await self.ensure_payload()
-            async with self._mutation_lock:
-                result = await self._run(
-                    installer.restore_fsr4_build, target_dir, payload_root, self.log
-                )
+            async with self._target_lock(target_dir):
+                def work():
+                    if not apply_official_preset:
+                        return installer.restore_fsr4_build(target_dir, payload_root, self.log)
+                    installer.recover_target_transactions(target_dir)
+                    installer.require_stopped_install(target_dir)
+                    if not installer.runtime_current(target_dir):
+                        raise ValueError("Upgrade OptiScaler to the supported runtime before changing FSR 4 settings.")
+                    with installer.target_transaction(target_dir, require_stopped=True):
+                        result = installer.restore_fsr4_build(target_dir, payload_root, self.log)
+                        written = self._write_config_sync(
+                            target_dir,
+                            constants.FSR4_OFFICIAL_SETTINGS,
+                            push_live=False,
+                        )
+                        if not written.get("ok") or written.get("rejected"):
+                            raise ValueError(written.get("error") or "Could not apply official FSR 4 settings")
+                        result["applied"] = written.get("applied", [])
+                        return result
+                result = await self._run(work)
             return {"ok": True, **result}
         except Exception as exc:
             self.log.exception("FSR 4 restore failed for %s", target_dir)
@@ -521,7 +598,7 @@ class OptiScalerService:
 
     async def import_fsr4_files(self, target_dir, source_dir):
         try:
-            async with self._mutation_lock:
+            async with self._target_lock(target_dir):
                 result = await self._run(installer.import_fsr4_files, target_dir, source_dir, self.log)
             return {"ok": True, **result}
         except Exception as exc:
@@ -561,7 +638,7 @@ class OptiScalerService:
             if options is None:
                 return {"ok": False, "error": "no launch options to record",
                         "recorded": False, "value": "", "written": False}
-            async with self._mutation_lock:
+            async with self._target_lock(target_dir):
                 if not await self._run(installer.read_manifest, target_dir):
                     raise ValueError("Set up this game with the plugin before changing its Steam launch options.")
                 record = await self._run(installer.record_launch_options, target_dir, options, self.log)
@@ -575,11 +652,12 @@ class OptiScalerService:
         return {"key": key, "value": self.settings.get_pref(key, default)}
 
     async def set_pref(self, key, value):
-        await self._run(self.settings.set_pref, key, value)
+        async with self._settings_lock:
+            await self._run(self.settings.set_pref, key, value)
         return {"ok": True, "key": key, "value": value}
 
     async def set_game_target(self, game_path, target_dir):
-        async with self._mutation_lock:
+        async with self._settings_lock:
             await self._run(self.settings.set_target, game_path, target_dir)
         return {"ok": True}
 
@@ -616,7 +694,7 @@ class OptiScalerService:
 
     async def refresh_wiki(self):
         entries, meta = await self._run(self.wiki.load_entries, True)
-        return {"count": len(entries), "meta": meta}
+        return {"ok": not bool(meta.get("error")), "count": len(entries), "meta": meta}
 
     async def wiki_status(self, force=False):
         """Is the compatibility list usable, how old is it, and what last failed?"""
@@ -644,7 +722,7 @@ class OptiScalerService:
 
     async def set_auto_mode(self, game_path, enabled):
         """Remember whether one game's settings are driven by the wiki."""
-        async with self._mutation_lock:
+        async with self._settings_lock:
             await self._run(self.settings.set_pref, _auto_key(game_path), bool(enabled) or None)
         return {"ok": True, "enabled": bool(enabled)}
 
@@ -678,7 +756,7 @@ class OptiScalerService:
             if not expected or Path(expected).resolve() != Path(target_dir).resolve():
                 return {"ok": False, "error": "Choose the main PBZ.exe folder at PBZ/platform/steam before applying settings.", **planned}
         try:
-            async with self._mutation_lock:
+            async with self._target_lock(target_dir):
                 def work():
                     with self._config_transaction(target_dir):
                         changes = autoplan.setting_changes(plan)
@@ -699,11 +777,14 @@ class OptiScalerService:
     def _validate_restore_metadata(metadata):
         return restorepoint.validate_metadata(metadata)
 
-    async def create_restore_point(self, target_dir, game_path=None, launch_options=None):
+    async def create_restore_point(self, target_dir, game_path=None, launch_options=None,
+                                   applied_launch=None):
         try:
-            async with self._mutation_lock:
+            async with self._target_lock(target_dir):
                 metadata = {"game_path": game_path, "launch_options": launch_options,
                             "game_settings": self.settings.snapshot_game(game_path) if game_path else None}
+                if applied_launch is not None:
+                    metadata["applied_launch"] = applied_launch
                 self._validate_restore_metadata(metadata)
                 result = await self._run(restorepoint.create, target_dir, metadata)
                 if result.get("available"):
@@ -716,7 +797,7 @@ class OptiScalerService:
 
     async def rollback_install(self, target_dir, game_path=None):
         try:
-            async with self._mutation_lock:
+            async with self._target_lock(target_dir):
                 def work():
                     info = restorepoint.info(target_dir)
                     if not info.get("available"):
@@ -726,10 +807,17 @@ class OptiScalerService:
                     saved_game = metadata.get("game_path")
                     if saved_game and game_path and saved_game != game_path:
                         raise ValueError("Restore point belongs to a different game.")
+                    effective_game = saved_game or game_path
                     before = self.settings.snapshot_game(saved_game) if saved_game else None
                     hold_key = _runtime_hold_key(target_dir)
                     before_hold = self.settings.get_pref(hold_key)
+                    before_pending = (
+                        self.settings.get_rollback_launch_pending(effective_game)
+                        if effective_game else False
+                    )
                     preferences_changed = False
+                    hold_only_changed = False
+                    pending_changed = False
                     # Keep the restore point until Remove so a Steam setter failure can be retried.
                     try:
                         with installer.target_transaction(target_dir, require_stopped=True):
@@ -738,72 +826,51 @@ class OptiScalerService:
                                 self.settings.restore_game(saved_game, metadata["game_settings"],
                                     runtime_hold=(hold_key, constants.RUNTIME_DLL_SHA256))
                                 preferences_changed = True
+                            else:
+                                self.settings.set_pref(hold_key, constants.RUNTIME_DLL_SHA256)
+                                hold_only_changed = True
+                            if effective_game:
+                                self.settings.set_rollback_launch_pending(effective_game, True)
+                                pending_changed = True
                     except Exception:
                         if preferences_changed:
                             self.settings.restore_game(saved_game, before,
                                 runtime_hold=(hold_key, before_hold))
+                        elif hold_only_changed:
+                            self.settings.set_pref(hold_key, before_hold)
+                        if pending_changed:
+                            self.settings.set_rollback_launch_pending(effective_game, before_pending)
                         raise
                     return {"ok": True, **restored, "launch_options": metadata.get("launch_options"),
+                            "applied_launch": metadata.get("applied_launch"),
+                            "launch_pending": bool(effective_game),
                             "restart_required": True}
                 return await self._run(work)
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
-    async def setup_deck_experiment(self, target_dir, game_path=None, game_name=None):
-        """Explicit opt-in: community FSR4.1.2 Lite INT8 with OptiScaler FG disabled."""
+    async def confirm_rollback_launch_options(self, game_path):
+        """Clear the persisted rollback_launch_pending flag once Steam accepts the restored options."""
         try:
-            if not game_path:
-                raise ValueError("This experiment is only defined for Phantom Blade Zero.")
-            wiki_identity = self.settings.get_wiki_entry(game_path)
-            expected = gameprofiles.target_for(game_path, game_name, wiki_identity)
-            if not expected or Path(expected).resolve() != Path(target_dir).resolve():
-                raise ValueError("Choose the main PBZ.exe folder at PBZ/platform/steam before starting the experiment.")
-            build = fsr4build.find(constants.FSR4_STEAM_DECK_BUILD_ID)
-            async with self._mutation_lock:
-                dll = await self._run(fsr4build.fetch, build, self.fsr4_build_cache(), self.log)
-                def work():
-                    installer.require_stopped_install(target_dir)
-                    if not installer.runtime_current(target_dir):
-                        raise ValueError("Upgrade the game's runtime before starting the experiment.")
-                    point = restorepoint.info(target_dir)
-                    if not point.get("available"):
-                        raise ValueError("Create a restore point before starting the experiment.")
-                    self._validate_restore_metadata(point.get("metadata"))
-                    if point["metadata"].get("game_path") != game_path:
-                        raise ValueError("Restore point belongs to a different game.")
-                    before = self.settings.snapshot_game(game_path)
-                    preferences_changed = False
-                    try:
-                        with installer.target_transaction(target_dir, require_stopped=True):
-                            result = installer.install_fsr4_build(target_dir, dll, build, self.log, True)
-                            written = self._write_config_sync(target_dir, [
-                                {"section": "FrameGen", "key": "Enabled", "value": "false"},
-                                {"section": "FrameGen", "key": "FGInput", "value": "nofg"},
-                                {"section": "FrameGen", "key": "FGOutput", "value": "nofg"},
-                            ])
-                            if not written.get("ok") or written.get("rejected"):
-                                raise ValueError(written.get("error") or "Could not disable OptiScaler frame generation")
-                            self.settings.set_pref(_experiment_key(game_path), True)
-                            preferences_changed = True
-                    except Exception:
-                        if preferences_changed:
-                            self.settings.restore_game(game_path, before)
-                        raise
-                    return {"ok": True, **result, "restart_required": True,
-                            "manual_steps": list(gameprofiles.PBZ_STEPS)}
-                return await self._run(work)
+            if not game_path or not isinstance(game_path, str):
+                return {"ok": False, "error": "game_path is required"}
+            async with self._settings_lock:
+                await self._run(self.settings.set_rollback_launch_pending, game_path, False)
+            return {"ok": True}
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
     # -- install ---------------------------------------------------------
-    async def upgrade_runtime(self, target_dir, game_path, launch_options=None, name=None):
+    async def upgrade_runtime(self, target_dir, game_path, launch_options=None, name=None,
+                              applied_launch=None):
         return await self.install(target_dir, game_path=game_path,
-                                  launch_options=launch_options, upgrade_only=True, upgrade_name=name)
+                                  launch_options=launch_options, upgrade_only=True, upgrade_name=name,
+                                  applied_launch=applied_launch)
 
     async def install(self, target_dir, filename=DEFAULT_PROXY, preserve_ini=True,
                       optipatcher=False, reframework_plan=None, config_changes=None, game_path=None,
                       launch_options=None, auto_mode=False, framegen_changes=None,
-                      upgrade_only=False, upgrade_name=None):
+                      upgrade_only=False, upgrade_name=None, applied_launch=None):
         """Install OptiScaler, and REFramework first when the plan calls for it.
 
         A failed REFramework download does not fail the install. The two are
@@ -838,7 +905,7 @@ class OptiScalerService:
                 ref_result["error"] = str(exc)
         try:
             payload_root = await self.ensure_payload()
-            async with self._mutation_lock:
+            async with self._target_lock(target_dir):
                 def work():
                     if upgrade_only:
                         target = Path(target_dir).resolve()
@@ -886,10 +953,13 @@ class OptiScalerService:
                         proxy = installer._safe_path(target_dir, selected_filename)
                         if not expected or not proxy.is_file() or installer._sha256_file(proxy) != expected:
                             raise ValueError("The installed runtime is not a recognized upgrade source. Use Manual setup to review it.")
-                        point = restorepoint.create(target_dir, {
+                        restore_metadata = {
                             "game_path": game_path, "game_settings": before,
                             "launch_options": launch_options,
-                        })
+                        }
+                        if applied_launch is not None:
+                            restore_metadata["applied_launch"] = applied_launch
+                        point = restorepoint.create(target_dir, restore_metadata)
                         if not point.get("available") or point.get("metadata", {}).get("game_path") != game_path:
                             raise ValueError("A matching restore point is required before upgrading.")
                     try:
@@ -955,34 +1025,58 @@ class OptiScalerService:
 
     async def uninstall(self, target_dir, remove_ini=True):
         try:
-            async with self._mutation_lock:
+            async with self._target_lock(target_dir):
                 def work():
                     installer.recover_target_transactions(target_dir)
-                    manifest = installer.read_manifest(target_dir) or {}
+                    manifest = installer.read_manifest(target_dir)
+                    had_manifest = bool(manifest)
+                    manifest = manifest or {}
                     game_path = manifest.get("game_path")
+                    if not game_path:
+                        try:
+                            rp = restorepoint.info(target_dir)
+                            game_path = (rp.get("metadata") or {}).get("game_path")
+                        except ValueError:
+                            game_path = None
                     before = self.settings.snapshot_game(game_path) if game_path else None
                     hold_key = _runtime_hold_key(target_dir)
                     before_hold = self.settings.get_pref(hold_key)
+                    before_pending = (
+                        self.settings.get_rollback_launch_pending(game_path)
+                        if game_path else False
+                    )
                     preferences_changed = False
+                    pending_changed = False
                     try:
                         with installer.target_transaction(target_dir, extra_names=(restorepoint.RESTORE_DIR,), require_stopped=True):
                             result = installer.uninstall(target_dir, remove_ini, self.log)
+                            if not had_manifest and not result.get("removed") and not result.get("restored"):
+                                return {
+                                    "ok": False,
+                                    "error": "This OptiScaler install was not created by this plugin and must be removed manually.",
+                                    "removed": [],
+                                    "restored": [],
+                                }
                             if game_path and manifest.get("game_settings_before") is not None:
                                 self.settings.restore_game(game_path, manifest["game_settings_before"],
                                     runtime_hold=(hold_key, None))
                                 preferences_changed = True
                             elif before_hold is not None:
                                 self.settings.set_pref(hold_key, None)
+                            if before_pending:
+                                self.settings.set_rollback_launch_pending(game_path, False)
+                                pending_changed = True
                     except Exception:
                         if preferences_changed:
                             self.settings.restore_game(game_path, before,
                                 runtime_hold=(hold_key, before_hold))
                         elif before_hold is not None:
                             self.settings.set_pref(hold_key, before_hold)
+                        if pending_changed:
+                            self.settings.set_rollback_launch_pending(game_path, True)
                         raise
-                    return result
-                result = await self._run(work)
-            return {"ok": True, **result}
+                    return {"ok": True, **result}
+                return await self._run(work)
         except Exception as exc:
             self.log.exception("uninstall failed for %s", target_dir)
             return {"ok": False, "error": str(exc)}
@@ -993,14 +1087,27 @@ class OptiScalerService:
             path = Path(target_dir) / INI_NAME
             if not path.is_file():
                 return {"ok": False, "error": "OptiScaler.ini not found", "values": {}}
-            return {
+            manifest_error = None
+            try:
+                runtime_current = (
+                    bool(installer.read_manifest(target_dir))
+                    and installer.runtime_current(target_dir)
+                )
+            except ValueError as exc:
+                self.log.warning("corrupted manifest during read_config at %s: %s", target_dir, exc)
+                runtime_current = False
+                manifest_error = str(exc)
+            result = {
                 "ok": True,
                 "path": str(path),
                 "values": IniFile(path).to_dict(),
-                "runtime_current": bool(installer.read_manifest(target_dir)) and installer.runtime_current(target_dir),
+                "runtime_current": runtime_current,
                 "modified": path.stat().st_mtime,
                 "fsr4_build": (fsr4build.identify(path.parent / installer.FFX_UPSCALER_DLL) or {}).get("id"),
             }
+            if manifest_error:
+                result["manifest_error"] = manifest_error
+            return result
 
         return await self._run(work)
 
@@ -1066,24 +1173,32 @@ class OptiScalerService:
         installer._atomic_json(Path(target_dir) / installer.MANIFEST_NAME, manifest)
 
     def _write_config_sync(self, target_dir, changes, push_live=False, live_context=None):
+        from contextlib import nullcontext
+
         target = Path(target_dir).resolve()
         active = getattr(installer._TRANSACTIONS, "targets", {})
-        if str(target) not in active:
+        already_in_tx = str(target) in active
+        if not already_in_tx:
+            # Recover first, then validate install/runtime/path ownership once
+            # before opening the live-safe journal so an unmanaged target never
+            # gets a transaction directory created in it.
             installer.recover_target_transactions(target)
-        preflight_error = self._config_preflight_error(target, self.plugin_dir)
-        if preflight_error:
-            return {"ok": False, "error": preflight_error}
-        with installer.target_transaction(
-                target, extra_names=(INI_NAME, installer.MANIFEST_NAME),
-                include_known=False,
-                intent=installer.TRANSACTION_INTENT_MANAGED_INI):
-            # Recover first, then validate install/runtime/path ownership, then
-            # read and edit the INI. A stale journal must never reintroduce an
-            # older setting after this request has already been constructed.
             preflight_error = self._config_preflight_error(target, self.plugin_dir)
             if preflight_error:
-                raise ValueError(preflight_error)
+                return {"ok": False, "error": preflight_error}
+            tx_ctx = installer.target_transaction(
+                target,
+                extra_names=(INI_NAME, installer.MANIFEST_NAME),
+                include_known=False,
+                intent=installer.TRANSACTION_INTENT_MANAGED_INI,
+            )
+        else:
+            tx_ctx = nullcontext()
+
+        with tx_ctx:
             path = Path(target) / INI_NAME
+            if not path.is_file():
+                return {"ok": False, "error": "OptiScaler.ini not found"}
             ini = IniFile(path)
             applied, rejected = [], []
             for change in changes or []:
@@ -1141,7 +1256,7 @@ class OptiScalerService:
 
     async def write_config(self, target_dir, changes, push_live=True, live_context=None):
         try:
-            async with self._mutation_lock:
+            async with self._target_lock(target_dir):
                 return await self._run(self._write_config_sync, target_dir, changes,
                                        push_live, live_context)
         except Exception as exc:
@@ -1162,9 +1277,6 @@ class OptiScalerService:
                         target, extra_names=(INI_NAME, installer.MANIFEST_NAME),
                         include_known=False,
                         intent=installer.TRANSACTION_INTENT_MANAGED_INI):
-                    preflight_error = self._config_preflight_error(target, self.plugin_dir)
-                    if preflight_error:
-                        raise ValueError(preflight_error)
                     legacy_asi = installer._preflight_live_control(
                         target, ini_path=payload_root / INI_NAME,
                         plugin_root=self.plugin_dir
@@ -1183,7 +1295,7 @@ class OptiScalerService:
                     installer.atomic_copy(temporary, destination)
                 return {"ok": True, "path": str(destination)}
 
-            async with self._mutation_lock:
+            async with self._target_lock(target_dir):
                 return await self._run(work)
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
@@ -1214,23 +1326,6 @@ class OptiScalerService:
         """
         return self.runtime_dir / "reframework"
 
-    async def get_reframework_status(self, target_dir, game_path=None, name=None,
-                                     extra_names=None):
-        """Whether this game needs REFramework, and whether it has it.
-
-        Both halves in one answer, because either alone is unreadable: "present"
-        means nothing for a game that does not want it, and "required" means
-        nothing without knowing whether it is already there.
-        """
-        wanted = None
-        if name or game_path:
-            planned = await self.get_auto_plan(name or Path(target_dir).name, extra_names,
-                                               False, game_path)
-            wanted = planned["plan"].get("reframework")
-        manifest = await self._run(installer.read_manifest, target_dir) or {}
-        return await self._run(reframework.status, target_dir, wanted or {},
-                               manifest.get("reframework_revision"))
-
     async def install_reframework(self, target_dir, game_path=None, name=None,
                                   extra_names=None):
         """Add REFramework to a game that is already set up, or retry a failure.
@@ -1254,7 +1349,7 @@ class OptiScalerService:
             files = await self._run(reframework.fetch, wanted, self.reframework_cache(),
                                     self.log)
             revision = await self._run(reframework.revision_of, files)
-            async with self._mutation_lock:
+            async with self._target_lock(target_dir):
                 result = await self._run(installer.add_files, target_dir, files, self.log, revision)
             if not result.get("ok"):
                 return {"ok": False, "error": result.get("error")}
@@ -1273,8 +1368,14 @@ class OptiScalerService:
         one of them is the difference between a bug report and an answer.
         """
         try:
-            async with self._mutation_lock:
+            async with self._target_lock(target_dir):
                 result = await self._run(installer.remove_files, target_dir, [REFRAMEWORK_DLL], self.log)
+            if not result.get("removed"):
+                return {
+                    **result,
+                    "ok": False,
+                    "error": "REFramework was added manually outside this plugin; remove dinput8.dll manually from the game folder.",
+                }
             return {"ok": True, **result}
         except Exception as exc:
             self.log.exception("REFramework removal failed for %s", target_dir)
@@ -1296,7 +1397,7 @@ class OptiScalerService:
 
     async def install_optipatcher(self, target_dir, enabled=True):
         try:
-            async with self._mutation_lock:
+            async with self._target_lock(target_dir):
                 def work():
                     source = self.optipatcher_path() if enabled else None
                     if enabled:
@@ -1311,6 +1412,8 @@ class OptiScalerService:
                             raise ValueError("The bundled OptiPatcher checksum does not match.")
                     installer.recover_target_transactions(target_dir)
                     installer.require_stopped_install(target_dir)
+                    if not installer.runtime_current(target_dir):
+                        raise ValueError("Upgrade this game's OptiScaler runtime in Setup before changing OptiPatcher.")
                     with installer.target_transaction(target_dir, require_stopped=True):
                         relative = f"{live.PLUGIN_SUBDIR}/{OPTIPATCHER_NAME}"
                         if not enabled:
@@ -1341,7 +1444,7 @@ class OptiScalerService:
         if not source:
             return {"ok": False, "error": "This package has no verified live-control ASI."}
         try:
-            async with self._mutation_lock:
+            async with self._target_lock(target_dir):
                 result = await self._run(
                     installer.install_live_component, target_dir, source, self.log,
                     self.plugin_dir,
@@ -1356,7 +1459,7 @@ class OptiScalerService:
 
     async def switch_upscaler(self, target_dir, code, live_context=None):
         try:
-            async with self._mutation_lock:
+            async with self._target_lock(target_dir):
                 result = await self._run(
                     live.switch_backend, target_dir, code, live_context,
                     self.live_asi_path(), self.plugin_dir,
@@ -1380,7 +1483,7 @@ class OptiScalerService:
 
     async def clear_log(self, target_dir):
         try:
-            async with self._mutation_lock:
+            async with self._target_lock(target_dir):
                 if not await self._run(installer.read_manifest, target_dir):
                     raise ValueError("Set up this game with the plugin before clearing its runtime log.")
                 cleared = await self._run(monitor.clear_log, target_dir)
@@ -1403,10 +1506,6 @@ class OptiScalerService:
 def _auto_key(game_path):
     """Preference key holding whether one game is in automatic mode."""
     return f"auto_mode:{game_path}"
-
-
-def _experiment_key(game_path):
-    return f"deck-experiment:{game_path}"
 
 
 def _runtime_hold_key(target_dir):

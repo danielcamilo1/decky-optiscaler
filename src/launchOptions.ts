@@ -21,9 +21,15 @@
  *   the grounds that it is not ours to guess about.
  */
 import { createRestorePoint, getLaunchOptions, recordLaunchOptions } from "./api";
-import { readLaunchOptions } from "./hooks/useRunningGame";
+import { readLaunchOptions, setLaunchOptions } from "./hooks/useRunningGame";
 import { preferRecentLaunchOptions } from "./launchOptionState";
-import type { LaunchRecord } from "./types";
+import { t } from "./i18n";
+import {
+  clearAppliedLaunchMetadata,
+  readAppliedLaunchMetadata,
+  setAppliedLaunchMetadata,
+} from "./prefs";
+import type { AppliedLaunchMetadata, LaunchRecord } from "./types";
 
 /** What to do with the launch options when OptiScaler is removed. */
 export type LaunchAction = "restore" | "clear" | "keep";
@@ -337,6 +343,17 @@ export function hasOverride(options: string | null, filename: string): boolean {
   return Boolean(assignment && targetModes(assignment.value, filename).some(pluginMode));
 }
 
+/** Whether every planned game flag is already present in Steam's launch options. */
+export function hasLaunchFlags(options: string | null, flags: string[]): boolean {
+  const wanted = flags.map((flag) => flag.trim()).filter(Boolean);
+  if (wanted.length === 0) return true;
+  if (!options) return false;
+  const args = gameArgumentTokens(options);
+  if (!args) return false;
+  const present = new Set(args.map((token) => token.raw));
+  return wanted.every((flag) => present.has(flag));
+}
+
 /**
  * The same launch options with our override taken out and nothing else.
  *
@@ -466,9 +483,10 @@ export function stripLaunchOptions(
   originalOptions: string | null = null,
 ): string {
   let result = current;
+  const trimmedFilename = filename.trim();
   const stems = [
-    ...(filename.toLowerCase().endsWith(".asi") ? [] : [filename]),
-    ...additionalOverrides,
+    ...(trimmedFilename && !trimmedFilename.toLowerCase().endsWith(".asi") ? [trimmedFilename] : []),
+    ...additionalOverrides.map((item) => item.trim()).filter(Boolean),
   ];
   for (const stem of stems) {
     const originalPrefix = originalOptions === null ? null : environmentPrefix(originalOptions);
@@ -501,7 +519,14 @@ export function stripLaunchOptions(
       })
       .map(({ start, end }) => ({ start, end }));
     for (const range of ranges.reverse()) {
-      result = result.slice(0, range.start) + result.slice(range.end);
+      let cutStart = range.start;
+      let cutEnd = range.end;
+      if (cutStart > 0 && /\s/.test(result[cutStart - 1])) {
+        while (cutStart > 0 && /\s/.test(result[cutStart - 1])) cutStart -= 1;
+      } else if (cutEnd < result.length && /\s/.test(result[cutEnd])) {
+        while (cutEnd < result.length && /\s/.test(result[cutEnd])) cutEnd += 1;
+      }
+      result = result.slice(0, cutStart) + result.slice(cutEnd);
     }
   }
   return result.trim() === "%command%" ? "" : result;
@@ -560,7 +585,7 @@ export function launchChoices(state: LaunchState): LaunchChoice[] {
     recorded !== null && recorded.trim() !== "" && recorded !== current
       ? [{
           action: "restore",
-          label: "Put back what was there before",
+          label: t("Put back what was there before"),
           description: recorded,
           value: recorded,
         }]
@@ -568,10 +593,10 @@ export function launchChoices(state: LaunchState): LaunchChoice[] {
 
   const keep: LaunchChoice = {
     action: "keep",
-    label: "Leave them as they are",
+    label: t("Leave them as they are"),
     description: current
-      ? `Steam keeps passing: ${current}`
-      : "Nothing in Steam is changed.",
+      ? t("Steam keeps passing: {value}", { value: current })
+      : t("Nothing in Steam is changed."),
     value: null,
   };
 
@@ -589,12 +614,12 @@ export function launchChoices(state: LaunchState): LaunchChoice[] {
   const cleared = known;
   const clear: LaunchChoice = {
     action: "clear",
-    label: cleared === "" ? "Clear the launch options" : "Remove only the OptiScaler override",
+    label: cleared === "" ? t("Clear the launch options") : t("Remove only the OptiScaler override"),
     description: cleared === ""
       ? recorded === ""
-        ? "This game had none before OptiScaler was installed."
-        : "Leaves the launch options empty."
-      : `Leaves: ${cleared}`,
+        ? t("This game had none before OptiScaler was installed.")
+        : t("Leaves the launch options empty.")
+      : t("Leaves: {value}", { value: cleared }),
     value: cleared,
   };
 
@@ -653,6 +678,173 @@ export async function currentLaunchOptions(appid: string | null): Promise<string
   }
 }
 
+export interface ReconcileLaunchOptionsInput {
+  current: string;
+  oldFilename?: string | null;
+  nextFilename: string;
+  nextFlags: string[];
+  nextExtraOverrides: string[];
+  persisted: AppliedLaunchMetadata;
+  recordedOriginal: string | null;
+  applyNext?: boolean;
+}
+
+export interface ReconcileLaunchOptionsResult {
+  value: string | null;
+  removedFlags: string[];
+  removedExtraOverrides: string[];
+  nextOwned: AppliedLaunchMetadata;
+}
+
+function normalizeTokenList(items: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of items) {
+    const trimmed = item.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    out.push(trimmed);
+  }
+  return out;
+}
+
+function normalizeOverrideList(items: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of items) {
+    const trimmed = item.trim();
+    if (!trimmed) continue;
+    const stem = overrideStem(trimmed).toLowerCase();
+    if (!stem || seen.has(stem)) continue;
+    seen.add(stem);
+    out.push(trimmed);
+  }
+  return out;
+}
+
+/**
+ * Reconcile Steam launch options against previously plugin-applied flags and
+ * extra overrides while preserving user-managed entries.
+ *
+ * Only entries explicitly recorded in `persisted` are eligible for removal
+ * (plus `oldFilename` when switching proxy filenames or turning launch options
+ * off). When `applyNext` is true, ownership of a flag or extra override is only
+ * claimed if this plugin already owned it or actually had to add it.
+ */
+export function reconcileLaunchOptions(
+  input: ReconcileLaunchOptionsInput,
+): ReconcileLaunchOptionsResult {
+  const applyNext = input.applyNext ?? true;
+  const nextFlags = applyNext ? normalizeTokenList(input.nextFlags) : [];
+  const nextExtraOverrides = applyNext ? normalizeOverrideList(input.nextExtraOverrides) : [];
+  const persistedFlags = normalizeTokenList(input.persisted.flags);
+  const persistedExtraOverrides = normalizeOverrideList(input.persisted.extraOverrides);
+
+  const trimmedOld = (input.oldFilename ?? "").trim();
+  const trimmedNext = input.nextFilename.trim();
+  const nextNeedsProxy =
+    applyNext && Boolean(trimmedNext) && !trimmedNext.toLowerCase().endsWith(".asi");
+  const filenameChanged =
+    Boolean(trimmedOld) && (!applyNext || trimmedOld.toLowerCase() !== trimmedNext.toLowerCase());
+
+  const nextFlagSet = new Set(nextFlags);
+  const removedFlags = persistedFlags.filter((flag) => !nextFlagSet.has(flag));
+
+  const nextOverrideStems = new Set<string>([
+    ...(nextNeedsProxy ? [overrideStem(trimmedNext).toLowerCase()] : []),
+    ...nextExtraOverrides.map((item) => overrideStem(item).toLowerCase()),
+  ]);
+  const removedExtraOverrides = persistedExtraOverrides.filter(
+    (item) => !nextOverrideStems.has(overrideStem(item).toLowerCase()),
+  );
+
+  const oldProxyToStrip =
+    filenameChanged && !trimmedOld.toLowerCase().endsWith(".asi") ? [trimmedOld] : [];
+  const stemsToStrip = [...oldProxyToStrip, ...removedExtraOverrides];
+  const needsOverrideStrip = stemsToStrip.length > 0;
+  const needsFlagStrip = removedFlags.length > 0;
+  const needsStrip = needsOverrideStrip || needsFlagStrip;
+
+  if (needsStrip && input.current.trim() !== "") {
+    if (needsOverrideStrip) {
+      const prefix = environmentPrefix(input.current);
+      const safeWine =
+        prefix !== null &&
+        prefix.assignments.every((token) => {
+          if (!isWineAssignmentToken(token)) return true;
+          const assignment = assignmentValue(token.raw);
+          return Boolean(assignment && isSafeWineValue(assignment));
+        });
+      if (!safeWine) {
+        return {
+          value: null,
+          removedFlags,
+          removedExtraOverrides,
+          nextOwned: { flags: persistedFlags, extraOverrides: persistedExtraOverrides },
+        };
+      }
+    }
+    if (needsFlagStrip) {
+      const currentArgs = gameArgumentTokens(input.current);
+      const originalArgs =
+        input.recordedOriginal === null ? [] : gameArgumentTokens(input.recordedOriginal);
+      if (currentArgs === null || originalArgs === null) {
+        return {
+          value: null,
+          removedFlags,
+          removedExtraOverrides,
+          nextOwned: { flags: persistedFlags, extraOverrides: persistedExtraOverrides },
+        };
+      }
+    }
+  }
+
+  const base = needsStrip
+    ? stripLaunchOptions(
+        input.current,
+        filenameChanged ? trimmedOld : "",
+        removedFlags,
+        removedExtraOverrides,
+        input.recordedOriginal,
+      )
+    : input.current;
+
+  let nextOwned: AppliedLaunchMetadata;
+  if (!applyNext) {
+    nextOwned = { flags: [], extraOverrides: [] };
+  } else {
+    const baseArgs = gameArgumentTokens(base);
+    const baseArgSet = new Set((baseArgs ?? []).map((token) => token.raw));
+    const persistedFlagSet = new Set(persistedFlags);
+    const nextOwnedFlags = nextFlags.filter(
+      (flag) => persistedFlagSet.has(flag) || !baseArgSet.has(flag),
+    );
+
+    const persistedOverrideStems = new Set(
+      persistedExtraOverrides.map((item) => overrideStem(item).toLowerCase()),
+    );
+    const nextOwnedOverrides = nextExtraOverrides.filter(
+      (ov) =>
+        persistedOverrideStems.has(overrideStem(ov).toLowerCase()) || !hasOverride(base, ov),
+    );
+    nextOwned = {
+      flags: nextOwnedFlags,
+      extraOverrides: nextOwnedOverrides,
+    };
+  }
+
+  const value = applyNext
+    ? mergeLaunchOptions(base, trimmedNext, nextFlags, nextExtraOverrides)
+    : base;
+
+  return {
+    value,
+    removedFlags,
+    removedExtraOverrides,
+    nextOwned,
+  };
+}
+
 /**
  * Keep this game's launch options as they were, before we write our own.
  *
@@ -665,19 +857,139 @@ export async function currentLaunchOptions(appid: string | null): Promise<string
  * backend, because it is the fresher of the two; `null` tells the backend to
  * fall back to Steam's config file instead of recording a value nobody read.
  */
+export async function preserveOriginalLaunchOptions(
+  appid: string | null,
+  targetDir: string,
+  currentKnown?: string | null,
+): Promise<{ ok: boolean; recordedValue: string | null }> {
+  if (!appid) return { ok: true, recordedValue: null };
+  const current = currentKnown !== undefined ? currentKnown : await currentLaunchOptions(appid);
+  if (current === null) return { ok: false, recordedValue: null };
+  try {
+    const result = await recordLaunchOptions(targetDir, current, appid);
+    if (!result.ok || !result.recorded) return { ok: false, recordedValue: null };
+    return {
+      ok: true,
+      recordedValue: typeof result.value === "string" ? result.value : current,
+    };
+  } catch {
+    return { ok: false, recordedValue: null };
+  }
+}
+
 export async function recordPreviousLaunchOptions(
   appid: string | null,
   targetDir: string,
 ): Promise<boolean> {
-  if (!appid) return true;
-  const current = await currentLaunchOptions(appid);
-  if (current === null) return false;
-  try {
-    const result = await recordLaunchOptions(targetDir, current, appid);
-    return Boolean(result.ok && result.recorded);
-  } catch {
-    return false;
+  return (await preserveOriginalLaunchOptions(appid, targetDir)).ok;
+}
+
+export interface ApplyManagedLaunchOptionsInput {
+  appid: string;
+  oldFilename?: string | null;
+  nextFilename: string;
+  nextFlags: string[];
+  nextExtraOverrides: string[];
+  recordedOriginal: string | null;
+  recordTarget?: string | null;
+  skipRecord?: boolean;
+  applyNext?: boolean;
+  skipIfUnchanged?: boolean;
+}
+
+export type ApplyManagedLaunchOptionsResult =
+  | { ok: true; value: string; changed: boolean; nextOwned: AppliedLaunchMetadata }
+  | {
+      ok: false;
+      reason:
+        | "unreadable"
+        | "metadata_unreadable"
+        | "preserve_failed"
+        | "manual_merge"
+        | "steam_rejected";
+      value?: string;
+    };
+
+/**
+ * Read Steam's current launch options, preserve the pre-install value if not
+ * yet recorded, reconcile against persisted plugin-owned flags/overrides, write
+ * to Steam, and persist the updated ownership metadata only if Steam succeeds.
+ */
+export async function applyManagedLaunchOptions(
+  input: ApplyManagedLaunchOptionsInput,
+): Promise<ApplyManagedLaunchOptionsResult> {
+  const applyNext = input.applyNext ?? true;
+  let latest = await currentLaunchOptions(input.appid);
+  if (latest === null) {
+    return { ok: false, reason: "unreadable" };
   }
+
+  const persistedResult = await readAppliedLaunchMetadata(input.appid);
+  if (!persistedResult.ok) {
+    return { ok: false, reason: "metadata_unreadable" };
+  }
+
+  let effectiveRecordedOriginal = input.recordedOriginal;
+  if (applyNext && !input.skipRecord && effectiveRecordedOriginal === null && input.recordTarget) {
+    const preserved = await preserveOriginalLaunchOptions(
+      input.appid,
+      input.recordTarget,
+      latest,
+    );
+    if (!preserved.ok) {
+      return { ok: false, reason: "preserve_failed" };
+    }
+    effectiveRecordedOriginal = preserved.recordedValue;
+    latest = await currentLaunchOptions(input.appid);
+    if (latest === null) {
+      return { ok: false, reason: "unreadable" };
+    }
+  }
+
+  const reconciled = reconcileLaunchOptions({
+    current: latest,
+    oldFilename: input.oldFilename,
+    nextFilename: input.nextFilename,
+    nextFlags: input.nextFlags,
+    nextExtraOverrides: input.nextExtraOverrides,
+    persisted: persistedResult.metadata,
+    recordedOriginal: effectiveRecordedOriginal,
+    applyNext,
+  });
+
+  if (reconciled.value === null) {
+    return { ok: false, reason: "manual_merge" };
+  }
+
+  const changed = reconciled.value !== latest;
+  if (!changed && input.skipIfUnchanged) {
+    if (applyNext) {
+      await setAppliedLaunchMetadata(
+        input.appid,
+        reconciled.nextOwned.flags,
+        reconciled.nextOwned.extraOverrides,
+      );
+    } else {
+      await clearAppliedLaunchMetadata(input.appid);
+    }
+    return { ok: true, value: reconciled.value, changed: false, nextOwned: reconciled.nextOwned };
+  }
+
+  if (!setLaunchOptions(Number(input.appid), reconciled.value)) {
+    return { ok: false, reason: "steam_rejected", value: reconciled.value };
+  }
+
+  if (applyNext) {
+    await setAppliedLaunchMetadata(
+      input.appid,
+      reconciled.nextOwned.flags,
+      reconciled.nextOwned.extraOverrides,
+    );
+  } else {
+    await clearAppliedLaunchMetadata(input.appid);
+  }
+
+  return { ok: true, value: reconciled.value, changed, nextOwned: reconciled.nextOwned };
 }
 
 /** Snapshot an existing install before a managed file/runtime mutation. */
@@ -688,13 +1000,27 @@ export async function preserveExistingInstall(
 ): Promise<{ ok: boolean; error?: string }> {
   const launchOptions = await currentLaunchOptions(appid);
   if (appid && launchOptions === null) {
-    return { ok: false, error: "Steam did not report the current launch options, so the install was left unchanged." };
+    return {
+      ok: false,
+      error: t("Steam did not report the current launch options, so the install was left unchanged."),
+    };
+  }
+  let appliedLaunch: AppliedLaunchMetadata | null = null;
+  if (appid) {
+    const persisted = await readAppliedLaunchMetadata(appid);
+    if (!persisted.ok) {
+      return {
+        ok: false,
+        error: t("Could not read saved launch option records, so the install was left unchanged."),
+      };
+    }
+    appliedLaunch = persisted.metadata;
   }
   try {
-    const result = await createRestorePoint(targetDir, gamePath, launchOptions);
+    const result = await createRestorePoint(targetDir, gamePath, launchOptions, appliedLaunch);
     return result.ok
       ? result
-      : { ok: false, error: result.error ?? "Could not preserve the current install." };
+      : { ok: false, error: result.error ?? t("Could not preserve the current install.") };
   } catch (exc) {
     return { ok: false, error: String(exc) };
   }

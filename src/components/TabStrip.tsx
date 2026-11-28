@@ -55,20 +55,29 @@ export function TabStrip({
   active,
   onChange,
   marker: markerName = "tab",
+  variant = "tabs",
 }: {
   tabs: StripTab[];
   active: string;
   onChange: (id: string) => void;
   /** What the harness markers are called: tabs switch views, filters do not. */
   marker?: string;
+  /** Visual hierarchy: primary view tabs vs secondary filter pills. */
+  variant?: "tabs" | "filter";
 }) {
   // Which tab the D-pad is on. Steam marks that with a class; this strip has to
   // know it too, because it sets the background the class expects to own.
   const [focus, setFocus] = useState<string | null>(null);
+  const isFilter = variant === "filter";
 
   return (
     <Focusable
-      style={{ display: "flex", gap: "4px", padding: "6px 14px 8px" }}
+      {...({ "data-strip-variant": variant } as Record<string, string>)}
+      style={{
+        display: "flex",
+        gap: "4px",
+        padding: isFilter ? "2px 14px 6px" : "6px 14px 8px",
+      }}
       // Left and right move between the tabs; up and down leave the strip.
       flow-children="horizontal"
     >
@@ -88,10 +97,16 @@ export function TabStrip({
             style={{
               flex: "1 1 0",
               minWidth: 0,
-              padding: "8px 4px",
-              fontSize: "12px",
+              padding: isFilter ? "5px 4px" : "8px 4px",
+              fontSize: isFilter ? "11px" : "12px",
               lineHeight: 1.1,
               fontWeight: selected ? 700 : 400,
+              borderRadius: isFilter ? "12px" : undefined,
+              border: isFilter
+                ? selected
+                  ? "1px solid rgba(26,159,255,0.55)"
+                  : "1px solid rgba(255,255,255,0.08)"
+                : undefined,
               // Steam's own focus class paints the button's *text* dark and
               // expects the background to become light with it. An inline
               // background beats that class, so a focused tab kept this
@@ -101,8 +116,12 @@ export function TabStrip({
               background: focused
                 ? "rgba(255,255,255,0.95)"
                 : selected
-                  ? "rgba(255,255,255,0.22)"
-                  : "rgba(255,255,255,0.08)",
+                  ? isFilter
+                    ? "rgba(26,159,255,0.22)"
+                    : "rgba(255,255,255,0.22)"
+                  : isFilter
+                    ? "rgba(255,255,255,0.05)"
+                    : "rgba(255,255,255,0.08)",
               color: focused ? "#1a1c20" : "#ffffff",
               // No dimming: an unselected tab is told apart by weight and fill,
               // never by being harder to read.

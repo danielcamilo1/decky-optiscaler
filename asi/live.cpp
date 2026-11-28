@@ -35,6 +35,7 @@ static const DWORD kStateRva = rva_state_instance;
 static const DWORD kFrameCountOffset = state_offsets_frameCount;
 static const auto& kExpectedPdbGuid = rsds_guid_bytes;
 static const size_t kMaxSections = 16;
+static constexpr size_t kPathCapacity = 1024;
 struct SectionRange { DWORD start, size; };
 struct Sha256 { uint32_t state[8]; uint64_t bitCount; BYTE block[64]; size_t used; };
 static HMODULE g_self, g_core;
@@ -89,14 +90,17 @@ static char g_session[80],g_exeName[MAX_PATH*4];
 static LONG g_started, g_inCallback, g_callbackAuthorized;
 static bool g_hookInstalled;
 static const char* g_startError = "";
-static wchar_t g_parentDirectory[MAX_PATH], g_commandPath[MAX_PATH], g_statusPath[MAX_PATH], g_logPath[MAX_PATH];
+static wchar_t g_parentDirectory[kPathCapacity], g_commandPath[kPathCapacity], g_statusPath[kPathCapacity], g_logPath[kPathCapacity];
 static uint64_t g_lastSequence;
 static uintptr_t g_telemetryFeature;static uint32_t g_telemetryFeatureFrames;
 static uint64_t g_telemetryStateFrames;static ULONGLONG g_telemetryTick,g_featureProgressTick,g_presentProgressTick;
 static double g_presentCounterFps,g_lastRenderedInterval,g_lastPresentedInterval;
 static ULONGLONG g_renderedIntervalTick,g_presentedIntervalTick;
 static bool (*g_renderMenu)();
-static bool JoinPath(wchar_t*,const wchar_t*);
+static bool Utf8(const wchar_t*,char*,size_t);
+static bool JoinPathFrom(const wchar_t*,wchar_t*,size_t,const wchar_t*);
+template<size_t N> static bool JoinPath(wchar_t (&out)[N],const wchar_t* leaf) { return JoinPathFrom(g_parentDirectory,out,N,leaf); }
+static bool BuildControlPathsFrom(const wchar_t*,wchar_t (&)[kPathCapacity],wchar_t (&)[kPathCapacity],wchar_t (&)[kPathCapacity]);
 #include "directory.h"
 
 static bool Token(const char* t, size_t max) {
@@ -616,16 +620,29 @@ static bool InstallHook() {
  if(!ok){abort();return false;}
  g_hookInstalled=true;return true;
 }
-static bool JoinPath(wchar_t* out,const wchar_t* leaf) {
- size_t n=wcslen(g_parentDirectory),m=wcslen(leaf);if(n+m+2>=MAX_PATH)return false;
- memcpy(out,g_parentDirectory,n*sizeof(wchar_t));if(n&&out[n-1]!=L'\\')out[n++]=L'\\';memcpy(out+n,leaf,(m+1)*sizeof(wchar_t));return true;
+static bool JoinPathFrom(const wchar_t* directory,wchar_t* out,size_t capacity,const wchar_t* leaf) {
+ if(!directory||!out||!leaf||!capacity)return false;
+ size_t n=wcslen(directory),m=wcslen(leaf);
+ if(!n||n>=capacity||m>=capacity)return false;
+ size_t sep=directory[n-1]!=L'\\'?1:0;
+ if(n+sep+m+1>capacity)return false;
+ memcpy(out,directory,n*sizeof(wchar_t));if(sep)out[n++]=L'\\';memcpy(out+n,leaf,(m+1)*sizeof(wchar_t));return true;
+}
+static bool BuildControlPathsFrom(const wchar_t* directory,wchar_t (&commandPath)[kPathCapacity],wchar_t (&statusPath)[kPathCapacity],wchar_t (&logPath)[kPathCapacity]) {
+ wchar_t statusTempPath[kPathCapacity];
+ return JoinPathFrom(directory,commandPath,kPathCapacity,L"decky_optiscaler_live.cmd")&&
+        JoinPathFrom(directory,statusPath,kPathCapacity,L"decky_optiscaler_live.status")&&
+        JoinPathFrom(directory,statusTempPath,kPathCapacity,L"decky_optiscaler_live.status.tmp")&&
+        JoinPathFrom(directory,logPath,kPathCapacity,L"decky_optiscaler_live.log");
 }
 static bool SetupPaths() {
- DWORD n=GetModuleFileNameW(g_self,g_parentDirectory,MAX_PATH);if(!n||n>=MAX_PATH)return false;
- wchar_t* slash=wcsrchr(g_parentDirectory,L'\\');if(!slash)return false;*slash=0;
+ DWORD n=GetModuleFileNameW(g_self,g_parentDirectory,kPathCapacity);
+ if(!n){g_startError="control_path_invalid";return false;}
+ if(n>=kPathCapacity){g_startError="control_path_too_long";return false;}
+ wchar_t* slash=wcsrchr(g_parentDirectory,L'\\');if(!slash){g_startError="control_path_invalid";return false;}*slash=0;
  slash=wcsrchr(g_parentDirectory,L'\\');if(slash&&!_wcsicmp(slash+1,L"plugins"))*slash=0;
- if(!JoinPath(g_commandPath,L"decky_optiscaler_live.cmd")||!JoinPath(g_statusPath,L"decky_optiscaler_live.status")||!JoinPath(g_logPath,L"decky_optiscaler_live.log"))return false;
- char utf8[MAX_PATH*4];if(!Utf8(g_parentDirectory,utf8,sizeof(utf8))){g_startError="invalid_control_path_utf16";return false;}return true;
+ if(!BuildControlPathsFrom(g_parentDirectory,g_commandPath,g_statusPath,g_logPath)){g_startError="control_path_too_long";return false;}
+ char utf8[kPathCapacity*4];if(!Utf8(g_parentDirectory,utf8,sizeof(utf8))){g_startError="invalid_control_path_utf16";return false;}return true;
 }
 static void Log(const char* value) {
  if(!g_controlOwned)return;
@@ -646,7 +663,7 @@ static void WriteStatus() {
  AcquireSRWLockShared(&g_lock);s=g_snapshot;r=g_result;occupied=g_hasQueued;frame=g_lastFrame;dirVerified=g_directoryAuth.verified;directoryGeneration=g_directoryAuth.generation;ReleaseSRWLockShared(&g_lock);
  bool frameReady=g_hookInstalled&&s.valid&&s.dirVerified&&dirVerified&&s.directoryGeneration==directoryGeneration&&frame&&GetTickCount64()-frame<=limits_frame_stale_ms;
  const char* status=*g_startError?"failed":!g_coreValid?"searching":!dirVerified?"awaiting_config":!frameReady?"awaiting_frame":"ready";
- char dir[MAX_PATH*4]={};if(!Utf8(g_parentDirectory,dir,sizeof(dir))){frameReady=false;status="failed";}
+ char dir[kPathCapacity*4]={};if(!Utf8(g_parentDirectory,dir,sizeof(dir))){frameReady=false;status="failed";}
  bool telemetry=frameReady&&s.telemetryReady&&s.featureProgressTick&&GetTickCount64()-s.featureProgressTick<=limits_frame_stale_ms;
  StatusBuffer b;
  b.put("schema 7\nstatus %s\nsession %s\nseq %llu\nack %s\naccepted_count %u\n",status,g_session,(unsigned long long)r.seq,r.ack[0]?r.ack:"none",r.acceptedCount);
@@ -662,7 +679,7 @@ static void WriteStatus() {
  b.put("rendered_ms %.3f\npresented_ms %.3f\nfeature_frames %u\nerror %s\n",telemetry?s.renderedMs:0.0,telemetry?s.presentedMs:0.0,s.featureFrames,r.error[0]?r.error:g_startError);
  b.put("telemetry_ready %u\ntelemetry_source %s\nfeature_progress_age_ms %llu\n",telemetry?1:0,!telemetry?"unknown":s.presentCounterFps>0?"state_present_counter":(s.renderedMs>0||s.presentedMs>0)?"core_intervals":"unknown",(unsigned long long)(s.featureProgressTick?GetTickCount64()-s.featureProgressTick:UINT64_MAX));
  if(!b.ok)return;
- wchar_t tmp[MAX_PATH];if(!JoinPath(tmp,L"decky_optiscaler_live.status.tmp"))return;
+ wchar_t tmp[kPathCapacity];if(!JoinPath(tmp,L"decky_optiscaler_live.status.tmp"))return;
  DeleteFileW(tmp); // Remove only the old temporary name; never truncate an existing inode.
  HANDLE h=CreateFileW(tmp,GENERIC_WRITE,FILE_SHARE_READ,NULL,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,NULL);if(h==INVALID_HANDLE_VALUE)return;
  DWORD written=0;bool success=WriteFile(h,b.body,(DWORD)b.used,&written,NULL)&&written==b.used;CloseHandle(h);
@@ -707,17 +724,17 @@ static DWORD WINAPI Worker(void*) {
  // authenticates the disk image and physical directory before enabling it.
  if(!g_self||!g_core||!g_coreValid)return 0;
  if(!SetupPaths())return 0;
- wchar_t executable[MAX_PATH];DWORD exeLen=GetModuleFileNameW(NULL,executable,MAX_PATH);
- const wchar_t* name=exeLen&&exeLen<MAX_PATH?wcsrchr(executable,L'\\'):NULL;
- if(!exeLen||exeLen>=MAX_PATH||!Utf8(name?name+1:executable,g_exeName,sizeof(g_exeName))){g_startError="invalid_executable_path_utf16";return 0;}
+ wchar_t executable[kPathCapacity];DWORD exeLen=GetModuleFileNameW(NULL,executable,kPathCapacity);
+ const wchar_t* name=exeLen&&exeLen<kPathCapacity?wcsrchr(executable,L'\\'):NULL;
+ if(!exeLen||exeLen>=kPathCapacity||!Utf8(name?name+1:executable,g_exeName,sizeof(g_exeName))){g_startError="invalid_executable_path_utf16";return 0;}
  FILETIME ft;LARGE_INTEGER qpc;GetSystemTimeAsFileTime(&ft);QueryPerformanceCounter(&qpc);
  ULARGE_INTEGER stamp;stamp.LowPart=ft.dwLowDateTime;stamp.HighPart=ft.dwHighDateTime;
  snprintf(g_session,sizeof(g_session),"%lu-%016llx-%016llx",(unsigned long)GetCurrentProcessId(),(unsigned long long)stamp.QuadPart,(unsigned long long)qpc.QuadPart);
 
- wchar_t corePath[MAX_PATH];
- DWORD coreLength=GetModuleFileNameW(g_core,corePath,MAX_PATH);
- if(!coreLength||coreLength>=MAX_PATH){g_startError="core_path_invalid";return 0;}
- if(!OwnControlDirectory(corePath)){g_startError="wrong_control_directory";return 0;}
+ wchar_t corePath[kPathCapacity];
+ DWORD coreLength=GetModuleFileNameW(g_core,corePath,kPathCapacity);
+ if(!coreLength||coreLength>=kPathCapacity){g_startError=coreLength>=kPathCapacity?"control_path_too_long":"core_path_invalid";return 0;}
+ if(!OwnControlDirectory(corePath)){if(!*g_startError)g_startError="wrong_control_directory";return 0;}
  ReadWinePrefix();
  if(!HashMatchesPinnedCore(corePath)){g_startError="core_hash_mismatch";WriteStatus();return 0;}
  g_coreHashValid=true;

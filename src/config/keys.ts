@@ -18,6 +18,8 @@ export function keyName(value: string | number | undefined): string {
   if (!Number.isFinite(code)) return String(value);
   if (code < 0) return "disabled";
   if (VK_NAMES[code]) return VK_NAMES[code];
-  if (code >= 0x30 && code <= 0x5a) return String.fromCharCode(code);
+  if ((code >= 0x30 && code <= 0x39) || (code >= 0x41 && code <= 0x5a)) {
+    return String.fromCharCode(code);
+  }
   return `key 0x${code.toString(16)}`;
 }

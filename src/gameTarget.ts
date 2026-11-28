@@ -22,11 +22,16 @@ export function pbzTargetMismatch(detail: GameDetail, required: boolean, target:
 }
 
 export function isPbzTitle(name: string): boolean {
-  return ["phantombladezero", "pbz", "影之刃零"].includes(name.toLowerCase().replace(/[\s_-]/g, ""));
+  return ["phantombladezero", "pbz", "影之刃零"].includes(
+    name.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]/g, ""),
+  );
 }
 
 /** Identity is already available before the asynchronous wiki plan arrives. */
-export function hasPbzIdentity(detail: Pick<GameDetail, "name" | "wiki_entry" | "path" | "pbz_identity">): boolean {
+export function hasPbzIdentity(
+  detail: Pick<GameDetail, "name" | "wiki_entry" | "path" | "pbz_identity" | "is_pbz">,
+): boolean {
+  if (detail.is_pbz !== undefined) return detail.is_pbz;
   if (detail.pbz_identity !== undefined) return detail.pbz_identity;
   const folder = detail.path.replace(/\\/g, "/").split("/").filter(Boolean).pop() ?? "";
   return [detail.name, detail.wiki_entry ?? "", folder].some(isPbzTitle);

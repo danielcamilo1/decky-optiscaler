@@ -1,15 +1,16 @@
 import { ButtonItem, PanelSection, PanelSectionRow, ToggleField } from "@decky/ui";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { clearLog, getMonitor, setLogging } from "../api";
+import { useI18n } from "../i18n";
 import type { MonitorReport } from "../types";
-import { KeyValue, Mono, Notice, Pill } from "./Common";
+import { KeyValue, Mono, Notice, Pill, TONE_COLORS } from "./Common";
 
 const REFRESH_MS = 3000;
 
 const LEVEL_COLORS: Record<string, string> = {
-  error: "#e05c5c",
-  critical: "#e05c5c",
-  warning: "#e8a33d",
+  error: TONE_COLORS.error,
+  critical: TONE_COLORS.error,
+  warning: TONE_COLORS.warn,
   info: "#9fb4c7",
   debug: "#7d8b99",
   trace: "#6b7681",
@@ -18,55 +19,89 @@ const LEVEL_COLORS: Record<string, string> = {
 export function MonitorTab({
   targetDir,
   live,
+  readOnly = false,
+  onBeforeMutation,
   onNeedsRestart,
 }: {
   targetDir: string;
   live: boolean;
-  onNeedsRestart: () => void;
+  readOnly?: boolean;
+  onBeforeMutation?: () => Promise<void> | void;
+  onNeedsRestart: () => Promise<void> | void;
 }) {
+  const { t } = useI18n();
   const [report, setReport] = useState<MonitorReport | null>(null);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const timer = useRef<number | null>(null);
-
-  const refresh = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      setReport(await getMonitor(targetDir));
-    } catch (exc) {
-      setError(String(exc));
-    } finally {
-      setLoading(false);
-    }
-  }, [targetDir]);
+  const mountedRef = useRef(true);
+  const requestSeqRef = useRef(0);
+  const reportRef = useRef<MonitorReport | null>(null);
+  reportRef.current = report;
 
   useEffect(() => {
-    void refresh();
-    if (!live) return;
-    timer.current = window.setInterval(() => void refresh(), REFRESH_MS);
+    mountedRef.current = true;
     return () => {
-      if (timer.current !== null) window.clearInterval(timer.current);
+      mountedRef.current = false;
+    };
+  }, []);
+
+  const refresh = useCallback(
+    async (background = false) => {
+      const seq = ++requestSeqRef.current;
+      if (!background && reportRef.current === null) {
+        setLoading(true);
+      }
+      if (!background) {
+        setError(null);
+      }
+      try {
+        const next = await getMonitor(targetDir);
+        if (!mountedRef.current || requestSeqRef.current !== seq) return;
+        setReport(next);
+      } catch (exc) {
+        if (!mountedRef.current || requestSeqRef.current !== seq) return;
+        if (!background || reportRef.current === null) {
+          setError(String(exc));
+        }
+      } finally {
+        if (mountedRef.current && requestSeqRef.current === seq) {
+          setLoading(false);
+        }
+      }
+    },
+    [targetDir],
+  );
+
+  useEffect(() => {
+    void refresh(false);
+    if (!live) return;
+    timer.current = window.setInterval(() => void refresh(true), REFRESH_MS);
+    return () => {
+      if (timer.current !== null) {
+        window.clearInterval(timer.current);
+        timer.current = null;
+      }
     };
   }, [refresh, live]);
 
   if (!report) {
     return (
-      <PanelSection title="Monitoring">
+      <PanelSection title={t("Monitoring")}>
         <PanelSectionRow>
           {loading ? (
-            <Notice tone="info">Reading OptiScaler log…</Notice>
+            <Notice tone="info">{t("Reading OptiScaler log…")}</Notice>
           ) : error ? (
-            <Notice tone="error" title="Could not read OptiScaler log">{error}</Notice>
+            <Notice tone="error" title={t("Could not read OptiScaler log")}>{error}</Notice>
           ) : (
-            <Notice tone="info">No OptiScaler log is available yet.</Notice>
+            <Notice tone="info">{t("No OptiScaler log is available yet.")}</Notice>
           )}
         </PanelSectionRow>
         {!loading ? (
           <PanelSectionRow>
-            <ButtonItem layout="below" disabled={busy} onClick={() => void refresh()}>
-              Try again
+            <ButtonItem layout="below" disabled={busy} onClick={() => void refresh(false)}>
+              {t("Try again")}
             </ButtonItem>
           </PanelSectionRow>
         ) : null}
@@ -75,31 +110,34 @@ export function MonitorTab({
   }
 
   const runLogging = async (checked: boolean) => {
+    if (readOnly || busy) return;
     setBusy(true);
     setError(null);
     try {
+      await onBeforeMutation?.();
       const result = await setLogging(targetDir, checked);
-      if (!result.ok) throw new Error(result.error ?? "Could not update logging.");
-      await refresh();
-      onNeedsRestart();
+      if (!result.ok) throw new Error(result.error ?? t("Could not update logging."));
+      await refresh(false);
+      await onNeedsRestart();
     } catch (exc) {
-      setError(String(exc));
+      if (mountedRef.current) setError(String(exc));
     } finally {
-      setBusy(false);
+      if (mountedRef.current) setBusy(false);
     }
   };
 
   const runClear = async () => {
+    if (busy) return;
     setBusy(true);
     setError(null);
     try {
       const result = await clearLog(targetDir);
-      if (!result.ok) throw new Error(result.error ?? "Could not clear the log.");
-      await refresh();
+      if (!result.ok) throw new Error(result.error ?? t("Could not clear the log."));
+      await refresh(false);
     } catch (exc) {
-      setError(String(exc));
+      if (mountedRef.current) setError(String(exc));
     } finally {
-      setBusy(false);
+      if (mountedRef.current) setBusy(false);
     }
   };
 
@@ -110,25 +148,29 @@ export function MonitorTab({
   return (
     <>
       {error ? (
-        <PanelSection title="Monitoring">
+        <PanelSection title={t("Monitoring")}>
           <PanelSectionRow>
-            <Notice tone="error" title="Monitoring action failed">{error}</Notice>
+            <Notice tone="error" title={t("Monitoring action failed")}>{error}</Notice>
           </PanelSectionRow>
           <PanelSectionRow>
-            <ButtonItem layout="below" disabled={busy} onClick={() => void refresh()}>
-              Refresh log
+            <ButtonItem layout="below" disabled={busy} onClick={() => void refresh(false)}>
+              {t("Refresh log")}
             </ButtonItem>
           </PanelSectionRow>
         </PanelSection>
       ) : null}
 
-      <PanelSection title="Monitoring">
+      <PanelSection title={t("Monitoring")}>
         <PanelSectionRow>
           <ToggleField
-            label="Write OptiScaler log"
-            description="Monitoring reads OptiScaler.log. Turning this on takes effect at the next game launch."
+            label={t("Write OptiScaler log")}
+            description={
+              readOnly
+                ? t("Upgrade runtime in Setup before changing.")
+                : t("Writes OptiScaler.log on next game launch.")
+            }
             checked={loggingOn}
-            disabled={busy}
+            disabled={busy || readOnly}
             bottomSeparator="standard"
             onChange={(checked) => void runLogging(checked)}
           />
@@ -136,10 +178,10 @@ export function MonitorTab({
 
         {!report.log_present ? (
           <PanelSectionRow>
-            <Notice tone="warn" title="No log yet">
+            <Notice tone="warn" title={t("No log yet")}>
               {loggingOn
-                ? "Logging is enabled. Launch the game once and the runtime details will appear here."
-                : "Enable logging above, then launch the game to see what OptiScaler actually loaded."}
+                ? t("Logging is on — launch the game once to populate details.")
+                : t("Turn on logging above, then launch the game.")}
             </Notice>
           </PanelSectionRow>
         ) : null}
@@ -147,26 +189,26 @@ export function MonitorTab({
 
       {report.log_present ? (
         <>
-          <PanelSection title="Detected at Runtime">
+          <PanelSection title={t("Detected at Runtime")}>
             <PanelSectionRow>
               <div style={{ padding: "2px 0" }}>
-                <KeyValue label="Upscaler in use" value={state.upscaler ?? "—"} />
+                <KeyValue label={t("Upscaler in use")} value={state.upscaler ?? "—"} />
                 <KeyValue
-                  label="Frame generation"
+                  label={t("Frame generation")}
                   value={
                     report.frame_generation.length > 0
                       ? report.frame_generation.join(", ")
-                      : "none detected"
+                      : t("none detected")
                   }
                 />
-                <KeyValue label="Loaded as" value={state.proxy ? <Mono>{state.proxy}</Mono> : "—"} />
-                <KeyValue label="GPU" value={state.gpu ?? "—"} />
-                <KeyValue label="Game" value={state.game_name ?? "—"} />
-                <KeyValue label="Executable" value={state.game_exe ? <Mono>{state.game_exe}</Mono> : "—"} />
-                <KeyValue label="Game version" value={state.game_version ?? "—"} />
-                <KeyValue label="Wine/Proton" value={state.wine ?? "—"} />
+                <KeyValue label={t("Loaded as")} value={state.proxy ? <Mono>{state.proxy}</Mono> : "—"} />
+                <KeyValue label={t("GPU")} value={state.gpu ?? "—"} />
+                <KeyValue label={t("Game")} value={state.game_name ?? "—"} />
+                <KeyValue label={t("Executable")} value={state.game_exe ? <Mono>{state.game_exe}</Mono> : "—"} />
+                <KeyValue label={t("Game version")} value={state.game_version ?? "—"} />
+                <KeyValue label={t("Wine/Proton")} value={state.wine ?? "—"} />
                 <KeyValue
-                  label="Log updated"
+                  label={t("Log updated")}
                   value={
                     report.log_modified
                       ? new Date(report.log_modified * 1000).toLocaleTimeString()
@@ -177,7 +219,7 @@ export function MonitorTab({
             </PanelSectionRow>
           </PanelSection>
 
-          <PanelSection title="Configured (next launch)">
+          <PanelSection title={t("Configured (next launch)")}>
             <PanelSectionRow>
               <div style={{ padding: "2px 0" }}>
                 {Object.entries(report.configured ?? {}).map(([key, value]) => (
@@ -187,7 +229,7 @@ export function MonitorTab({
             </PanelSectionRow>
           </PanelSection>
 
-          <PanelSection title="Log Health">
+          <PanelSection title={t("Log Health")}>
             <PanelSectionRow>
               <div style={{ padding: "4px 0" }}>
                 {Object.entries(report.counts ?? {})
@@ -198,14 +240,17 @@ export function MonitorTab({
                     </Pill>
                   ))}
                 <div style={{ fontSize: "12px", opacity: 0.6, marginTop: "6px" }}>
-                  {(report.log_size / 1024).toFixed(0)} KB · {report.total_lines ?? 0} lines read
+                  {t("{kb} KB · {lines} lines read", {
+                    kb: (report.log_size / 1024).toFixed(0),
+                    lines: report.total_lines ?? 0,
+                  })}
                 </div>
               </div>
             </PanelSectionRow>
           </PanelSection>
 
           {(report.hints ?? []).length > 0 ? (
-            <PanelSection title="What the log is telling you">
+            <PanelSection title={t("What the log is telling you")}>
               {report.hints.map((hint, index) => (
                 <PanelSectionRow key={index}>
                   <Notice tone="warn">{hint}</Notice>
@@ -215,14 +260,14 @@ export function MonitorTab({
           ) : null}
 
           {problems.length > 0 ? (
-            <PanelSection title="Warnings & Errors">
+            <PanelSection title={t("Warnings & Errors")}>
               <PanelSectionRow>
                 <LogList entries={problems} />
               </PanelSectionRow>
             </PanelSection>
           ) : null}
 
-          <PanelSection title="Recent Log">
+          <PanelSection title={t("Recent Log")}>
             <PanelSectionRow>
               <LogList entries={(report.recent ?? []).slice(-40)} />
             </PanelSectionRow>
@@ -232,7 +277,7 @@ export function MonitorTab({
                 disabled={busy}
                 onClick={() => void runClear()}
               >
-                Clear log file
+                {t("Clear log file")}
               </ButtonItem>
             </PanelSectionRow>
           </PanelSection>
@@ -243,6 +288,7 @@ export function MonitorTab({
 }
 
 function LogList({ entries }: { entries: MonitorReport["recent"] }) {
+  const { t } = useI18n();
   return (
     <div
       style={{
@@ -257,7 +303,7 @@ function LogList({ entries }: { entries: MonitorReport["recent"] }) {
       }}
     >
       {entries.length === 0 ? (
-        <div style={{ opacity: 0.5 }}>Nothing logged.</div>
+        <div style={{ opacity: 0.5 }}>{t("Nothing logged.")}</div>
       ) : (
         entries.map((entry, index) => (
           <div key={index} style={{ color: LEVEL_COLORS[entry.level] ?? "#c8d3dd" }}>

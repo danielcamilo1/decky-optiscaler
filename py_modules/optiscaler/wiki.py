@@ -10,9 +10,11 @@ import http.client
 import difflib
 import hashlib
 import json
+import os
 import re
 import socket
 import ssl
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -74,15 +76,57 @@ _ssl_context = None
 _ssl_context_kind = None
 
 
+def _is_verified_context(context):
+    """True only when the SSLContext enforces certificate and hostname verification."""
+    return (
+        context is not None
+        and context.verify_mode == ssl.CERT_REQUIRED
+        and bool(context.check_hostname)
+    )
+
+
+def _atomic_write_bytes(path, data):
+    """Write `data` to `path` via a same-directory temp file + fsync + replace."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            tmp_path = Path(handle.name)
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, path)
+        tmp_path = None
+    except Exception:
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
+        raise
+
+
+def _atomic_write_text(path, text):
+    """Write UTF-8 `text` atomically via temp file + fsync + replace."""
+    _atomic_write_bytes(path, text.encode("utf-8"))
+
+
 def _candidate_contexts():
-    """SSL contexts to try, most trustworthy first.
+    """Verified SSL contexts to try, most trustworthy first.
 
     Building a context can itself fail when the trust store is missing or
     unreadable, so every candidate is constructed defensively - one that cannot
-    be built must not take the remaining fallbacks down with it.
+    be built must not take the remaining fallbacks down with it. Unverified
+    contexts are never returned.
     """
     try:
-        yield "default", ssl.create_default_context()
+        ctx = ssl.create_default_context()
+        if _is_verified_context(ctx):
+            yield "default", ctx
     except Exception:
         pass
 
@@ -92,30 +136,20 @@ def _candidate_contexts():
         pass
     else:
         try:
-            yield "certifi", ssl.create_default_context(cafile=certifi.where())
+            ctx = ssl.create_default_context(cafile=certifi.where())
+            if _is_verified_context(ctx):
+                yield "certifi", ctx
         except Exception:
             pass
 
     for bundle in SYSTEM_CA_BUNDLES:
         if Path(bundle).is_file():
             try:
-                yield f"system:{bundle}", ssl.create_default_context(cafile=bundle)
+                ctx = ssl.create_default_context(cafile=bundle)
+                if _is_verified_context(ctx):
+                    yield f"system:{bundle}", ctx
             except Exception:
                 continue
-
-    # Last resort. The compatibility list is public, read-only data and we send
-    # no credentials, so an unverified fetch leaks nothing; the alternative is
-    # the whole wiki lookup silently reporting "game not in list".
-    #
-    # Built without loading a trust store, and guarded like every other
-    # candidate: `create_default_context` reads the system store, so on the one
-    # machine where that is what is broken, the fallback meant to survive it
-    # was the one construction that could throw the whole chain away.
-    try:
-        unverified = ssl._create_unverified_context()
-    except Exception:
-        return
-    yield "unverified", unverified
 
 
 def ssl_context_kind():
@@ -193,13 +227,28 @@ class _IPv4HTTPSHandler(urllib.request.HTTPSHandler):
         return self.do_open(_IPv4HTTPSConnection, request, context=self._context)
 
 
-def _open(request, timeout, context, binary=False):
+class _HTTPSOnlyRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, fp, code, msg, headers, newurl):
+        if urllib.parse.urlsplit(newurl).scheme.lower() != "https":
+            raise urllib.error.URLError("redirect requires HTTPS")
+        return super().redirect_request(request, fp, code, msg, headers, newurl)
+
+
+def _open(request, timeout, context, binary=False, require_https=True, raw_markdown=False):
+    handlers = []
+    if require_https:
+        handlers.append(_HTTPSOnlyRedirectHandler())
     if _force_ipv4.get():
-        opener = urllib.request.build_opener(_IPv4HTTPHandler(), _IPv4HTTPSHandler(context=context))
-        response = opener.open(request, timeout=timeout)
+        handlers.extend((_IPv4HTTPHandler(), _IPv4HTTPSHandler(context=context)))
+    elif require_https:
+        handlers.append(urllib.request.HTTPSHandler(context=context))
+    if handlers:
+        response = urllib.request.build_opener(*handlers).open(request, timeout=timeout)
     else:
         response = urllib.request.urlopen(request, timeout=timeout, context=context)
     with response:
+        if raw_markdown and response.headers.get_content_type() in ("text/html", "application/xhtml+xml"):
+            raise ValueError("compatibility list returned HTML instead of raw Markdown")
         body = response.read()
     return body if binary else body.decode("utf-8", errors="replace")
 
@@ -215,13 +264,16 @@ def _is_retryable(exc):
     return isinstance(exc, (ConnectionError, OSError))
 
 
-def _http_get(url, timeout=12, binary=False):
+def _http_get(url, timeout=12, binary=False, raw_markdown=False):
     global _ssl_context, _ssl_context_kind
 
     # Wiki page names contain characters such as U+2010 HYPHEN, which urllib
     # cannot put on the request line unencoded.
     url = urllib.parse.quote(url, safe=":/?#[]@!$&'()*+,;=%~")
+    if urllib.parse.urlsplit(url).scheme.lower() != "https":
+        raise ValueError("request requires HTTPS")
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    policy = {"raw_markdown": True} if raw_markdown else {}
 
     def attempt(context):
         """One fetch, retried once over IPv4 when the network stalls.
@@ -232,16 +284,17 @@ def _http_get(url, timeout=12, binary=False):
         and only one of them is worth a second try.
         """
         try:
-            return _open(request, timeout, context, binary)
+            return _open(request, timeout, context, binary, **policy)
         except Exception as exc:
             if _is_tls_error(exc) or not _is_retryable(exc):
                 raise
             with _ipv4_only():
-                return _open(request, timeout, context, binary)
+                return _open(request, timeout, context, binary, **policy)
 
-    if _ssl_context is not None:
+    cached_context = _ssl_context
+    if _is_verified_context(cached_context):
         try:
-            return attempt(_ssl_context)
+            return attempt(cached_context)
         except Exception as exc:
             if not _is_tls_error(exc):
                 raise
@@ -251,6 +304,8 @@ def _http_get(url, timeout=12, binary=False):
 
     last_error = None
     for kind, context in _candidate_contexts():
+        if not _is_verified_context(context):
+            continue
         try:
             body = attempt(context)
         except Exception as exc:
@@ -260,8 +315,9 @@ def _http_get(url, timeout=12, binary=False):
                 raise
             last_error = exc
             continue
-        # Only remember the context once it has actually completed a request.
-        _ssl_context, _ssl_context_kind = context, kind
+        # Only remember verified contexts once they have completed a request.
+        if _is_verified_context(context):
+            _ssl_context, _ssl_context_kind = context, kind
         return body
 
     raise last_error if last_error else urllib.error.URLError("no usable TLS context")
@@ -276,22 +332,19 @@ def download(url, dest, timeout=90):
     learned the hard way on real Decks, and a second downloader that had not
     learned them would fail on exactly the networks these were written for.
 
-    Written to a temporary file and moved into place, so a download that dies
-    half way through leaves no half a DLL behind for the next run to trust.
+    Written to a temporary file, fsynced and atomically moved into place, so a
+    download that dies half way through leaves no half a DLL behind.
     """
     dest = Path(dest)
-    dest.parent.mkdir(parents=True, exist_ok=True)
     body = _http_get(url, timeout=timeout, binary=True)
     if not body:
         raise ValueError(f"empty response from {url}")
-    partial = dest.with_name(dest.name + ".part")
-    partial.write_bytes(body)
-    partial.replace(dest)
+    _atomic_write_bytes(dest, body)
     return dest
 
 
 def download_json(url, timeout=20):
-    """Fetch and parse JSON over the same transport."""
+    """Fetch and parse JSON over the same verified HTTPS transport."""
     return json.loads(_http_get(url, timeout=timeout))
 
 
@@ -590,21 +643,24 @@ class WikiClient:
         is the only way this could make things worse than not refreshing.
         """
         self.last_attempt = time.time()
+        origin = f"{WIKI_RAW_BASE}/{COMPAT_LIST_PAGE}"
         try:
-            markdown = _http_get(f"{WIKI_RAW_BASE}/{COMPAT_LIST_PAGE}")
+            markdown = _http_get(origin, raw_markdown=True)
+            if re.search(r"<(?:html|!doctype\s+html)\b", markdown, re.IGNORECASE):
+                raise ValueError("compatibility list returned HTML instead of raw Markdown")
             entries = parse_compat_list(markdown)
+            if not entries:
+                raise ValueError("compatibility list downloaded but parsed to zero rows")
         except Exception as exc:  # network, TLS, disk, decoding — all non-fatal
             self.last_error = f"{type(exc).__name__}: {exc}"
-            return {"ok": False, "changed": False, "count": 0, "error": self.last_error}
-        if not entries:
-            self.last_error = "compatibility list downloaded but parsed to zero rows"
             return {"ok": False, "changed": False, "count": 0, "error": self.last_error}
 
         after = fingerprint(entries)
         changed = after != fingerprint((self.cached() or {}).get("entries") or [])
         try:
-            self.list_cache.write_text(
-                json.dumps({"fetched_at": time.time(), "entries": entries}), encoding="utf-8"
+            _atomic_write_text(
+                self.list_cache,
+                json.dumps({"fetched_at": time.time(), "entries": entries}),
             )
         except OSError as exc:
             self.last_error = f"{type(exc).__name__}: {exc}"
@@ -713,7 +769,7 @@ class WikiClient:
             except Exception:
                 continue
             try:
-                self._page_file(page).write_text(text, encoding="utf-8")
+                _atomic_write_text(self._page_file(page), text)
             except OSError:
                 pass
             self._page_failed_at.pop(page, None)

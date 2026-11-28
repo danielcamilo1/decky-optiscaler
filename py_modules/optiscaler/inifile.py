@@ -15,6 +15,11 @@ def _key_re(key):
     return re.compile(rf"^(\s*){re.escape(key)}(\s*)=(.*)$")
 
 
+def _reject_control_chars(label, text):
+    if "\r" in text or "\n" in text or "\x00" in text:
+        raise ValueError(f"INI {label} must not contain newline or NUL characters")
+
+
 class IniFile:
     def __init__(self, path):
         self.path = Path(path)
@@ -26,7 +31,7 @@ class IniFile:
         if not self.path.exists():
             self.lines = []
             return
-        text = self.path.read_text(encoding="utf-8", errors="replace")
+        text = self.path.read_text(encoding="utf-8-sig", errors="replace")
         self.newline = "\r\n" if "\r\n" in text else "\n"
         self.lines = text.splitlines()
 
@@ -55,7 +60,16 @@ class IniFile:
     # -- writing ---------------------------------------------------------
     def set(self, section, key, value):
         """Set section/key to value, creating either if needed."""
+        section = str(section)
+        key = str(key)
         value = "auto" if value is None else str(value)
+        _reject_control_chars("section", section)
+        _reject_control_chars("key", key)
+        _reject_control_chars("value", value)
+        if "]" in section:
+            raise ValueError("INI section must not contain ']'")
+        if "=" in key:
+            raise ValueError("INI key must not contain '='")
         pattern = _key_re(key)
         in_section = False
         section_end = None

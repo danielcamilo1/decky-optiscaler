@@ -173,7 +173,11 @@ def status(target_dir, wanted=None, revision=None):
     target = Path(target_dir)
     dll = target / REFRAMEWORK_DLL
     plugin_name = (wanted or {}).get("plugin")
-    plugin = target / plugin_name if plugin_name else None
+    # Always probe the known PDPerfPlugin.dll even when no wiki plan was passed
+    # (e.g. from get_game), so the Setup tab can detect it as soon as the user
+    # drops the file in the game folder.
+    probe_plugin = target / (plugin_name or REFRAMEWORK_PD_PLUGIN)
+    plugin_installed = probe_plugin.is_file()
     return {
         "required": bool(wanted and wanted.get("required")),
         "installed": dll.is_file(),
@@ -181,12 +185,12 @@ def status(target_dir, wanted=None, revision=None):
         "path": str(dll),
         "revision": revision,
         "plugin": plugin_name,
-        "plugin_installed": bool(plugin and plugin.is_file()),
+        "plugin_installed": plugin_installed,
         "plugin_url": (wanted or {}).get("plugin_url"),
         "plugin_name": (wanted or {}).get("plugin_name"),
         # The pd games do not upscale at all without it, so "REFramework is in
         # and OptiScaler is in" is not the same as "this game will do anything".
-        "complete": dll.is_file() and (not plugin_name or bool(plugin and plugin.is_file())),
+        "complete": dll.is_file() and (not plugin_name or plugin_installed),
     }
 
 

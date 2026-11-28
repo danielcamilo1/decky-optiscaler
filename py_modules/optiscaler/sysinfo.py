@@ -24,15 +24,24 @@ PCI_GENERATIONS = {
     "0x150e": ("RDNA3.5", "Krackan (Z2)"),
 }
 
+RDNA2_APU_PCI = {"0x163f", "0x1435", "0x1681"}
+
 GFX_GENERATIONS = {
     "gfx1030": "RDNA2", "gfx1031": "RDNA2", "gfx1032": "RDNA2",
     "gfx1033": "RDNA2", "gfx1034": "RDNA2", "gfx1035": "RDNA2",
-    "gfx1036": "RDNA2",
+    "gfx1036": "RDNA2", "gfx1037": "RDNA2",
     "gfx1100": "RDNA3", "gfx1101": "RDNA3", "gfx1102": "RDNA3",
     "gfx1103": "RDNA3",
     "gfx1150": "RDNA3.5", "gfx1151": "RDNA3.5", "gfx1152": "RDNA3.5",
     "gfx1200": "RDNA4", "gfx1201": "RDNA4",
 }
+
+RDNA2_APU_GFX = {"gfx1033", "gfx1035", "gfx1036", "gfx1037"}
+
+RDNA2_APU_MARKETING_RE = re.compile(
+    r"steam\s*deck|van\s*gogh|jupiter|galileo|rembrandt|mendocino|\b(?:680m|660m|610m)\b",
+    re.I,
+)
 
 MARKETING_GENERATIONS = [
     (re.compile(r"\bRX\s*9\d{3}\b", re.I), "RDNA4"),
@@ -114,24 +123,23 @@ def gpu_info():
     generation = None
     codename = None
     vendor = None
+    matched_amd_pci = None
 
     for pci_vendor, model in devices:
         if pci_vendor == "0x1002":
             vendor = "amd"
             if model in PCI_GENERATIONS:
                 generation, codename = PCI_GENERATIONS[model]
+                matched_amd_pci = model
                 break
         elif pci_vendor == "0x10de" and vendor is None:
             vendor = "nvidia"
         elif pci_vendor == "0x8086" and vendor is None:
             vendor = "intel"
 
-    if generation is None:
-        gfx = _gfx_target()
-        if gfx and gfx in GFX_GENERATIONS:
-            generation = GFX_GENERATIONS[gfx]
-    else:
-        gfx = _gfx_target()
+    gfx = _gfx_target()
+    if generation is None and gfx and gfx in GFX_GENERATIONS:
+        generation = GFX_GENERATIONS[gfx]
 
     if generation is None:
         for pattern, gen in MARKETING_GENERATIONS:
@@ -147,11 +155,23 @@ def gpu_info():
         elif re.search(r"intel|arc", text, re.I):
             vendor = "intel"
 
+    name_text = " ".join(part for part in (codename, *names) if part)
+    is_rdna2_apu = bool(
+        vendor in ("amd", None)
+        and generation == "RDNA2"
+        and (
+            matched_amd_pci in RDNA2_APU_PCI
+            or gfx in RDNA2_APU_GFX
+            or bool(RDNA2_APU_MARKETING_RE.search(name_text))
+        )
+    )
+
     return {
         "names": names,
         "name": codename or (names[0] if names else None),
-        "gfx": _gfx_target(),
+        "gfx": gfx,
         "vendor": vendor,
         "generation": generation,
         "fsr4": FSR4_SUPPORT.get(generation or "", "unknown"),
+        "is_rdna2_apu": is_rdna2_apu,
     }

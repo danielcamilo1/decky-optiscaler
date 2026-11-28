@@ -1,6 +1,7 @@
 import { PanelSection, PanelSectionRow, ToggleField } from "@decky/ui";
 import { useCallback, useEffect, useState } from "react";
 import { getOptipatcherStatus, installOptipatcher } from "../api";
+import { useI18n } from "../i18n";
 import type { OptipatcherStatus } from "../types";
 import { Notice } from "./Common";
 
@@ -14,20 +15,27 @@ import { Notice } from "./Common";
  */
 export function OptipatcherPanel({
   targetDir,
+  running = false,
+  readOnly = false,
   onBeforeMutation,
   onChanged,
 }: {
   targetDir: string;
+  running?: boolean;
+  readOnly?: boolean;
   onBeforeMutation?: () => Promise<void> | void;
   onChanged?: () => Promise<void> | void;
 }) {
+  const { t } = useI18n();
   const [status, setStatus] = useState<OptipatcherStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
-      setStatus(await getOptipatcherStatus(targetDir));
+      const next = await getOptipatcherStatus(targetDir);
+      setStatus(next);
+      setError(null);
     } catch (exc) {
       setError(String(exc));
     }
@@ -37,15 +45,27 @@ export function OptipatcherPanel({
     void refresh();
   }, [refresh]);
 
-  if (!status) return null;
+  if (!status) {
+    if (!error) return null;
+    return (
+      <PanelSection title="OptiPatcher">
+        <PanelSectionRow>
+          <Notice tone="error" title={t("Could not check OptiPatcher")}>
+            {error}
+          </Notice>
+        </PanelSectionRow>
+      </PanelSection>
+    );
+  }
 
   const toggle = async (enabled: boolean) => {
+    if (running || readOnly) return;
     setBusy(true);
     setError(null);
     try {
       await onBeforeMutation?.();
       const result = await installOptipatcher(targetDir, enabled);
-      if (!result.ok) setError(result.error ?? "Could not change OptiPatcher");
+      if (!result.ok) setError(result.error ?? t("Could not change OptiPatcher"));
       else await onChanged?.();
       await refresh();
     } catch (exc) {
@@ -55,18 +75,22 @@ export function OptipatcherPanel({
     }
   };
 
+  const description = !status.available
+    ? t("This build of the plugin does not bundle OptiPatcher.")
+    : running
+      ? t("Close the game first.")
+      : readOnly
+        ? t("Upgrade the OptiScaler runtime in Setup first.")
+        : t("Exposes a supported game's DLSS and DLSS-FG inputs without GPU spoofing.");
+
   return (
     <PanelSection title="OptiPatcher">
       <PanelSectionRow>
         <ToggleField
-          label="Install OptiPatcher"
-          description={
-            status.available
-              ? "Exposes a supported game's DLSS and DLSS-FG inputs without GPU spoofing."
-              : "This build of the plugin does not bundle OptiPatcher."
-          }
+          label={t("Install OptiPatcher")}
+          description={description}
           checked={status.installed}
-          disabled={busy || !status.available}
+          disabled={busy || !status.available || running || readOnly}
           bottomSeparator="standard"
           onChange={(checked) => void toggle(checked)}
         />
@@ -79,11 +103,11 @@ export function OptipatcherPanel({
       ) : null}
 
       <PanelSectionRow>
-        <Notice tone="info" title={status.installed ? "Installed" : "When to use it"}>
+        <Notice tone="info" title={status.installed ? t("Installed") : t("When to use it")}>
           {status.installed
-            ? "OptiScaler shows (OP) next to the game title in its overlay when a patch actually applied, and Spoof reads OFF."
-            : "Some games — Red Dead Redemption 2 among them — need it before OptiScaler can use their DLSS inputs. It does nothing in games it has no patterns for."}{" "}
-          Build: {status.version}.
+            ? t("Overlay shows (OP) next to the title with Spoof OFF when active.")
+            : t("Needed by some games (e.g. RDR2) for DLSS inputs without GPU spoofing; harmless elsewhere.")}{" "}
+          {t("Build: {version}.", { version: status.version })}
         </Notice>
       </PanelSectionRow>
     </PanelSection>

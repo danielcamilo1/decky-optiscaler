@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
 """Offline integration tests for the Deck preset's DLL/settings lifecycle."""
 import asyncio
+import concurrent.futures
 import hashlib
 import logging
 from pathlib import Path
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'py_modules'))
-from optiscaler import installer, fsr4build
+from optiscaler import constants, installer, fsr4build
 from optiscaler.constants import FFX_UPSCALER_DLL, INI_NAME, MANIFEST_NAME
 from optiscaler.inifile import IniFile
 from optiscaler.service import OptiScalerService
@@ -144,15 +147,62 @@ class BuildFetchTests(unittest.TestCase):
                 fsr4build.fetch(self.build, self.root)
         self.assertFalse(fsr4build.cached_path(self.root, self.build).exists())
 
+    def test_concurrent_fetch_for_same_build_is_serialized_and_atomic(self):
+        active = 0
+        max_active = 0
+        guard = threading.Lock()
+        barrier = threading.Barrier(4)
+
+        def slow_extract(archive, target, logger=None):
+            nonlocal active, max_active
+            with guard:
+                active += 1
+                max_active = max(max_active, active)
+            try:
+                time.sleep(0.05)
+                self.extract(archive, target, logger)
+            finally:
+                with guard:
+                    active -= 1
+
+        def worker():
+            barrier.wait(timeout=5)
+            return fsr4build.fetch(self.build, self.root)
+
+        with patch.object(fsr4build.wiki, 'download', side_effect=self.download) as get, \
+                patch.object(fsr4build.payload, 'extract_archive', side_effect=slow_extract) as extract:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+                paths = list(pool.map(lambda _: worker(), range(4)))
+
+        self.assertEqual(max_active, 1)
+        self.assertEqual(get.call_count, 1)
+        self.assertEqual(extract.call_count, 1)
+        expected = fsr4build.cached_path(self.root, self.build)
+        self.assertEqual(paths, [expected] * 4)
+        self.assertEqual(expected.read_bytes(), self.dll_bytes)
+
 
 class DeckFsr4Tests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls._shared_temp = tempfile.TemporaryDirectory(prefix='decky-fsr4-payload-')
+        cls._shared_runtime = Path(cls._shared_temp.name) / 'runtime'
+        bootstrap = OptiScalerService(ROOT, Path(cls._shared_temp.name) / 'settings',
+                                      cls._shared_runtime, Path(cls._shared_temp.name) / 'home',
+                                      logging.getLogger('test'))
+        cls._shared_payload = asyncio.run(bootstrap.ensure_payload())
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._shared_temp.cleanup()
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        self.service = OptiScalerService(ROOT, self.root/'settings', self.root/'runtime',
+        self.service = OptiScalerService(ROOT, self.root/'settings', self._shared_runtime,
                                         self.root/'home', logging.getLogger('test'))
-        self.payload = asyncio.run(self.service.ensure_payload())
+        self.payload = self._shared_payload
         self.target = self.root/'game'
         self.target.mkdir()
         (self.target/FFX_UPSCALER_DLL).write_bytes(b'original game DLL')
@@ -279,6 +329,158 @@ class DeckFsr4Tests(unittest.TestCase):
         with patch.object(installer, 'atomic_copy', side_effect=fail_once):
             self.assertFalse(self.enable()['ok'])
         self.assertEqual(before, self.snapshot())
+
+    def test_prior_lite_20261105_recognized_verifies_upgrades_restores_and_uninstalls(self):
+        prior_real = fsr4build.find('4.1.2-lite-exact-20261105')
+        self.assertIsNotNone(prior_real)
+        self.assertEqual(
+            prior_real['file_sha256'],
+            'f991d06a8b800ed3e01b95696333c842c3de590aec7d2e6b2340c4e583d84ef4',
+        )
+        self.assertEqual(prior_real['file_bytes'], 39608832)
+
+        # Superseded prior build cannot be freshly installed via set_fsr4_build or fetch.
+        rejected = asyncio.run(self.service.set_fsr4_build(str(self.target), '4.1.2-lite-exact-20261105'))
+        self.assertFalse(rejected['ok'])
+        with self.assertRaisesRegex(ValueError, 'compatibility only'):
+            fsr4build.fetch(prior_real, self.root)
+
+        # Simulate an existing game already running the prior 2026-11-05 Lite DLL.
+        prior_dll = self.root / 'prior-20261105.dll'
+        prior_dll.write_bytes(b'prior 2026-11-05 community Lite DLL')
+        prior_build = dict(
+            prior_real,
+            file_sha256=hashlib.sha256(prior_dll.read_bytes()).hexdigest(),
+            file_bytes=prior_dll.stat().st_size,
+        )
+        current_dll = self.root / 'current-20261122.dll'
+        current_dll.write_bytes(b'current 2026-11-22 community Lite DLL')
+        current_build = dict(
+            constants.FSR4_BUILDS[0],
+            file_sha256=hashlib.sha256(current_dll.read_bytes()).hexdigest(),
+            file_bytes=current_dll.stat().st_size,
+        )
+
+        with patch.object(fsr4build, 'FSR4_PRIOR_BUILDS', (prior_build,)), \
+                patch.object(fsr4build, 'FSR4_BUILDS', [current_build]):
+            installer.install_fsr4_build(str(self.target), prior_dll, prior_build, None, True)
+            identified = fsr4build.identify(self.target / FFX_UPSCALER_DLL)
+            self.assertTrue(identified['known'])
+            self.assertEqual(identified['id'], '4.1.2-lite-exact-20261105')
+            self.assertTrue(installer.verify_install(self.target, self.payload)['complete'])
+
+            # Reinstall / runtime refresh preserves the recognized prior Lite build.
+            installer.install(self.target, self.payload)
+            self.assertEqual(
+                (self.target / FFX_UPSCALER_DLL).read_bytes(),
+                prior_dll.read_bytes(),
+            )
+            self.assertEqual(
+                installer.read_manifest(self.target)['fsr4_build']['id'],
+                '4.1.2-lite-exact-20261105',
+            )
+
+            # Seamless upgrade to 2026-11-22 preserves FrameGen settings.
+            with patch.object(fsr4build, 'fetch', return_value=current_dll):
+                upgraded = asyncio.run(
+                    self.service.set_fsr4_build(
+                        str(self.target),
+                        constants.FSR4_STEAM_DECK_BUILD_ID,
+                    )
+                )
+            self.assertTrue(upgraded['ok'], upgraded)
+            self.assertEqual(
+                fsr4build.identify(self.target / FFX_UPSCALER_DLL)['id'],
+                '4.1.2-lite-exact-20261122',
+            )
+            self.assertEqual(IniFile(self.target / INI_NAME).get('FrameGen', 'FGOutput'), 'fsr3')
+
+            # Restore back to stock official DLL from prior 2026-11-05 directly.
+            installer.install_fsr4_build(str(self.target), prior_dll, prior_build, None, True)
+            restored = asyncio.run(
+                self.service.restore_fsr4_build(str(self.target), apply_official_preset=True)
+            )
+            self.assertTrue(restored['ok'], restored)
+            self.assertEqual(fsr4build.identify(self.target / FFX_UPSCALER_DLL)['id'], 'bundled')
+            self.assertEqual(
+                IniFile(self.target / INI_NAME).get('FSR', 'Fsr4ForceEnableInt8'),
+                'auto',
+            )
+
+            # Uninstall cleanly from prior 2026-11-05 restores original game DLL.
+            installer.install_fsr4_build(str(self.target), prior_dll, prior_build, None, True)
+            installer.uninstall(self.target)
+            self.assertEqual((self.target / FFX_UPSCALER_DLL).read_bytes(), b'original game DLL')
+
+    def test_concurrent_set_fsr4_build_for_two_games_same_build_id(self):
+        runtime_dir = self.root / 'isolated-runtime'
+        service = OptiScalerService(
+            ROOT, self.root / 'settings-concurrent', runtime_dir,
+            self.root / 'home', logging.getLogger('test'),
+        )
+        targets = []
+        for idx in (1, 2):
+            game = self.root / f'concurrent-game-{idx}'
+            game.mkdir()
+            (game / FFX_UPSCALER_DLL).write_bytes(f'original game {idx} DLL'.encode())
+            installer.install(game, self.payload)
+            point = asyncio.run(service.create_restore_point(str(game), str(game), ''))
+            self.assertTrue(point['ok'], point)
+            targets.append(game)
+
+        archive_bytes = b'fake-fsr4-archive-payload'
+        dll_bytes = self.dll.read_bytes()
+        build = dict(
+            self.build,
+            sources=[dict(
+                self.build['sources'][0],
+                archive_sha256=hashlib.sha256(archive_bytes).hexdigest(),
+            )],
+        )
+
+        active = 0
+        max_active = 0
+        guard = threading.Lock()
+
+        def fake_download(url, archive, **kwargs):
+            time.sleep(0.04)
+            archive.parent.mkdir(parents=True, exist_ok=True)
+            archive.write_bytes(archive_bytes)
+
+        def fake_extract(archive, target, logger=None):
+            nonlocal active, max_active
+            with guard:
+                active += 1
+                max_active = max(max_active, active)
+            try:
+                time.sleep(0.05)
+                target.mkdir(parents=True, exist_ok=True)
+                (target / build['file']).write_bytes(dll_bytes)
+            finally:
+                with guard:
+                    active -= 1
+
+        async def run_both():
+            return await asyncio.gather(
+                service.set_fsr4_build(str(targets[0]), build['id']),
+                service.set_fsr4_build(str(targets[1]), build['id']),
+            )
+
+        with patch.object(fsr4build, 'FSR4_BUILDS', [build]), \
+                patch.object(fsr4build.wiki, 'download', side_effect=fake_download) as get, \
+                patch.object(fsr4build.payload, 'extract_archive', side_effect=fake_extract) as extract:
+            res1, res2 = asyncio.run(run_both())
+
+        self.assertTrue(res1['ok'], res1)
+        self.assertTrue(res2['ok'], res2)
+        self.assertEqual(max_active, 1)
+        self.assertEqual(get.call_count, 1)
+        self.assertEqual(extract.call_count, 1)
+        for game in targets:
+            self.assertEqual((game / FFX_UPSCALER_DLL).read_bytes(), dll_bytes)
+            with patch.object(fsr4build, 'FSR4_BUILDS', [build]):
+                self.assertEqual(fsr4build.identify(game / FFX_UPSCALER_DLL)['id'], build['id'])
+                self.assertTrue(installer.verify_install(game, self.payload)['complete'])
 
 
 if __name__ == '__main__':

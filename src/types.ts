@@ -24,6 +24,9 @@ export interface PayloadStatus {
   optiscaler_version: string;
   proxy_filenames: string[];
   default_proxy: string;
+  fsr4_default_build?: string;
+  fsr4_community_settings?: Record<string, Record<string, string>>;
+  locale?: string | null;
 }
 
 export interface Library {
@@ -62,6 +65,7 @@ export interface GpuInfo {
   vendor: string | null;
   generation: string | null;
   fsr4: "native" | "int8" | "experimental" | "unsupported" | "unknown";
+  is_rdna2_apu?: boolean;
 }
 
 export interface FfxUpscalerInfo {
@@ -110,6 +114,23 @@ export interface LaunchRecord {
   value: string;
 }
 
+export interface AppliedLaunchMetadata {
+  flags: string[];
+  extraOverrides: string[];
+}
+
+export interface RollbackMetadata extends Record<string, unknown> {
+  launch_options?: string | null;
+  applied_launch?: AppliedLaunchMetadata | null;
+}
+
+export interface RollbackInfo {
+  available: boolean;
+  version?: string;
+  metadata?: RollbackMetadata;
+  launch_pending?: boolean;
+}
+
 export interface InstallInfo {
   path: string;
   installed: boolean;
@@ -126,17 +147,15 @@ export interface InstallInfo {
   backup_dir: string;
   backed_up: string[];
   launch_record: LaunchRecord;
+  manifest_error?: string | null;
+  launch_record_error?: string | null;
   /** True only when the installed OptiScaler proxy matches this plugin's pinned runtime hash. */
   runtime_current?: boolean;
   /** Explicit rollback retains the old install for this bundled runtime. */
   runtime_upgrade_held?: boolean;
   runtime_recovery_needed?: boolean;
   /** A preserved pre-upgrade snapshot that can still be restored. */
-  rollback?: {
-    available: boolean;
-    version?: string;
-    metadata?: Record<string, unknown>;
-  };
+  rollback?: RollbackInfo;
   fsr4: Fsr4Status;
   /**
    * Whether REFramework's dll is next to the executable, and whether this
@@ -165,6 +184,7 @@ export interface GameDetail {
   /** Backend-confirmed canonical PBZ.exe folder, null if missing. */
   pbz_target?: string | null;
   pbz_identity?: boolean;
+  is_pbz?: boolean;
   candidates: ExeCandidate[];
   install: InstallInfo;
   launch_option: string;

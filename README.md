@@ -10,15 +10,21 @@ This package contains:
 - A native live-control bridge calibrated to this core and its PDB, retaining all 14 live controls with per-game capabilities and confirmed command results.
 - Original-file backups, an immutable upgrade restore point, precise launch-options merging, rollback, and Remove.
 
-Live control requires the matching core and bridge installed into each game. Saving an INI is separate from submitting a live configuration request; actual runtime state is reported separately, and model/provider and other startup settings still require a restart. Opening a recognized managed 0.9.4 or 0.9.5-pre5 game automatically upgrades it when the game is closed, preserving the INI, components and launch options with a restore snapshot. The official Basic preset uses automatic model selection; the experimental community Lite preset is offered only on recognized RDNA2 APUs and installs only when explicitly chosen. Existing 4.1.1b files remain identified as legacy and are not silently replaced. Unknown or explicitly restored runtimes remain read-only until reviewed in Setup. See the [live-control guide](docs/live-control.md) for connection and recovery states. Confirm the active FSR4 model in game using the watermark.
+## Guides
 
-See [PBZ setup, verification and complete recovery](docs/phantom-blade-zero.md). With the bundled DLL installed, the official upscaler is **Settings → Basic → FSR 3.X/4**; restore that DLL first if a community build is installed. The experimental community option is **FSR 4.1.2 Lite — community** on supported devices; existing 4.1.1b installs remain legacy. The [FSR 4 guide](docs/steam-deck-fsr4.md) explains the choices and restore paths.
+Each topic has one authoritative guide:
+
+- **[FSR 4.1.2 on Steam Deck](docs/steam-deck-fsr4.md)** — official **Settings (Basic mode) → Upscaler → Override upscaler with → FSR 3.X/4**, experimental **FSR 4.1.2 Lite — community**, legacy **4.1.1b**, watermark verification, and **Setup → Manual setup → Installed Files & FSR 4** restore/fallback paths.
+- **[Native live control and recovery](docs/live-control.md)** — adding/upgrading the bridge in **Setup → Manual setup → Live in-game control**, live connection/result semantics, automatic upgrades, **Restore previous install**, and **Remove**.
+- **[Phantom Blade Zero setup](docs/phantom-blade-zero.md)** — PBZ executable folder (`PBZ/platform/steam`), 100% output scale, wiki identity rules, and pinned sources.
+
+Global plugin preferences (including automatic Simplified Chinese `zh-CN` / English language detection and manual override) and compatibility-list controls live under the main page's **Plugin Settings** tab (distinct from each game's **Settings** tab).
 
 ## Install and recover
 
-Install the generated zip through Decky Developer mode's **Install Plugin from URL**, or unpack its single `Decky OptiScaler/` directory into `~/homebrew/plugins/` and restart Decky Loader. Then open the game's page. Recognized managed 0.9.4 and 0.9.5-pre5 installations update automatically; fresh or unknown installations use Setup.
+Install the generated zip through Decky Developer mode's **Install Plugin from URL**, or unpack its single `Decky OptiScaler/` directory into `~/homebrew/plugins/` and restart Decky Loader. Then open the game's page. Recognized managed 0.9.4 and 0.9.5-pre5 installations update automatically when opened with the game closed; fresh or unknown installations use **Setup**.
 
-Close the game before installation, upgrade, binary changes, rollback or removal. Existing managed installs receive an immutable restore point before an upgrade. If a restore point already exists, it is reused: rollback returns to its recorded version and configuration, which can predate the immediately previous upgrade. A running game is deferred until it closes. **Restore previous install** restores that state, including the captured launch options and related per-game preferences; automatic upgrading stays paused for that restored install until the bundled core changes or you upgrade manually. **Remove** restores the earliest original game files and offers the original launch options. Use the restore choice for full removal. Failed Steam writes remain visible and retryable. Originals lost before this build cannot be recreated.
+Close the game before installation, upgrade, binary changes, rollback or removal. See the [live-control and recovery guide](docs/live-control.md#restore-and-remove) for the full restore-point, rollback-hold, and **Remove** contract.
 
 ## Build and validate
 
@@ -27,15 +33,20 @@ Requires Node 22, pnpm 10, Python 3.11+ and a BCJ2-capable `7z`, `7zz`, `7za`, `
 ```sh
 pnpm install --frozen-lockfile
 python3 scripts/generate_schema.py
+git diff --exit-code -- src/config/generatedSchema.ts py_modules/optiscaler/schema_generated.py
+python3 scripts/generate_asi_layout.py
+git diff --exit-code -- asi/generated
+python3 scripts/live_metadata.py --check
+python3 scripts/verify_runtime_profile.py
 pnpm exec tsc --noEmit
+pnpm exec tsc -p tsconfig.test.json --noEmit
 pnpm build
-python3 scripts/selftest.py
+python3 scripts/test_units.py
 python3 scripts/test_fsr4.py
 python3 scripts/test_recovery.py
 python3 scripts/test_live.py
 python3 scripts/test_live_rpc.py
-python3 scripts/live_metadata.py --check
-python3 scripts/verify_runtime_profile.py
+python3 scripts/selftest.py
 HARNESS=run.tsx node testharness/build-and-run.mjs
 HARNESS=all-options.tsx node testharness/build-and-run.mjs
 HARNESS=live-fields.tsx node testharness/build-and-run.mjs
@@ -43,6 +54,8 @@ HARNESS=use-config.tsx node testharness/build-and-run.mjs
 HARNESS=launch-options.tsx node testharness/build-and-run.mjs
 HARNESS=recovery-ui.tsx node testharness/build-and-run.mjs
 HARNESS=auto-upgrade.tsx node testharness/build-and-run.mjs
+HARNESS=ui-flows.tsx node testharness/build-and-run.mjs
+HARNESS=i18n.tsx node testharness/build-and-run.mjs
 python3 scripts/package.py
 python3 scripts/verify_package.py 'out/Decky OptiScaler.zip'
 ```

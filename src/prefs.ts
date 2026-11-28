@@ -10,7 +10,12 @@
  * comes back without anything having to be un-stored first.
  */
 import { getPref, setPref } from "./api";
+import { t } from "./i18n";
 import type { LaunchAction } from "./launchOptions";
+import type { AppliedLaunchMetadata } from "./types";
+
+export { PREF_LANGUAGE } from "./i18n";
+export type { AppliedLaunchMetadata } from "./types";
 
 /** Whether answers are remembered at all. Absent means yes. */
 export const PREF_REMEMBER = "remember_choices";
@@ -30,18 +35,18 @@ export const REMEMBERED_QUESTIONS: {
     title: "Setting the launch options after an install",
     describe: (value) =>
       value === "always"
-        ? "Set them without asking."
-        : "Never set them; the game is left as Steam has it.",
+        ? t("Set them without asking.")
+        : t("Never set them; the game is left as Steam has it."),
   },
   {
     key: PREF_REMOVE_LAUNCH,
     title: "The launch options when OptiScaler is removed",
     describe: (value) =>
       value === "restore"
-        ? "Put back what was there before the install."
+        ? t("Put back what was there before the install.")
         : value === "clear"
-          ? "Take the OptiScaler override back out."
-          : "Leave them exactly as they are.",
+          ? t("Take the OptiScaler override back out.")
+          : t("Leave them exactly as they are."),
   },
 ];
 
@@ -94,5 +99,100 @@ export async function setRemembering(enabled: boolean): Promise<void> {
   await setPref(PREF_REMEMBER, enabled);
   if (!enabled) {
     for (const question of REMEMBERED_QUESTIONS) await forget(question.key);
+  }
+}
+
+export type ReadAppliedLaunchResult =
+  | { ok: true; metadata: AppliedLaunchMetadata }
+  | { ok: false };
+
+const PREF_APPLIED_LAUNCH_PREFIX = "applied_launch:";
+
+function appliedLaunchKey(appid: string): string {
+  return `${PREF_APPLIED_LAUNCH_PREFIX}${appid}`;
+}
+
+function normalizeStringList(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of raw) {
+    if (typeof item !== "string") continue;
+    const trimmed = item.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    out.push(trimmed);
+  }
+  return out;
+}
+
+/**
+ * Normalize an explicit `applied_launch` object from a restore point while
+ * preserving `null` for legacy restore points that did not record metadata.
+ */
+export function normalizeRestoredAppliedLaunch(raw: unknown): AppliedLaunchMetadata | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const record = raw as { flags?: unknown; extraOverrides?: unknown };
+  return {
+    flags: normalizeStringList(record.flags),
+    extraOverrides: normalizeStringList(record.extraOverrides),
+  };
+}
+
+/**
+ * Read the plugin-applied Steam launch flags and extra DLL overrides persisted
+ * for a Steam appid, distinguishing a genuine absence (`{ ok: true }`) from a
+ * backend/pref read failure (`{ ok: false }`).
+ */
+export async function readAppliedLaunchMetadata(
+  appid: string | null,
+): Promise<ReadAppliedLaunchResult> {
+  if (!appid) return { ok: true, metadata: { flags: [], extraOverrides: [] } };
+  try {
+    const { value } = await getPref(appliedLaunchKey(appid), null);
+    const parsed = normalizeRestoredAppliedLaunch(value);
+    return { ok: true, metadata: parsed ?? { flags: [], extraOverrides: [] } };
+  } catch {
+    return { ok: false };
+  }
+}
+
+/**
+ * Best-effort read of the plugin-applied Steam launch metadata for display
+ * previews. Mutations must use `readAppliedLaunchMetadata` and fail closed.
+ */
+export async function getAppliedLaunchMetadata(appid: string | null): Promise<AppliedLaunchMetadata> {
+  const result = await readAppliedLaunchMetadata(appid);
+  return result.ok ? result.metadata : { flags: [], extraOverrides: [] };
+}
+
+export async function setAppliedLaunchMetadata(
+  appid: string | null,
+  flags: string[],
+  extraOverrides: string[],
+): Promise<void> {
+  if (!appid) return;
+  const cleanFlags = normalizeStringList(flags);
+  const cleanOverrides = normalizeStringList(extraOverrides);
+  try {
+    if (cleanFlags.length === 0 && cleanOverrides.length === 0) {
+      await setPref(appliedLaunchKey(appid), null);
+    } else {
+      await setPref(appliedLaunchKey(appid), {
+        flags: cleanFlags,
+        extraOverrides: cleanOverrides,
+      });
+    }
+  } catch {
+    /* best-effort tracking; never fail launch-option mutations */
+  }
+}
+
+export async function clearAppliedLaunchMetadata(appid: string | null): Promise<void> {
+  if (!appid) return;
+  try {
+    await setPref(appliedLaunchKey(appid), null);
+  } catch {
+    /* best-effort cleanup */
   }
 }

@@ -1,4 +1,4 @@
-import { PanelSection, PanelSectionRow, Tabs } from "@decky/ui";
+import { ButtonItem, PanelSection, PanelSectionRow, Tabs } from "@decky/ui";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getStatus, preparePayload } from "../api";
 import { resolveGame } from "../shortcuts";
@@ -9,12 +9,12 @@ import {
 } from "../navigation";
 import type { ManagerTarget } from "../navigation";
 import { useRunningGame } from "../hooks/useRunningGame";
+import { setBackendLocale, syncLanguagePrefFromBackend, useI18n } from "../i18n";
 import type { Game, PayloadStatus } from "../types";
 import { Notice } from "./Common";
 import { GameDetail } from "./GameDetail";
 import { GamesList } from "./GamesList";
 import { LibraryBrowser } from "./LibraryBrowser";
-import { NowPlaying } from "./NowPlaying";
 import { SettingsTab } from "./SettingsTab";
 
 interface Selection {
@@ -25,17 +25,16 @@ interface Selection {
 
 /** Full-screen page: library browser, or one game's detail view. */
 export function ManagerPage() {
+  const { t } = useI18n();
   const [status, setStatus] = useState<PayloadStatus | null>(null);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [preparing, setPreparing] = useState(false);
+  const [payloadError, setPayloadError] = useState<string | null>(null);
   const [resolving, setResolving] = useState(false);
   const [resolveError, setResolveError] = useState<string | null>(null);
   const runningGame = useRunningGame();
   const resolveSequence = useRef(0);
-  // Land on the running game when there is one; otherwise the games list is
-  // what the page is for. The current app is read synchronously on mount, so
-  // this is the real answer rather than a guess that corrects itself.
-  const [tab, setTab] = useState(() => (runningGame ? "now" : "games"));
+  const [tab, setTab] = useState("games");
 
   /**
    * Open at whichever game was asked for.
@@ -71,9 +70,9 @@ export function ManagerPage() {
           // target has moved: the folder was worked out from the shortcut's
           // executable and there was no executable there to work from.
           setResolveError(
-            "Neither Steam nor this game's shortcut points at a folder that exists, " +
-              "so it cannot be opened directly. Pick it from the library list, or add " +
-              "the folder it lives in as a custom library.",
+            t(
+              "Neither Steam nor this game's shortcut points at a folder that exists, so it cannot be opened directly. Pick it from the library list, or add the folder it lives in as a custom library.",
+            ),
           );
         }
       } catch (err) {
@@ -82,6 +81,21 @@ export function ManagerPage() {
         if (resolveSequence.current === request) setResolving(false);
       }
     })();
+  }, []);
+
+  const openGame = useCallback((game: Game) => {
+    setResolveError(null);
+    setSelection({ path: game.path, name: game.name, appid: game.appid ?? null });
+  }, []);
+
+  const handleBack = useCallback(() => {
+    setResolveError(null);
+    setSelection(null);
+  }, []);
+
+  const handleShowTab = useCallback((nextTab: string) => {
+    setResolveError(null);
+    setTab(nextTab);
   }, []);
 
   // The request the page was opened with, plus any that arrives while it stays
@@ -93,22 +107,38 @@ export function ManagerPage() {
     return subscribeManagerTarget(openTarget);
   }, [openTarget]);
 
-  useEffect(() => {
-    void (async () => {
-      try {
-        const value = await getStatus();
-        setStatus(value);
-        if (value.archive_present && !value.extracted && value.extractor) {
-          setPreparing(true);
-          await preparePayload(false);
-          setStatus(await getStatus());
-          setPreparing(false);
+  const loadAndPreparePayload = useCallback(async () => {
+    setPayloadError(null);
+    let unpacking = false;
+    try {
+      void syncLanguagePrefFromBackend();
+      const value = await getStatus();
+      setStatus(value);
+      setBackendLocale(value.locale);
+      if (value.archive_present && !value.extracted && value.extractor) {
+        unpacking = true;
+        setPreparing(true);
+        const result = await preparePayload(false);
+        if (!result?.ok) {
+          setPayloadError(
+            result?.error ?? t("Could not unpack the bundled OptiScaler archive."),
+          );
+          return;
         }
-      } catch {
-        /* surfaced by the banner below */
+        const refreshed = await getStatus();
+        setStatus(refreshed);
+        setBackendLocale(refreshed.locale);
       }
-    })();
-  }, []);
+    } catch (err) {
+      setPayloadError(String(err));
+    } finally {
+      if (unpacking) setPreparing(false);
+    }
+  }, [t]);
+
+  useEffect(() => {
+    void loadAndPreparePayload();
+  }, [loadAndPreparePayload]);
 
   const blocked =
     status && (!status.archive_present || (!status.extracted && !status.extractor));
@@ -128,17 +158,15 @@ export function ManagerPage() {
       }}
     >
       {blocked ? (
-        <PanelSection title="OptiScaler payload">
+        <PanelSection title={t("OptiScaler payload")}>
           <PanelSectionRow>
             {!status?.archive_present ? (
-              <Notice tone="error" title="Bundled release is missing">
-                The plugin was installed without its OptiScaler archive. Reinstall the plugin.
+              <Notice tone="error" title={t("Bundled release is missing")}>
+                {t("The plugin was installed without its OptiScaler archive. Reinstall the plugin.")}
               </Notice>
             ) : (
-              <Notice tone="error" title="No archive tool found">
-                Extracting OptiScaler needs one of <code>7z</code>, <code>7zz</code>,
-                <code> 7za</code>, <code>7zr</code> or <code>bsdtar</code>, none of which are on
-                this system.
+              <Notice tone="error" title={t("No archive tool found")}>
+                {t("Extracting OptiScaler needs one of 7z, 7zz, 7za, 7zr or bsdtar, none of which are on this system.")}
               </Notice>
             )}
           </PanelSectionRow>
@@ -148,7 +176,24 @@ export function ManagerPage() {
       {preparing ? (
         <PanelSection>
           <PanelSectionRow>
-            <Notice tone="info">Unpacking OptiScaler {status?.optiscaler_version}…</Notice>
+            <Notice tone="info">
+              {t("Unpacking OptiScaler {version}…", { version: status?.optiscaler_version ?? "" })}
+            </Notice>
+          </PanelSectionRow>
+        </PanelSection>
+      ) : null}
+
+      {payloadError && !preparing ? (
+        <PanelSection title={t("OptiScaler payload")}>
+          <PanelSectionRow>
+            <Notice tone="error" title={t("Could not unpack OptiScaler")}>
+              {payloadError}
+            </Notice>
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <ButtonItem layout="below" disabled={preparing} onClick={() => void loadAndPreparePayload()}>
+              {t("Retry")}
+            </ButtonItem>
           </PanelSectionRow>
         </PanelSection>
       ) : null}
@@ -156,7 +201,7 @@ export function ManagerPage() {
       {resolving ? (
         <PanelSection>
           <PanelSectionRow>
-            <Notice tone="info">Looking up this game's install folder…</Notice>
+            <Notice tone="info">{t("Looking up this game's install folder…")}</Notice>
           </PanelSectionRow>
         </PanelSection>
       ) : null}
@@ -164,7 +209,7 @@ export function ManagerPage() {
       {resolveError ? (
         <PanelSection>
           <PanelSectionRow>
-            <Notice tone="error" title="Could not open this game">
+            <Notice tone="error" title={t("Could not open this game")}>
               {resolveError}
             </Notice>
           </PanelSectionRow>
@@ -179,42 +224,27 @@ export function ManagerPage() {
           appid={selection.appid}
           status={status}
           runningGame={runningGame}
-          onBack={() => setSelection(null)}
+          onBack={handleBack}
         />
       ) : (
         <Tabs
           activeTab={tab}
-          onShowTab={setTab}
+          onShowTab={handleShowTab}
           tabs={[
             {
-              id: "now",
-              title: "Now Playing",
-              content: (
-                <NowPlaying
-                  key={runningGame?.appid ?? "none"}
-                  runningGame={runningGame}
-                  onOpenGame={(game: Game) =>
-                    setSelection({ path: game.path, name: game.name, appid: game.appid })
-                  }
-                  onBrowse={() => setTab("games")}
-                />
-              ),
-            },
-            {
               id: "games",
-              title: "Games",
+              title: t("Games"),
               content: (
                 <GamesList
-                  onOpenGame={(game: Game) =>
-                    setSelection({ path: game.path, name: game.name, appid: game.appid })
-                  }
+                  runningGame={runningGame}
+                  onOpenGame={openGame}
                 />
               ),
             },
-            { id: "libraries", title: "Libraries", content: <LibraryBrowser /> },
+            { id: "libraries", title: t("Libraries"), content: <LibraryBrowser /> },
             // Plugin-wide, so it belongs here rather than in the Quick Access
             // panel: nothing on it is about the game currently running.
-            { id: "settings", title: "Settings", content: <SettingsTab status={status} /> },
+            { id: "settings", title: t("Plugin Settings"), content: <SettingsTab status={status} /> },
           ]}
         />
       )}

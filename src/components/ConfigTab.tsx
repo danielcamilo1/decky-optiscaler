@@ -2,6 +2,7 @@ import { ButtonItem, PanelSection, PanelSectionRow } from "@decky/ui";
 import { useState } from "react";
 import { FEATURED, optionById, optionsInSection, sectionTitle } from "../config/tabs";
 import { countOverrides, optionId } from "../config/values";
+import { useI18n } from "../i18n";
 import type { ConfigValues, LiveContext, OptionMeta } from "../types";
 import { Notice } from "./Common";
 import { OptionControl } from "./OptionControl";
@@ -19,7 +20,8 @@ interface Props {
   values: ConfigValues;
   disabled?: boolean;
   onChange: (option: OptionMeta, value: string, context?: LiveContext | null) => void;
-  onResetSection: (section: string) => void;
+  onResetOptions?: (ids: string[]) => void;
+  onResetSection?: (section: string) => void;
   runtimeChoices?: Record<string, RuntimeEnumChoice[]>;
   runtimeGeneration?: string | null;
 }
@@ -31,26 +33,43 @@ export function ConfigTab({
   values,
   disabled,
   onChange,
+  onResetOptions,
   onResetSection,
   runtimeChoices,
   runtimeGeneration,
 }: Props) {
+  const { t } = useI18n();
   const featuredIds = FEATURED[tabId] ?? [];
   const featured = featuredIds
     .map((id) => optionById(id))
     .filter((option): option is OptionMeta => Boolean(option));
   const featuredSet = new Set(featured.map(optionId));
+  const featuredOverrides = countOverrides(values, featured);
+
+  const resetOptionList = (options: OptionMeta[], fallbackSection?: string) => {
+    if (onResetOptions) {
+      onResetOptions(options.map(optionId));
+      return;
+    }
+    if (fallbackSection) {
+      onResetSection?.(fallbackSection);
+      return;
+    }
+    for (const section of new Set(options.map((option) => option.section))) {
+      onResetSection?.(section);
+    }
+  };
 
   return (
     <>
       {blurb ? (
         <PanelSectionRow>
-          <Notice tone="info">{blurb}</Notice>
+          <Notice tone="info">{t(blurb)}</Notice>
         </PanelSectionRow>
       ) : null}
 
       {featured.length > 0 ? (
-        <PanelSection title="Main Settings">
+        <PanelSection title={t("Main Settings")}>
           {featured.map((option) => (
             <PanelSectionRow key={`${optionId(option)}:${runtimeGeneration ?? "static"}`}>
               <OptionControl
@@ -63,6 +82,17 @@ export function ConfigTab({
               />
             </PanelSectionRow>
           ))}
+          {featuredOverrides > 0 ? (
+            <PanelSectionRow>
+              <ButtonItem
+                layout="below"
+                disabled={disabled}
+                onClick={() => resetOptionList(featured)}
+              >
+                {t("Reset main settings to auto")}
+              </ButtonItem>
+            </PanelSectionRow>
+          ) : null}
         </PanelSection>
       ) : null}
 
@@ -74,7 +104,7 @@ export function ConfigTab({
           disabled={disabled}
           skip={featuredSet}
           onChange={onChange}
-          onResetSection={onResetSection}
+          onResetOptions={(options) => resetOptionList(options, section)}
           runtimeChoices={runtimeChoices}
           runtimeGeneration={runtimeGeneration}
           startOpen={featured.length === 0 && sections.length === 1}
@@ -90,7 +120,7 @@ function CollapsibleSection({
   disabled,
   skip,
   onChange,
-  onResetSection,
+  onResetOptions,
   runtimeChoices,
   runtimeGeneration,
   startOpen,
@@ -100,27 +130,35 @@ function CollapsibleSection({
   disabled?: boolean;
   skip: Set<string>;
   onChange: (option: OptionMeta, value: string, context?: LiveContext | null) => void;
-  onResetSection: (section: string) => void;
+  onResetOptions: (options: OptionMeta[]) => void;
   runtimeChoices?: Record<string, RuntimeEnumChoice[]>;
   runtimeGeneration?: string | null;
   startOpen?: boolean;
 }) {
+  const { t } = useI18n();
   const all = optionsInSection(section);
   const options = all.filter((option) => !skip.has(optionId(option)));
   const [open, setOpen] = useState(Boolean(startOpen));
 
   if (options.length === 0) return null;
 
-  const overrides = countOverrides(values, all);
-  const summary = `${options.length} option${options.length === 1 ? "" : "s"}${
-    overrides > 0 ? ` · ${overrides} changed` : ""
-  }`;
+  // Count and reset only the options visible in this section (excluding Main Settings).
+  const overrides = countOverrides(values, options);
+  const summary =
+    overrides > 0
+      ? t(options.length === 1 ? "{count} option · {overrides} changed" : "{count} options · {overrides} changed", {
+          count: options.length,
+          overrides,
+        })
+      : t(options.length === 1 ? "{count} option" : "{count} options", {
+          count: options.length,
+        });
 
   return (
     <PanelSection title={sectionTitle(section)}>
       <PanelSectionRow>
         <ButtonItem layout="below" onClick={() => setOpen((value) => !value)}>
-          {open ? `Hide ${summary}` : `Show ${summary}`}
+          {open ? t("Hide {summary}", { summary }) : t("Show {summary}", { summary })}
         </ButtonItem>
       </PanelSectionRow>
       {open ? (
@@ -142,9 +180,9 @@ function CollapsibleSection({
               <ButtonItem
                 layout="below"
                 disabled={disabled}
-                onClick={() => onResetSection(section)}
+                onClick={() => onResetOptions(options)}
               >
-                Reset this section to auto
+                {t("Reset this section to auto")}
               </ButtonItem>
             </PanelSectionRow>
           ) : null}

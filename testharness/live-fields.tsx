@@ -26,6 +26,10 @@ import { liveFfxVersionChoices, liveStatusMessage } from "../src/liveControl";
 import { beginTargetFlush, finishTargetFlush, forgetWrites, getTargetConfigQueue, waitForTargetWrites } from "../src/config/writeRecord";
 import { getTargetLiveRecord, setTargetLiveRecord } from "../src/config/liveRecord";
 import { useConfig } from "../src/hooks/useConfig";
+import type { GpuInfo, LiveApi, LiveApplyResult, LiveStatus } from "../src/types";
+import { installVirtualClock } from "./virtual-clock";
+
+const clock = installVirtualClock();
 
 // ---- a backend that keeps state -------------------------------------------
 const ini: Record<string, Record<string, string>> = {};
@@ -61,12 +65,13 @@ function accepts(section: string, key: string, value: string) {
 /** The two device stories this harness needs: the Deck the INT8 route is for,
  *  and a card OptiScaler's own GPU checks already cover. Neither is fixed
  *  inside a test — the FSR version section plays both in turn. */
-const DECK_GPU = {
-  name: "Van Gogh (Steam Deck)", vendor: "amd", generation: "RDNA2",
-  fsr4: "experimental" as const,
+const DECK_GPU: GpuInfo = {
+  names: ["Van Gogh (Steam Deck)"], name: "Van Gogh (Steam Deck)", gfx: "gfx1033",
+  vendor: "amd", generation: "RDNA2", fsr4: "experimental", is_rdna2_apu: true,
 };
-const RDNA4_GPU = {
-  name: "Radeon RX 9070 XT", vendor: "amd", generation: "RDNA4", fsr4: "native" as const,
+const RDNA4_GPU: GpuInfo = {
+  names: ["Radeon RX 9070 XT"], name: "Radeon RX 9070 XT", gfx: "gfx1201",
+  vendor: "amd", generation: "RDNA4", fsr4: "native", is_rdna2_apu: false,
 };
 
 const detail = {
@@ -153,9 +158,13 @@ const LIVE_CAPABILITIES = Object.fromEntries([
 let liveSession = "test-session";
 let liveSequence = "1";
 let liveAck: string = "config_request_accepted";
-let liveActiveApi: "dx11" | "dx12" | "vulkan" = "dx12";
+let liveActiveApi: LiveApi = "dx12";
 let liveGeneration = "generation-a";
-let requestContext = { session: liveSession, active_api: liveActiveApi as string, capability_generation: liveGeneration };
+let requestContext: { session: string; active_api: LiveApi; capability_generation: string } = {
+  session: liveSession,
+  active_api: liveActiveApi,
+  capability_generation: liveGeneration,
+};
 const captureRequest = () => { requestContext = { session: liveSession, active_api: liveActiveApi, capability_generation: liveGeneration }; };
 let liveStatusState = "ready";
 let liveStatusReady = true;
@@ -178,7 +187,7 @@ let liveTelemetryReady = true;
 let liveTelemetrySource: "state_present_counter" | "core_intervals" | "unknown" = "state_present_counter";
 let livePresentPathFps: number | null = null;
 
-function makeLiveStatus(target: string) {
+function makeLiveStatus(target: string): LiveStatus {
   return {
     supported: liveStatusSupported,
     can_install: false, legacy_running: false,
@@ -196,11 +205,6 @@ function makeLiveStatus(target: string) {
     can_override_sharpness: true,
     can_switch_upscaler: true, can_change_fg: true, can_enable_fg: liveCanEnableFg,
     can_change_ffx_upscaler: true,
-    can_change_fg_version: LIVE_CAPABILITIES.change_fg_index,
-    can_change_xefg_count: LIVE_CAPABILITIES.change_xefg_count,
-    can_change_opti_fg: LIVE_CAPABILITIES.can_change_opti_fg,
-    can_change_hud_fix: LIVE_CAPABILITIES.can_change_hud_fix,
-    can_change_fsr_debug_view: LIVE_CAPABILITIES.fsr_debug_view,
     age: 1.0,
     live_keys: LIVE_FIELD_IDS,
     fps: liveCountedFps, base_fps: liveBaseFps, total_fps: liveTotalFps,
@@ -281,8 +285,13 @@ Object.assign(fixtures, {
   set_fsr4_build: (_dir: string, build: string) => {
     if (fsr4SetupFails) return { ok: false, error: "Close the game before changing the FSR 4 build." };
     installedFsr4Build = build;
-    setIni({ Upscalers: { Dx12Upscaler: "fsr31" },
-      FSR: { Fsr4ForceEnableInt8: "1", Fsr4Update: build === "4.1.1b" ? "auto" : "true", UpscalerIndex: "0" } });
+    ini.Upscalers = { ...(ini.Upscalers ?? {}), Dx12Upscaler: "fsr31" };
+    ini.FSR = {
+      ...(ini.FSR ?? {}),
+      Fsr4ForceEnableInt8: "1",
+      Fsr4Update: build === "4.1.1b" ? "auto" : "true",
+      UpscalerIndex: "0",
+    };
     return { ok: true };
   },
   read_config: () => ({
@@ -321,9 +330,14 @@ Object.assign(fixtures, {
 // ---- harness ---------------------------------------------------------------
 const errors: string[] = [];
 const originalError = console.error;
+const originalWarn = console.warn;
 console.error = (...args: any[]) => {
   errors.push(args.map(String).join(" "));
   originalError(...args);
+};
+console.warn = (...args: any[]) => {
+  errors.push(args.map(String).join(" "));
+  originalWarn(...args);
 };
 
 let failures = 0;
@@ -345,11 +359,7 @@ check("awaiting OptiScaler config has its own state",
   "awaiting-config");
 
 async function settle(ms = 5) {
-  for (let i = 0; i < 8; i++) {
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, ms));
-    });
-  }
+  await clock.advance(ms * 8);
 }
 
 /**
@@ -365,19 +375,23 @@ function setIni(entries: Record<string, Record<string, string>>) {
   for (const [section, keys] of Object.entries(entries)) {
     ini[section] = { ...(ini[section] ?? {}), ...keys };
   }
-  forgetWrites(detail.install.path);
-  const queue = getTargetConfigQueue(detail.install.path);
-  finishTargetFlush(queue, beginTargetFlush(queue, queue.revision, true));
+  act(() => {
+    forgetWrites(detail.install.path);
+    const queue = getTargetConfigQueue(detail.install.path);
+    finishTargetFlush(queue, beginTargetFlush(queue, queue.revision, true));
+  });
 }
 
 /** The same trick for the device: which GPU is under the game decides whether
  *  an FSR 4 version is reachable through OptiScaler's own checks or only
  *  through the INT8 override, and the fixture is one object either way. */
-function setGpu(gpu: typeof detail.gpu) {
+function setGpu(gpu: GpuInfo) {
   detail.gpu = gpu;
-  forgetWrites(detail.install.path);
-  const queue = getTargetConfigQueue(detail.install.path);
-  finishTargetFlush(queue, beginTargetFlush(queue, queue.revision, true));
+  act(() => {
+    forgetWrites(detail.install.path);
+    const queue = getTargetConfigQueue(detail.install.path);
+    finishTargetFlush(queue, beginTargetFlush(queue, queue.revision, true));
+  });
 }
 
 const all = (node: Element, selector: string) => Array.from(node.querySelectorAll(selector));
@@ -433,26 +447,28 @@ const tile = (host: Element, label: string) => {
   liveStatusState = "ready";
   liveConfirmedKeys = ["FrameGen.Enabled"];
   liveFailedKeys = [];
-  setTargetLiveRecord(detail.install.path, {
-    ...getTargetLiveRecord(detail.install.path),
-    restartKeys: [],
-    livePending: [],
-    live: {
-      sent: true, directory_generation: "1", confirmed: true, ack: "config_request_accepted", session: liveSession,
-      seq: liveSequence, applied: ["FrameGen.Enabled"], accepted_keys: ["FrameGen.Enabled"],
-      sent_keys: ["FrameGen.Enabled"],
-      context: {
-        target: detail.install.path,
-        session: liveSession,
-        active_api: liveActiveApi,
-        capability_generation: liveGeneration,
+  await act(async () => {
+    setTargetLiveRecord(detail.install.path, {
+      ...getTargetLiveRecord(detail.install.path),
+      restartKeys: [],
+      livePending: [],
+      live: {
+        sent: true, directory_generation: "1", confirmed: true, ack: "config_request_accepted", session: liveSession,
+        seq: liveSequence, accepted_keys: ["FrameGen.Enabled"],
+        sent_keys: ["FrameGen.Enabled"],
+        context: {
+          target: detail.install.path,
+          session: liveSession,
+          active_api: liveActiveApi,
+          capability_generation: liveGeneration,
+        },
+        failed_keys: [], deferred: [],
       },
-      failed_keys: [], deferred: [],
-    },
+    });
   });
   await settle();
   check("the previous confirmed success is visible before another save",
-    host.textContent?.includes("Sent to OptiScaler"), true);
+    host.textContent?.includes("Applied to running game"), true);
   const regularWriter = fixtures.write_config;
   let finishSaving: () => void = () => {};
   fixtures.write_config = async (dir: string, changes: any[]) => {
@@ -486,7 +502,7 @@ const tile = (host: Element, label: string) => {
   await act(async () => { (all(frameToggle, "[data-toggle]")[0] as HTMLElement).click(); });
   await settle(10);
   check("saving status replaces the old applied banner",
-    host.textContent?.includes("Saving settings") && !host.textContent?.includes("Sent to OptiScaler"), true);
+    host.textContent?.includes("Saving settings") && !host.textContent?.includes("Applied to running game"), true);
   await act(async () => {
     finishSaving();
     await new Promise((resolve) => setTimeout(resolve, 5));
@@ -497,22 +513,23 @@ const tile = (host: Element, label: string) => {
   liveAck = "config_request_accepted";
   liveStatusState = "ready";
   liveConfirmedKeys = [];
-  setTargetLiveRecord(detail.install.path, {
-    restartKeys: [], livePending: [], live: null,
-    persistedValues: {}, persistedRevisions: {},
+  await act(async () => {
+    setTargetLiveRecord(detail.install.path, {
+      restartKeys: [], livePending: [], live: null,
+      persistedValues: {}, persistedRevisions: {},
+    });
   });
   await settle();
 
   const outcomeHost = document.createElement("div");
   document.body.appendChild(outcomeHost);
   const outcomeRoot = createRoot(outcomeHost);
-  const lastConfirmed = {
+  const lastConfirmed: LiveApplyResult = {
     sent: true, directory_generation: "1",
     confirmed: true,
     ack: "config_request_accepted",
     session: liveSession,
     seq: liveSequence,
-    applied: ["FrameGen.Enabled"],
     accepted_keys: ["FrameGen.Enabled"],
     sent_keys: ["FrameGen.Enabled"],
     context: {
@@ -523,7 +540,7 @@ const tile = (host: Element, label: string) => {
     },
     deferred: [],
     failed_keys: [],
-  } as const;
+  };
   await act(async () => outcomeRoot.render(
     <LiveOutcome
       result={lastConfirmed}
@@ -531,13 +548,13 @@ const tile = (host: Element, label: string) => {
     />
   ));
   check("a failed status refresh never turns the previous ACK into a live success",
-    outcomeHost.textContent?.includes("Sent to OptiScaler"), false);
+    outcomeHost.textContent?.includes("Applied to running game"), false);
   check("the missing status is named", outcomeHost.textContent?.includes("disconnected"), true);
   await act(async () => outcomeRoot.render(
     <LiveOutcome result={lastConfirmed} status={makeLiveStatus(detail.install.path)} saving />
   ));
   check("saving replaces a previous success in the shared outcome",
-    outcomeHost.textContent?.includes("Saving settings") && !outcomeHost.textContent?.includes("Sent to OptiScaler"), true);
+    outcomeHost.textContent?.includes("Saving settings") && !outcomeHost.textContent?.includes("Applied to running game"), true);
   await act(async () => outcomeRoot.render(
     <LiveOutcome result={lastConfirmed} status={{
       ...makeLiveStatus(detail.install.path), directory_generation: "2",
@@ -545,8 +562,8 @@ const tile = (host: Element, label: string) => {
     }} />
   ));
   check("reauthorization cannot revive the prior directory receipt",
-    outcomeHost.textContent?.includes("authorization changed") &&
-    !outcomeHost.textContent?.includes("Sent to OptiScaler"), true);
+    outcomeHost.textContent?.includes("live session changed") &&
+    !outcomeHost.textContent?.includes("Applied to running game"), true);
   await act(async () => outcomeRoot.unmount());
   outcomeHost.remove();
 
@@ -662,26 +679,58 @@ const tile = (host: Element, label: string) => {
   check("a rejected setup does not claim the patched build", selected(host5, "Override upscaler with"), "manual-int8");
   const fgBeforeSetup = JSON.stringify(ini.FrameGen);
   const previousLiveSession = liveSession;
-  setTargetLiveRecord(detail.install.path, {
-    ...getTargetLiveRecord(detail.install.path),
-    live: {
-      sent: true, directory_generation: "1", confirmed: false, ack: "timeout", session: "previous-int8-session",
-      seq: "77", applied: [], accepted_keys: [], failed_keys: [], deferred: [],
-    },
+  await act(async () => root5.unmount());
+  host5.remove();
+  // [UI-06]: Switching into community FSR 4.1.2 Lite is blocked while running,
+  // and succeeds when the game is stopped (clearing any stale prior-session receipt).
+  await act(async () => {
+    setTargetLiveRecord(detail.install.path, {
+      ...getTargetLiveRecord(detail.install.path),
+      live: {
+        sent: true, directory_generation: "1", confirmed: false, ack: "timeout", session: "previous-int8-session",
+        seq: "77", accepted_keys: [], failed_keys: [], deferred: [],
+      },
+    });
   });
   liveSession = "current-int8-session";
   fsr4SetupFails = false;
+  function StoppedInt8View() {
+    const cfg = useConfig(detail.install.path, true, undefined, "stopped-int8", {
+      gamePath: detail.path,
+      appid: "1091500",
+    });
+    return (
+      <>
+        <LiveOutcome result={cfg.live} status={makeLiveStatus(detail.install.path)} />
+        <BasicPanel
+          values={cfg.values}
+          running={false}
+          gpu={detail.gpu}
+          ffx={detail.install.fsr4.ffx}
+          fsr4Build={cfg.fsr4Build}
+          onEnableFsr4={cfg.enableFsr4}
+          onApply={cfg.setOptions}
+        />
+      </>
+    );
+  }
+  const host5Stopped = document.createElement("div");
+  document.body.appendChild(host5Stopped);
+  const root5Stopped = createRoot(host5Stopped);
+  await act(async () => { root5Stopped.render(<StoppedInt8View />); });
+  await settle();
   await act(async () => {
-    (all(control(host5, "Override upscaler with"), '[data-opt-value="fsr4-int8"]')[0] as HTMLElement).click();
+    (all(control(host5Stopped, "Override upscaler with"), '[data-opt-value="fsr4-int8"]')[0] as HTMLElement).click();
   });
   await settle(200);
-  check("successful setup selects the patched preset", selected(host5, "Override upscaler with"), "fsr4-int8");
+  check("successful setup selects the patched preset", selected(host5Stopped, "Override upscaler with"), "fsr4-int8");
   check("restart-only INT8 setup clears a stale live-session outcome",
-    host5.textContent?.includes("previous game session"), false);
+    host5Stopped.textContent?.includes("previous game session"), false);
   check("setup leaves frame generation alone", JSON.stringify(ini.FrameGen), fgBeforeSetup);
-  check("an installed INT8 build does not keep a next-launch notice", host5.textContent!.includes("ready for the next launch"), false);
+  check("an installed INT8 build does not keep a next-launch notice", host5Stopped.textContent!.includes("ready for the next launch"), false);
 
-  await act(async () => root5.unmount());
+  await act(async () => root5Stopped.unmount());
+  host5Stopped.remove();
   liveSession = previousLiveSession;
   liveBackend = "fsr31";
   setIni({ FSR: { Fsr4ForceEnableInt8: "0", Fsr4Update: "false" } });
@@ -917,9 +966,11 @@ const tile = (host: Element, label: string) => {
     FSR: { Fsr4Update: "false" },
     FrameGen: { Enabled: "true", FGInput: "fsrfg", FGOutput: "fsrfg" },
   });
-  setTargetLiveRecord(detail.install.path, {
-    restartKeys: [], livePending: [], live: null,
-    persistedValues: {}, persistedRevisions: {},
+  await act(async () => {
+    setTargetLiveRecord(detail.install.path, {
+      restartKeys: [], livePending: [], live: null,
+      persistedValues: {}, persistedRevisions: {},
+    });
   });
   liveAck = "config_request_accepted";
   liveStatusState = "ready";
@@ -935,7 +986,7 @@ const tile = (host: Element, label: string) => {
       ini[c.section][c.key] = String(c.value);
     }
     const sent = liveWriteResult(_dir, changes);
-    const keys = sent.sent_keys ?? [];
+    const keys: string[] = sent.sent_keys ?? [];
     delayedSequence = sent.seq ?? null;
     liveAck = "timeout";
     liveStatusState = "timeout";
@@ -1105,7 +1156,7 @@ const tile = (host: Element, label: string) => {
   });
   panel = await open();
   check("fresh core intervals show their present-path rate",
-    tile(panel.node, "present path fps"), "40.3");
+    tile(panel.node, "Est. FPS"), "40.3");
   check("interval-only data does not invent an FG base-rate tile",
     tile(panel.node, "base fps"), "null");
   check("interval-only data does not invent an FG total-rate tile",
@@ -1279,7 +1330,7 @@ const tile = (host: Element, label: string) => {
   setIni({ FSR: { UpscalerIndex: "0" } });
   const promptly = fixtures.get_live_status;
   fixtures.get_live_status = async (...args: any[]) => {
-    await new Promise((r) => setTimeout(r, 60));
+    await new Promise((r) => window.setTimeout(r, 60));
     return (promptly as any)(...args);
   };
   panel = await open();
@@ -1522,7 +1573,7 @@ const tile = (host: Element, label: string) => {
   check("the failed save is visible", contractPanel.node.textContent?.includes("disk is read-only"), true);
   check("the failed value stays off disk", ini.FrameGen.Enabled, "true");
   check("the write RPC ran once and native send did not run", `${contractWriteCalls}/${contractLiveSends}`, "1/0");
-  check("a failed save is not described as applied", contractPanel.node.textContent?.includes("Sent to OptiScaler"), false);
+  check("a failed save is not described as applied", contractPanel.node.textContent?.includes("Applied to running game"), false);
   await act(async () => contractPanel.root.unmount());
 
   console.log("--- an unsupported FG enable stays saved while safe OFF remains live ---");
@@ -1596,8 +1647,8 @@ const tile = (host: Element, label: string) => {
   contractPanel = await open();
   await clickToggle(contractPanel.node);
   const pendingSeq = liveSequence;
-  check("a send without terminal ACK remains pending", contractPanel.node.textContent?.includes("Saved · waiting for OptiScaler"), true);
-  check("pending live work does not claim success", contractPanel.node.textContent?.includes("Sent to OptiScaler"), false);
+  check("a send without terminal ACK remains pending", contractPanel.node.textContent?.includes("Saved · waiting for game"), true);
+  check("pending live work does not claim success", contractPanel.node.textContent?.includes("Applied to running game"), false);
   check("pending live work does not ask for restart yet", restartButtonVisible(contractPanel.node), false);
   await act(async () => contractPanel.root.unmount());
 
@@ -1608,22 +1659,28 @@ const tile = (host: Element, label: string) => {
   const probeHost = document.createElement("div");
   document.body.appendChild(probeHost);
   const probeRoot = createRoot(probeHost);
-  let probeActions: {
-    authoritativeReload: () => Promise<void>;
-    reconcileLiveStatus: (status: any, epoch: number | null) => void;
-  } | null = null;
-  const publishProbeActions = (actions: NonNullable<typeof probeActions>) => { probeActions = actions; };
+  const probeActionsRef: {
+    current: {
+      authoritativeReload: () => Promise<void>;
+      reconcileLiveStatus: (status: any, epoch: number | null) => void;
+    } | null;
+  } = { current: null };
+  const publishProbeActions = (actions: NonNullable<typeof probeActionsRef.current>) => {
+    probeActionsRef.current = actions;
+  };
   await act(async () => probeRoot.render(
     <ConfigProbe target={pendingTarget} onReady={publishProbeActions} />
   ));
   await settle();
-  probeActions?.reconcileLiveStatus({
-    ...makeLiveStatus(pendingTarget),
-    session: "different-cached-session",
-    seq: "1",
-    ack: "config_request_accepted",
-    accepted_keys: ["FrameGen.Enabled"],
-  }, cachedEntry?.statusEpoch ?? null);
+  await act(async () => {
+    probeActionsRef.current?.reconcileLiveStatus({
+      ...makeLiveStatus(pendingTarget),
+      session: "different-cached-session",
+      seq: "1",
+      ack: "config_request_accepted",
+      accepted_keys: ["FrameGen.Enabled"],
+    }, cachedEntry?.statusEpoch ?? null);
+  });
   check("another panel's cached session cannot retire a newer pending write",
     getTargetLiveRecord(pendingTarget).livePending.some((entry) => entry.seq === pendingSeq), true);
   await act(async () => probeRoot.unmount());
@@ -1635,7 +1692,7 @@ const tile = (host: Element, label: string) => {
   liveConfirmedKeys = ["FrameGen.Enabled"];
   contractPanel = await open();
   await settle();
-  check("the same session and sequence late ACK clears pending", contractPanel.node.textContent?.includes("Sent to OptiScaler"), true);
+  check("the same session and sequence late ACK clears pending", contractPanel.node.textContent?.includes("Applied to running game"), true);
   check("the confirmed late ACK leaves no restart button", restartButtonVisible(contractPanel.node), false);
   await act(async () => contractPanel.root.unmount());
 
@@ -1647,14 +1704,14 @@ const tile = (host: Element, label: string) => {
   await clickToggle(contractPanel.node);
   const timeoutSeq = liveSequence;
   check("timeout is shown as unresolved, not rejected",
-    contractPanel.node.textContent?.includes("Saved · live request unconfirmed"), true);
+    contractPanel.node.textContent?.includes("Saved · live change unconfirmed"), true);
   check("a timeout with empty failure keys does not demand restart",
     restartButtonVisible(contractPanel.node), false);
   await act(async () => contractPanel.root.unmount());
 
   contractPanel = await open();
   check("reopening keeps the same timeout pending",
-    contractPanel.node.textContent?.includes("Saved · live request unconfirmed"), true);
+    contractPanel.node.textContent?.includes("Saved · live change unconfirmed"), true);
   check("reopened timeout still has no restart button",
     restartButtonVisible(contractPanel.node), false);
   await act(async () => contractPanel.root.unmount());
@@ -1667,7 +1724,7 @@ const tile = (host: Element, label: string) => {
   contractPanel = await open();
   await settle();
   check("only the matching session and sequence late ACK confirms the saved change",
-    contractPanel.node.textContent?.includes("Sent to OptiScaler"), true);
+    contractPanel.node.textContent?.includes("Applied to running game"), true);
   check("that exact late ACK clears the restart requirement",
     restartButtonVisible(contractPanel.node), false);
   await act(async () => contractPanel.root.unmount());
@@ -1678,7 +1735,7 @@ const tile = (host: Element, label: string) => {
   contractMode = "config_request_accepted";
   const originalSwitch = fixtures.switch_upscaler;
   let finishBackendTimeout: (() => void) | null = null;
-  fixtures.switch_upscaler = (dir: string, code: string, context: any) => new Promise((resolve) => {
+  fixtures.switch_upscaler = (_dir: string, code: string, context: any) => new Promise((resolve) => {
     contractLiveSends += 1;
     const seq = String(BigInt(liveSequence) + 1n);
     finishBackendTimeout = () => {
@@ -1714,7 +1771,7 @@ const tile = (host: Element, label: string) => {
   check("the backend choice is locked during its live request",
     busyPreset.getAttribute("data-disabled"), "true");
   check("the switch button cannot be sent twice while the first request is pending",
-    switchNow.getAttribute("data-disabled"), "true");
+    switchNow?.getAttribute("data-disabled"), "true");
   await act(async () => {
     (all(busyPreset, '[data-opt-value="fsr4"]')[0] as HTMLElement).click();
     (switchNow as HTMLElement).click();
@@ -1807,7 +1864,7 @@ const tile = (host: Element, label: string) => {
     restartButtonVisible(contractPanel.node), false);
   check("the accepted request retires without claiming the current runtime changed",
     getTargetLiveRecord(generationTarget).livePending.length === 0 &&
-      contractPanel.node.textContent?.includes("Sent to OptiScaler"), true);
+      contractPanel.node.textContent?.includes("Applied to running game"), true);
   await act(async () => contractPanel.root.unmount());
 
   console.log("--- a changed value is not cleared by an older late ACK ---");
@@ -1821,7 +1878,7 @@ const tile = (host: Element, label: string) => {
   await act(async () => contractPanel.root.unmount());
 
   contractPanel = await open();
-  check("the original request is still pending before the next edit", contractPanel.node.textContent?.includes("Saved · waiting for OptiScaler"), true);
+  check("the original request is still pending before the next edit", contractPanel.node.textContent?.includes("Saved · waiting for game"), true);
   await clickToggle(contractPanel.node);
   check("a newer edit during the locked mailbox is not sent", contractLiveSends, 1);
   await act(async () => contractPanel.root.unmount());
@@ -1835,7 +1892,7 @@ const tile = (host: Element, label: string) => {
   check("the older ACK cannot clear the changed value's restart requirement", restartButtonVisible(contractPanel.node), true);
   check("the newer saved value remains authoritative",
     all(control(contractPanel.node, "Frame generation"), "[data-toggle]")[0]?.getAttribute("data-checked"), "true");
-  check("the older ACK is not shown as the current applied result", contractPanel.node.textContent?.includes("Sent to OptiScaler"), false);
+  check("the older ACK is not shown as the current applied result", contractPanel.node.textContent?.includes("Applied to running game"), false);
   await act(async () => contractPanel.root.unmount());
 
   console.log("--- two panels merge the newest target revision before a late ACK ---");
@@ -1995,7 +2052,7 @@ const tile = (host: Element, label: string) => {
   check("a reordered FFX list prevents live send", contractLiveSends, 0);
   check("the selected index is still saved", ini.FSR.FGIndex, "2");
   check("the changed generation is explained without claiming success", contractPanel.node.textContent?.includes("FFX list changed"), true);
-  check("a stale list selection is not labeled applied", contractPanel.node.textContent?.includes("Sent to OptiScaler"), false);
+  check("a stale list selection is not labeled applied", contractPanel.node.textContent?.includes("Applied to running game"), false);
   await act(async () => contractPanel.root.unmount());
 
   console.log("--- an API change invalidates a pending backend pick ---");
@@ -2012,7 +2069,7 @@ const tile = (host: Element, label: string) => {
     targetDir: apiTarget,
     ffx: detail.install.fsr4.ffx,
     compact: true,
-    onApply: (changes: any[]) => {
+    onApply: async (changes: any[]) => {
       const revision = ++getTargetConfigQueue(apiTarget).revision;
       const record = getTargetLiveRecord(apiTarget);
       const revisions: Record<string, number> = {};
@@ -2042,7 +2099,7 @@ const tile = (host: Element, label: string) => {
   await act(async () => { apiRoot.render(<BasicPanel {...apiProps} live={changedApiStatus} />); });
   await settle();
   check("the backend action disappears after the API change", all(apiHost, '[data-mock="ButtonItem"]').some((node) => node.textContent?.includes("Switch now")), false);
-  check("the old API selection asks for a fresh choice", apiHost.textContent?.includes("active API, session, or FFX version list changed after selection"), true);
+  check("the old API selection asks for a fresh choice", apiHost.textContent?.includes("Graphics state changed — pick this upscaler again to switch live"), true);
   check("the stale choice does not issue a switch RPC", invocations.filter((call) => call.name === "switch_upscaler").length, switchesBefore);
   await act(async () => apiRoot.unmount());
   apiHost.remove();
@@ -2060,7 +2117,7 @@ const tile = (host: Element, label: string) => {
     targetDir: lateTarget,
     ffx: detail.install.fsr4.ffx,
     compact: true,
-    onApply: (changes: any[]) => {
+    onApply: async (changes: any[]) => {
       const revision = ++getTargetConfigQueue(lateTarget).revision;
       const record = getTargetLiveRecord(lateTarget);
       const revisions: Record<string, number> = {};
@@ -2085,9 +2142,9 @@ const tile = (host: Element, label: string) => {
   ));
   await settle();
   check("the first ready status recognizes the already-saved active backend",
-    lateHost.textContent?.includes("Saving this backend value before offering a live switch"), false);
+    lateHost.textContent?.includes("Saving choice before offering live switch"), false);
   check("a pick made without live authorization asks for a fresh selection",
-    lateHost.textContent?.includes("choose again when live status is ready"), true);
+    lateHost.textContent?.includes("pick again when live control is ready"), true);
   check("a late status does not silently authorize the old selection",
     all(lateHost, '[data-mock="ButtonItem"]').some((node) => node.textContent?.includes("Switch now")), false);
   await act(async () => lateRoot.unmount());
@@ -2119,17 +2176,21 @@ const tile = (host: Element, label: string) => {
   check("4.1.1b is not labeled as the new Lite preset", selected(legacyHost, "Override upscaler with"), "manual-int8");
   check("the older installed build is named", legacyHost.textContent?.includes("FSR 4.1.1b (legacy)"), true);
   await act(async () => legacyRoot.render(<BasicPanel values={legacyValues}
-    fsr4Build="4.1.2-lite-exact-20261105" onApply={() => {}} />));
+    fsr4Build="4.1.2-lite-exact-20261122" onApply={() => {}} />));
   check("new DLL without the complete preset stays manual", selected(legacyHost, "Override upscaler with"), "manual-int8");
   const liteValues = { ...legacyValues, FSR: { ...legacyValues.FSR, Fsr4Update: "true" } };
   await act(async () => legacyRoot.render(<BasicPanel values={liteValues}
     fsr4Build="4.1.2-lite-exact-20261105" onApply={() => {}} />));
+  check("prior 2026-11-05 Lite build stays distinct so user can upgrade to 2026-11-22", selected(legacyHost, "Override upscaler with"), "manual-int8");
+  check("prior 2026-11-05 Lite build is labeled clearly", legacyHost.textContent?.includes("FSR 4.1.2 Lite (older)"), true);
+  await act(async () => legacyRoot.render(<BasicPanel values={liteValues}
+    fsr4Build="4.1.2-lite-exact-20261122" onApply={() => {}} />));
   check("an installed Lite build remains visible while hardware is unknown", selected(legacyHost, "Override upscaler with"), "fsr4-int8");
   await act(async () => legacyRoot.unmount()); legacyHost.remove();
 
   console.log("--- the installed Lite build offers direct legacy recovery ---");
   const priorInfo = fixtures.get_fsr4_info; const priorVerify = fixtures.verify_install;
-  installedFsr4Build = "4.1.2-lite-exact-20261105";
+  installedFsr4Build = "4.1.2-lite-exact-20261122";
   fixtures.get_fsr4_info = () => ({ status: { build: { known: true,
     id: installedFsr4Build, label: installedFsr4Build } } });
   fixtures.verify_install = { ok: true, complete: true, problems: [],
@@ -2149,11 +2210,11 @@ const tile = (host: Element, label: string) => {
   await act(async () => fallbackRoot.unmount()); fallbackHost.remove();
   fixtures.get_fsr4_info = priorInfo; fixtures.verify_install = priorVerify;
 
-  const real = errors.filter((e) => !e.includes("not wrapped in act"));
-  console.log(`\nreal React errors: ${real.length}`);
-  for (const e of real) console.log(`  ${e}`);
+  console.log(`\nreal React errors: ${errors.length}`);
+  for (const e of errors) console.log(`  ${e}`);
   console.log(failures === 0 ? "\nall checks passed" : `\n${failures} check(s) failed`);
   // The panel polls; without this the intervals keep node alive for ever.
   await act(async () => root.unmount());
-  process.exit(failures > 0 || real.length > 0 ? 1 : 0);
+  clock.restore();
+  process.exit(failures > 0 || errors.length > 0 ? 1 : 0);
 })();

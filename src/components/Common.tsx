@@ -1,13 +1,29 @@
 import { Field, Focusable, PanelSectionRow } from "@decky/ui";
 import type { ReactNode } from "react";
 
-type NoticeTone = "info" | "warn" | "error" | "success";
+export type NoticeTone = "info" | "warn" | "error" | "success";
+export type PillTone = "neutral" | NoticeTone;
 
-const TONE_COLORS: Record<NoticeTone, string> = {
+export const TONE_COLORS: Record<NoticeTone, string> = {
   info: "#1a9fff",
   warn: "#e8a33d",
   error: "#e05c5c",
   success: "#5ba85b",
+};
+
+export const TONE_BACKGROUNDS: Record<NoticeTone, string> = {
+  info: "rgba(26,159,255,0.10)",
+  warn: "rgba(232,163,61,0.12)",
+  error: "rgba(224,92,92,0.12)",
+  success: "rgba(91,168,91,0.12)",
+};
+
+export const PILL_TONES: Record<PillTone, { background: string; color?: string }> = {
+  neutral: { background: "rgba(255,255,255,0.12)" },
+  info: { background: "#3a6ea5" },
+  warn: { background: "#5a4a20" },
+  error: { background: "#6b2f2f" },
+  success: { background: "#2f6b3f" },
 };
 
 export function Notice({
@@ -58,7 +74,16 @@ export function KeyValue({ label, value }: { label: ReactNode; value: ReactNode 
   );
 }
 
-export function Pill({ children, color }: { children: ReactNode; color?: string }) {
+export function Pill({
+  children,
+  color,
+  tone,
+}: {
+  children: ReactNode;
+  color?: string;
+  tone?: PillTone;
+}) {
+  const styleTone = tone ? PILL_TONES[tone] : undefined;
   return (
     <span
       style={{
@@ -67,7 +92,8 @@ export function Pill({ children, color }: { children: ReactNode; color?: string 
         borderRadius: "9px",
         fontSize: "11px",
         fontWeight: 600,
-        background: color ?? "rgba(255,255,255,0.12)",
+        background: color ?? styleTone?.background ?? PILL_TONES.neutral.background,
+        color: styleTone?.color,
         marginRight: "5px",
         whiteSpace: "nowrap",
       }}

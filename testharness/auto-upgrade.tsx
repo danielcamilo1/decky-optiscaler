@@ -1,4 +1,3 @@
-import React from "react";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { fixtures, invocations } from "@decky/api";
@@ -8,12 +7,16 @@ import { GameDetail } from "../src/components/GameDetail";
 const failures: string[] = [];
 const reactErrors: string[] = [];
 const originalConsoleError = console.error;
+const originalConsoleWarn = console.warn;
 console.error = (...args: any[]) => {
   const message = args.map(String).join(" ");
-  if (!message.includes("not wrapped in act") && !message.includes("ReactDOMTestUtils.act")) {
-    reactErrors.push(message);
-  }
+  reactErrors.push(message);
   originalConsoleError(...args);
+};
+console.warn = (...args: any[]) => {
+  const message = args.map(String).join(" ");
+  reactErrors.push(message);
+  originalConsoleWarn(...args);
 };
 
 function check(label: string, passed: boolean) {
@@ -238,7 +241,7 @@ fixtures.get_monitor = (target: string) => ({
 fixtures.get_pref = (key: string, fallback?: unknown) => ({ key, value: fallback ?? null });
 fixtures.set_pref = { ok: true };
 fixtures.get_launch_options = { found: false, value: "", source: null };
-fixtures.get_wiki_status = {
+fixtures.wiki_status = {
   revision: "auto-upgrade-fixture",
   stale: false,
   revalidating: false,
@@ -317,13 +320,16 @@ async function run() {
   {
     const item = makeCase("success");
     let calls = 0;
-    fixtures.upgrade_runtime = (target: string, gamePath: string, launch: string | null, name: string) => {
+    fixtures.upgrade_runtime = (_target: string, _gamePath: string, _launch: string | null, _name: string) => {
       calls++;
       item.current = true;
       return { ok: true, upgraded: true };
     };
     const view = await mount(item);
     const updates = upgradeCalls(item.target);
+    const basicTabBtn = view.host.querySelector<HTMLElement>('[data-tab-button="basic"]');
+    await act(async () => { basicTabBtn?.click(); });
+    await settle(4);
     const frameGen = findAll(view.host, '[data-mock="ToggleField"][data-label="Frame generation"]')[0];
     check("a managed old runtime upgrades exactly once", calls === 1 && updates.length === 1);
     check("the upgrade receives this target, game path, launch value, and name",
@@ -450,6 +456,55 @@ async function run() {
     await unmount(view);
     (globalThis as any).SteamClient = previousSteam;
     (globalThis as any).appDetailsStore = previousDetails;
+  }
+
+  // A Steam-owned game whose applied_launch metadata cannot be read must fail
+  // closed before calling upgrade_runtime so restore points never lose flags.
+  {
+    const item = makeCase("unreadable-applied-launch", { appid: "910007" });
+    const previousSteam = (globalThis as any).SteamClient;
+    const previousGetPref = fixtures.get_pref;
+    (globalThis as any).SteamClient = {
+      Apps: { GetAppLaunchOptions: async () => 'WINEDLLOVERRIDES="dxgi=n,b" %command% -dx11' },
+    };
+    fixtures.get_pref = () => {
+      throw new Error("pref store offline");
+    };
+    fixtures.upgrade_runtime = () => ({ ok: true, upgraded: true });
+    const view = await mount(item);
+    check("unreadable applied_launch metadata prevents the automatic upgrade RPC",
+      renderCountFor(item.target) === 0 &&
+      view.host.textContent!.includes("Saved launch option records are unavailable"));
+    await unmount(view);
+    fixtures.get_pref = previousGetPref;
+    (globalThis as any).SteamClient = previousSteam;
+  }
+
+  // When applied_launch metadata IS present, upgrade_runtime receives it as its 5th argument.
+  {
+    const item = makeCase("with-applied-launch", { appid: "910008" });
+    const previousSteam = (globalThis as any).SteamClient;
+    const previousGetPref = fixtures.get_pref;
+    (globalThis as any).SteamClient = {
+      Apps: { GetAppLaunchOptions: async () => 'WINEDLLOVERRIDES="dxgi=n,b" %command% -dx11' },
+    };
+    fixtures.get_pref = (key: string, fallback?: unknown) => ({
+      key,
+      value: key === "applied_launch:910008" ? { flags: ["-dx11"], extraOverrides: [] } : fallback ?? null,
+    });
+    fixtures.upgrade_runtime = (target: string) => {
+      const current = getCaseByTarget(target);
+      if (current) current.current = true;
+      return { ok: true, upgraded: true };
+    };
+    const view = await mount(item);
+    const calls = upgradeCalls(item.target);
+    check("auto-upgrade forwards persisted applied_launch metadata to upgrade_runtime",
+      calls.length === 1 &&
+      JSON.stringify(calls[0]?.args[4]) === JSON.stringify({ flags: ["-dx11"], extraOverrides: [] }));
+    await unmount(view);
+    fixtures.get_pref = previousGetPref;
+    (globalThis as any).SteamClient = previousSteam;
   }
 
   console.log(`\nReact errors: ${reactErrors.length}`);

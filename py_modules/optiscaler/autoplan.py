@@ -419,6 +419,7 @@ def build(recommendation):
         "reframework": None,
         "unresolved": [],
         "warnings": [],
+        "warning_codes": [],
     }
     if not recommendation or not recommendation.get("matched"):
         return plan
@@ -453,21 +454,33 @@ def build(recommendation):
         unresolved=unresolved,
     )
 
+    def _add_warning(code, message):
+        plan["warnings"].append(message)
+        plan["warning_codes"].append(code)
+
     if recommendation.get("compatibility") and "❌" in recommendation["compatibility"]:
-        plan["warnings"].append(
-            "The wiki lists this game as not working with OptiScaler.")
+        _add_warning(
+            "not_working",
+            "The wiki lists this game as not working with OptiScaler.",
+        )
     if ref and not ref["automatic"]:
-        plan["warnings"].append(
-            f"This game needs REFramework, and {ref['reason']}.")
+        _add_warning(
+            "reframework_manual",
+            f"This game needs REFramework, and {ref['reason']}.",
+        )
     if ref and ref.get("plugin"):
-        plan["warnings"].append(
+        _add_warning(
+            "reframework_plugin",
             f"This game also needs {ref['plugin']} from {ref['plugin_name']}, which is on "
             "Nexus Mods and cannot be downloaded from here — add it next to the executable "
-            "yourself.")
+            "yourself.",
+        )
     if recommendation.get("detail", {}).get("Known Issues", "").strip() not in ("", "-"):
-        plan["warnings"].append(
+        _add_warning(
+            "known_issues",
             "This game has known issues on the wiki that may need steps outside "
-            "this plugin — read them on the Setup tab before playing.")
+            "this plugin — review the known issues before playing.",
+        )
     return plan
 
 

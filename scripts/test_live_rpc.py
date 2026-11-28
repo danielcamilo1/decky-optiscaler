@@ -17,7 +17,7 @@ import unittest
 from unittest.mock import patch
 
 from test_live import LiveFixture, filesystem_state
-from optiscaler import installer, live
+from optiscaler import constants, fsutil, installer, live
 from optiscaler.inifile import IniFile
 from optiscaler.service import OptiScalerService
 
@@ -232,6 +232,56 @@ asyncio.run(plugin.record_launch_options(str(target),'LSFG=1 %command% -syntheti
                 self.assertEqual(filesystem_state(self.target), before)
                 self.assertFalse(list(self.target.glob(".decky-launch-options-*")))
                 self.assertFalse(list(self.target.glob(installer.TRANSACTION_PREFIX + "*")))
+
+    def test_prior_schema7_live_asi_upgrades_and_uninstalls_cleanly(self):
+        prior_hash = "6a0668ece9f4586264c353885f64cbf1043948540be01b02ae80a10aa2b85a60"
+        self.assertIn(prior_hash, constants.UPGRADE_LIVE_ASI_SHA256)
+
+        asi_path = self.target / live.PLUGIN_SUBDIR / live.ASI_NAME
+        prior_bytes = b"MZ-prior-schema7-live-asi-bytes"
+        asi_path.write_bytes(prior_bytes)
+        manifest = installer.read_manifest(self.target)
+        manifest["live_asi_sha256"] = prior_hash
+        (self.target / constants.MANIFEST_NAME).write_text(json.dumps(manifest), encoding="utf-8")
+        fsutil.clear_hash_cache()
+
+        real_sha256 = fsutil.sha256_file
+
+        def patched_sha256(path):
+            p = Path(path)
+            if p.is_file() and p.read_bytes() == prior_bytes:
+                return prior_hash
+            return real_sha256(path)
+
+        with patch.object(fsutil, "sha256_file", side_effect=patched_sha256):
+            status = asyncio.run(self.plugin.get_live_status(str(self.target)))
+            self.assertFalse(status["supported"], status)
+            self.assertTrue(status["can_install"], status)
+            self.assertTrue(status["asi_installed"], status)
+            self.assertFalse(status["asi_current"], status)
+            self.assertNotIn("unknown bytes", str(status.get("live_write_error") or ""))
+
+            # Upgrade via install_live RPC succeeds and restores full live support.
+            upgraded = asyncio.run(self.plugin.install_live(str(self.target)))
+            self.assertTrue(upgraded["ok"], upgraded)
+            self.assertEqual(asi_path.read_bytes(), (self.plugin_root / "bin" / live.ASI_NAME).read_bytes())
+
+            after_upgrade = asyncio.run(self.plugin.get_live_status(str(self.target)))
+            self.assertTrue(after_upgrade["supported"], after_upgrade)
+            self.assertTrue(after_upgrade["asi_current"], after_upgrade)
+            self.assertTrue(after_upgrade["can_install"], after_upgrade)
+            self.assertTrue(after_upgrade["live_write_safe"], after_upgrade)
+
+            # A managed install still carrying the prior schema-7 ASI also uninstalls cleanly.
+            asi_path.write_bytes(prior_bytes)
+            manifest = installer.read_manifest(self.target)
+            manifest["live_asi_sha256"] = prior_hash
+            (self.target / constants.MANIFEST_NAME).write_text(json.dumps(manifest), encoding="utf-8")
+            fsutil.clear_hash_cache()
+
+            removed = asyncio.run(self.plugin.uninstall(str(self.target), True))
+            self.assertTrue(removed["ok"], removed)
+            self.assertFalse(asi_path.exists())
 
 
 if __name__ == "__main__":

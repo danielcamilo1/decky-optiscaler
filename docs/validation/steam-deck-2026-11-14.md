@@ -1,5 +1,7 @@
 # PBZ Steam Deck validation — 2026-11-14
 
+> **Historical record (2026-11-14):** This log captures one-device validation of the earlier experimental `0.0.8-pbz.2` / `0.0.8-pbz.3` builds (`OptiScaler 0.9.5-pre5` + community `4.1.1b`), before the final official `OptiScaler 0.9.5` package. Retained for provenance only; it does not validate final `0.9.5` or `FSR 4.1.2 Lite — community` behavior on device.
+
 Package `0.0.8-pbz.2` uses the pinned OptiScaler `0.9.5-pre5` core and community FSR `4.1.1b`, INT8 model `1`, with OptiScaler FG disabled. This is one-device validation, without a measured image-quality, FPS-improvement or long-session stability claim.
 
 ## Environment and deployment

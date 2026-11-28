@@ -13,6 +13,35 @@ export interface PendingLiveChange {
   contexts: Record<string, LiveContext>;
 }
 
+export interface PersistedKeySnapshot {
+  persistedValues: Record<string, string>;
+  persistedRevisions: Record<string, number>;
+  queuedRevisions: Record<string, number>;
+}
+
+export const EMPTY_PERSISTED_SNAPSHOT: PersistedKeySnapshot = {
+  persistedValues: {},
+  persistedRevisions: {},
+  queuedRevisions: {},
+};
+
+/** Single pure check for whether a persisted key value/revision is still current and un-superseded. */
+export function isPersistedKeyCurrent(
+  snapshot: PersistedKeySnapshot,
+  key: string,
+  expectedValue: string | null | undefined,
+  expectedRevision: number | null | undefined,
+): boolean {
+  if (expectedValue === null || expectedValue === undefined) return false;
+  if (expectedRevision === null || expectedRevision === undefined) return false;
+  const queuedRevision = snapshot.queuedRevisions[key];
+  return (
+    snapshot.persistedRevisions[key] === expectedRevision &&
+    snapshot.persistedValues[key] === expectedValue &&
+    (queuedRevision === undefined || queuedRevision <= expectedRevision)
+  );
+}
+
 export interface TargetLiveRecord {
   restartKeys: string[];
   livePending: PendingLiveChange[];

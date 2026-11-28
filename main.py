@@ -56,15 +56,9 @@ class Plugin:
     async def remove_custom_library(self, path: str) -> dict:
         return await self.service.remove_custom_library(path)
 
-    async def browse(self, path: str = None) -> dict:
-        return await self.service.browse(path)
-
     # -- games -----------------------------------------------------------
     async def list_all_games(self) -> list:
         return await self.service.list_all_games()
-
-    async def list_games(self, library_path: str, source: str = "steam") -> list:
-        return await self.service.list_games(library_path, source)
 
     async def get_game(self, game_path: str, name: str = None) -> dict:
         return await self.service.get_game(game_path, name)
@@ -81,8 +75,8 @@ class Plugin:
     async def set_fsr4_build(self, target_dir: str, build_id: str) -> dict:
         return await self.service.set_fsr4_build(target_dir, build_id)
 
-    async def restore_fsr4_build(self, target_dir: str) -> dict:
-        return await self.service.restore_fsr4_build(target_dir)
+    async def restore_fsr4_build(self, target_dir: str, apply_official_preset: bool = False) -> dict:
+        return await self.service.restore_fsr4_build(target_dir, apply_official_preset)
 
     async def get_launch_options(self, appid: str) -> dict:
         return await self.service.get_launch_options(appid)
@@ -101,10 +95,6 @@ class Plugin:
         return await self.service.set_game_target(game_path, target_dir)
 
     # -- wiki ------------------------------------------------------------
-    async def get_recommendation(self, name: str, extra_names: list = None,
-                                 force: bool = False, game_path: str = None) -> dict:
-        return await self.service.get_recommendation(name, extra_names, force, game_path)
-
     async def search_wiki(self, query: str, limit: int = 30) -> dict:
         return await self.service.search_wiki(query, limit)
 
@@ -137,15 +127,17 @@ class Plugin:
         return await self.service.apply_auto_settings(target_dir, game_path, name, extra_names)
 
     async def create_restore_point(self, target_dir: str, game_path: str = None,
-                                   launch_options: str = None) -> dict:
-        return await self.service.create_restore_point(target_dir, game_path, launch_options)
+                                   launch_options: str = None,
+                                   applied_launch: dict = None) -> dict:
+        return await self.service.create_restore_point(
+            target_dir, game_path, launch_options, applied_launch
+        )
 
     async def rollback_install(self, target_dir: str, game_path: str = None) -> dict:
         return await self.service.rollback_install(target_dir, game_path)
 
-    async def setup_deck_experiment(self, target_dir: str, game_path: str = None,
-                                    name: str = None) -> dict:
-        return await self.service.setup_deck_experiment(target_dir, game_path, name)
+    async def confirm_rollback_launch_options(self, game_path: str) -> dict:
+        return await self.service.confirm_rollback_launch_options(game_path)
 
     # -- install ---------------------------------------------------------
     async def install(self, target_dir: str, filename: str = "dxgi.dll",
@@ -157,13 +149,11 @@ class Plugin:
                                           auto_mode=auto_mode)
 
     async def upgrade_runtime(self, target_dir: str, game_path: str,
-                              launch_options: str = None, name: str = None) -> dict:
-        return await self.service.upgrade_runtime(target_dir, game_path, launch_options, name)
-
-    async def get_reframework_status(self, target_dir: str, game_path: str = None,
-                                     name: str = None, extra_names: list = None) -> dict:
-        return await self.service.get_reframework_status(
-            target_dir, game_path, name, extra_names)
+                              launch_options: str = None, name: str = None,
+                              applied_launch: dict = None) -> dict:
+        return await self.service.upgrade_runtime(
+            target_dir, game_path, launch_options, name, applied_launch
+        )
 
     async def install_reframework(self, target_dir: str, game_path: str = None,
                                   name: str = None, extra_names: list = None) -> dict:

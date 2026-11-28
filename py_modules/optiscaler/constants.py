@@ -235,7 +235,26 @@ FSR4_BUNDLED_FILE_SHA256 = (
     "aad4fccccb29084a655f9a4f9f613bd22c8c03fb4a0f8840148cc6543b4ccace"
 )
 FSR4_BUNDLED_FILE_BYTES = 57664272
-FSR4_STEAM_DECK_BUILD_ID = "4.1.2-lite-exact-20261105"
+FSR4_STEAM_DECK_BUILD_ID = "4.1.2-lite-exact-20261122"
+# Canonical INI settings for the community FSR 4.1.2 Lite preset and the
+# official FSR 3.X/4 preset (both preserve FrameGen settings untouched).
+FSR4_COMMUNITY_SETTINGS = (
+    {"section": "Upscalers", "key": "Dx12Upscaler", "value": "fsr31"},
+    {"section": "Upscalers", "key": "Dx11Upscaler", "value": "fsr31_12"},
+    {"section": "Upscalers", "key": "VulkanUpscaler", "value": "fsr31_12"},
+    {"section": "FSR", "key": "Fsr4Update", "value": "true"},
+    {"section": "FSR", "key": "Fsr4ForceEnableInt8", "value": "1"},
+    {"section": "FSR", "key": "UpscalerIndex", "value": "0"},
+    {"section": "FSR", "key": "Fsr4Preset", "value": "auto"},
+)
+FSR4_OFFICIAL_SETTINGS = (
+    {"section": "Upscalers", "key": "Dx12Upscaler", "value": "fsr31"},
+    {"section": "Upscalers", "key": "Dx11Upscaler", "value": "fsr31_12"},
+    {"section": "Upscalers", "key": "VulkanUpscaler", "value": "fsr31_12"},
+    {"section": "FSR", "key": "Fsr4Update", "value": "true"},
+    {"section": "FSR", "key": "UpscalerIndex", "value": "0"},
+    {"section": "FSR", "key": "Fsr4ForceEnableInt8", "value": "auto"},
+)
 FSR4_BUILDS = [
     {
         "id": FSR4_STEAM_DECK_BUILD_ID,
@@ -244,15 +263,15 @@ FSR4_BUILDS = [
                 "Not a measured improvement over 4.1.1b on this device.",
         "sources": [{
             "repo": "zgauthier2000/fsr4-shader-performance-overrides",
-            "tag": "dll-2026-11-05",
-            "asset": "fsr4.1.2-igpu-cyboman-rdna2-2026-11-05.7z",
-            "archive_sha256": "da7c7681bffe7ac60a01e859d5b107900d963557793ef67ddcfd03a832e1c03f",
+            "tag": "dll-2026-11-22",
+            "asset": "fsr4.1.2-igpu-cyboman-rdna2-2026-11-22.7z",
+            "archive_sha256": "8dd65d22b20f968f0d6529716cbcd05b12ca93d8e543f1e878fc5e08bbb1099c",
         }],
         "archive_path": "4.1.2l-exact/amd_fidelityfx_upscaler_dx12.dll",
         "fsr4_update": "true",
         "file": "amd_fidelityfx_upscaler_dx12.dll",
-        "file_sha256": "f991d06a8b800ed3e01b95696333c842c3de590aec7d2e6b2340c4e583d84ef4",
-        "file_bytes": 39608832,
+        "file_sha256": "b0bcbcac5b81b7b6cf1718f092bda066e00e5a4bba1f260c4c3931efa25a7c07",
+        "file_bytes": 39603200,
         "reaches_fsr4_by": "int8",
     },
     {
@@ -280,6 +299,24 @@ FSR4_BUILDS = [
     },
 
 ]
+
+# Previously shipped community FSR 4 builds retained for hash recognition only
+# (not bundled in bin/ or freshly installed). Keeping them recognised lets
+# existing installs pass verification, upgrade to the latest pinned Lite build,
+# restore the bundled official DLL, or uninstall cleanly.
+FSR4_PRIOR_BUILDS = (
+    {
+        "id": "4.1.2-lite-exact-20261105",
+        "label": "4.1.2 Lite Exact (community, 2026-11-05)",
+        "note": "Previous pinned community Lite build; recognised for seamless "
+                "upgrade to the current Lite build or restore to bundled official.",
+        "fsr4_update": "true",
+        "file": "amd_fidelityfx_upscaler_dx12.dll",
+        "file_sha256": "f991d06a8b800ed3e01b95696333c842c3de590aec7d2e6b2340c4e583d84ef4",
+        "file_bytes": 39608832,
+        "reaches_fsr4_by": "int8",
+    },
+)
 
 
 WIKI_RAW_BASE = "https://raw.githubusercontent.com/wiki/optiscaler/OptiScaler"
@@ -311,6 +348,10 @@ LEGACY_LIVE_ASI_SHA256 = "ca4db054e42864a4bf754a18dc6288e7b9be888e24d119916ddeda
 UPGRADE_LIVE_ASI_SHA256 = (
     "a70d492e677cd366cfbb774f249102a0f1d2e100a0079be10ff2f3ed985dcc13",
     "58ed07a85bd6dc23bb48082015ccbf27c53b7339d39e406e36335d1215ac9ec5",
+    # Prior shipped 0.0.7.1-testing / 0.0.7.2-testing schema-7 ASI before path-buffer expansion.
+    "6a0668ece9f4586264c353885f64cbf1043948540be01b02ae80a10aa2b85a60",
+    # Prior schema-7 ASI before directory.h/identity.h config-path cap unification.
+    "e7f7c2961285230877e855ce7b91138b8c37e9d06acec64eabfa6bf4a1bdda85",
 )
 RUNTIME_DLL_SHA256 = LIVE_CORE_SHA256
 # Core from the former pinned 0.9.4 support archive (SHA-256 575cb4df…ef0ad).

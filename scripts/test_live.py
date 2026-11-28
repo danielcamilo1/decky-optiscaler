@@ -1039,11 +1039,29 @@ class LiveStatusAndProtocolTests(LiveFixture):
     def test_schema_profile_maps_exactly_fourteen_keys(self):
         profile = live._profile(self.plugin_root)
         self.assertIsNotNone(profile)
+        expected = {
+            "FrameGen.Enabled": "FGEnabled",
+            "OptiFG.HUDFix": "FGHUDFix",
+            "FrameGen.DebugView": "FGDebugView",
+            "OptiFG.MakeDepthCopy": "FGMakeDepthCopy",
+            "OptiFG.HUDFixExtended": "FGHUDFixExtended",
+            "XeFG.InterpolationCount": "FGXeFGInterpolationCount",
+            "FSR.FGIndex": "FfxFGIndex",
+            "FSR.UpscalerIndex": "FfxUpscalerIndex",
+            "Upscalers.Dx11Upscaler": "Dx11Upscaler",
+            "Upscalers.Dx12Upscaler": "Dx12Upscaler",
+            "Upscalers.VulkanUpscaler": "VulkanUpscaler",
+            "Sharpness.OverrideSharpness": "OverrideSharpness",
+            "Sharpness.Sharpness": "Sharpness",
+            "Menu.ShowFps": "ShowFps",
+        }
         self.assertEqual(list(live.LIVE_FIELDS), profile["live_keys"])
+        self.assertEqual(set(live.LIVE_FIELDS), set(expected))
         self.assertEqual(len(live.LIVE_FIELDS), 14)
-        self.assertEqual(live.LIVE_FIELDS["FrameGen.Enabled"].member, "FGEnabled")
-        self.assertEqual(live.LIVE_FIELDS["FSR.FGIndex"].member, "FfxFGIndex")
-        self.assertEqual(live.LIVE_FIELDS["FSR.UpscalerIndex"].member, "FfxUpscalerIndex")
+        ini_map = json.loads((ROOT / "asi/generated/live_fields.json").read_text())["fields"]
+        for key, member in expected.items():
+            self.assertEqual(live.LIVE_FIELDS[key].member, member, key)
+            self.assertEqual(ini_map.get(key, {}).get("member"), member, key)
         self.assertEqual(live.LIVE_FIELDS["Upscalers.Dx12Upscaler"].wire_type, "str")
         with self.assertRaises(ValueError):
             live.LIVE_FIELDS["FrameGen.Enabled"].encode("auto")

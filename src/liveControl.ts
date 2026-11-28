@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 import type {
   LiveApi,
   LiveApplyResult,
@@ -109,16 +110,6 @@ export function liveFfxVersionChoices(
       context: liveContext,
     };
   });
-}
-
-/** Capture only an explicitly supported live action for the current target. */
-export function liveContextForAction(
-  status: LiveStatus | null | undefined,
-  target: string | null | undefined,
-  action: string,
-): LiveContext | null {
-  const context = currentLiveContext(status, target);
-  return context && status?.capabilities?.[action] === true ? context : null;
 }
 
 export function liveContextForField(
@@ -315,8 +306,8 @@ export function liveStatusMessage(status: LiveStatus | null | undefined): LiveSt
   if (!status) {
     return {
       code: "unknown",
-      title: "Waiting for live status",
-      detail: "No status has been reported for this game yet.",
+      title: t("Waiting for live status"),
+      detail: t("No status has been reported for this game yet."),
       tone: "info",
       ready: false,
     };
@@ -324,8 +315,10 @@ export function liveStatusMessage(status: LiveStatus | null | undefined): LiveSt
   if (status.dir_matches === false || status.state === "wrongdir") {
     return {
       code: "wrongdir",
-      title: "Live control is reporting from another folder",
-      detail: status.dir ? `It is writing to ${status.dir}.` : "The reported folder does not match this game.",
+      title: t("Live control is reporting from another folder"),
+      detail: status.dir
+        ? t("It is writing to {dir}.", { dir: status.dir })
+        : t("The reported folder does not match this game."),
       tone: "warn",
       ready: false,
     };
@@ -333,8 +326,8 @@ export function liveStatusMessage(status: LiveStatus | null | undefined): LiveSt
   if (status.asi_current === false || status.state === "old" || status.state === "outdated" || (status.schema !== undefined && status.schema !== null && status.schema < 7)) {
     return {
       code: "old",
-      title: "Live control is out of date",
-      detail: "This game has a legacy control module. Reinstall it after closing the game.",
+      title: t("Live control is out of date"),
+      detail: t("This game has a legacy control module. Reinstall it after closing the game."),
       tone: "warn",
       ready: false,
     };
@@ -342,8 +335,8 @@ export function liveStatusMessage(status: LiveStatus | null | undefined): LiveSt
   if (status.state === "unknown" || status.state === "legacy") {
     return {
       code: status.state === "legacy" ? "old" : "unknown",
-      title: status.state === "legacy" ? "Live control is out of date" : "Live status is unknown",
-      detail: status.reason ?? "This status does not establish a current schema 7 session and capabilities.",
+      title: status.state === "legacy" ? t("Live control is out of date") : t("Live status is unknown"),
+      detail: status.reason ?? t("Live control could not verify the running game's status."),
       tone: "warn",
       ready: false,
     };
@@ -351,8 +344,8 @@ export function liveStatusMessage(status: LiveStatus | null | undefined): LiveSt
   if (status.ack === "rejected" || status.state === "rejected") {
     return {
       code: "rejected",
-      title: "The game rejected the live change",
-      detail: status.error ?? status.reason ?? "Refresh the live status and try the setting again.",
+      title: t("The game rejected the live change"),
+      detail: status.error ?? status.reason ?? t("Refresh the live status and try the setting again."),
       tone: "error",
       ready: false,
     };
@@ -360,8 +353,8 @@ export function liveStatusMessage(status: LiveStatus | null | undefined): LiveSt
   if (status.ack === "timeout" || status.state === "timeout") {
     return {
       code: "timeout",
-      title: "The live change was not confirmed",
-      detail: status.error ?? status.reason ?? "The game did not confirm the request before it timed out.",
+      title: t("The live change was not confirmed"),
+      detail: status.error ?? status.reason ?? t("The game did not confirm the request before it timed out."),
       tone: "warn",
       ready: false,
     };
@@ -369,8 +362,8 @@ export function liveStatusMessage(status: LiveStatus | null | undefined): LiveSt
   if (status.ack === "pending" || status.state === "queued" || status.state === "pending") {
     return {
       code: "queued",
-      title: "Live change is waiting for the game",
-      detail: "The request was sent; it has not been confirmed yet.",
+      title: t("Live change is waiting for the game"),
+      detail: t("The request was sent; it has not been confirmed yet."),
       tone: "info",
       ready: false,
     };
@@ -378,8 +371,8 @@ export function liveStatusMessage(status: LiveStatus | null | undefined): LiveSt
   if (!status.asi_available) {
     return {
       code: "unsupported",
-      title: "Live control is not included in this build",
-      detail: status.reason ?? "Install the matching live-control build before using live settings.",
+      title: t("Live control is not included in this build"),
+      detail: status.reason ?? t("Install the matching live-control build before using live settings."),
       tone: "warn",
       ready: false,
     };
@@ -387,8 +380,8 @@ export function liveStatusMessage(status: LiveStatus | null | undefined): LiveSt
   if (status.supported === false && status.can_install !== true) {
     return {
       code: "unsupported",
-      title: "This target is not safe to repair with live control",
-      detail: status.reason ?? "The managed runtime or installed module could not be verified for this target.",
+      title: t("This target is not safe to repair with live control"),
+      detail: status.reason ?? t("OptiScaler or its live-control module could not be verified for this game."),
       tone: "warn",
       ready: false,
     };
@@ -396,8 +389,8 @@ export function liveStatusMessage(status: LiveStatus | null | undefined): LiveSt
   if (!status.asi_installed) {
     return {
       code: "not-installed",
-      title: "Live control is not installed for this game",
-      detail: "Add the live control module, then restart the game.",
+      title: t("Live control is not installed for this game"),
+      detail: t("Add the live control module, then restart the game."),
       tone: "info",
       ready: false,
     };
@@ -405,8 +398,8 @@ export function liveStatusMessage(status: LiveStatus | null | undefined): LiveSt
   if (status.load_enabled === false) {
     return {
       code: "load-disabled",
-      title: "OptiScaler is not set to load plugins",
-      detail: "Enable LoadAsiPlugins in OptiScaler.ini, then restart the game.",
+      title: t("OptiScaler is not set to load plugins"),
+      detail: t("Enable LoadAsiPlugins in OptiScaler.ini, then restart the game."),
       tone: "warn",
       ready: false,
     };
@@ -414,8 +407,8 @@ export function liveStatusMessage(status: LiveStatus | null | undefined): LiveSt
   if (status.loaded_by_optiscaler === false) {
     return {
       code: "not-loaded",
-      title: "OptiScaler did not load the live module",
-      detail: "Check the OptiScaler plugin folder and restart the game.",
+      title: t("OptiScaler did not load the live module"),
+      detail: t("Check the OptiScaler plugin folder and restart the game."),
       tone: "warn",
       ready: false,
     };
@@ -423,8 +416,8 @@ export function liveStatusMessage(status: LiveStatus | null | undefined): LiveSt
   if (status.state === "failed") {
     return {
       code: "failed",
-      title: "Live control could not attach",
-      detail: status.error ?? status.reason ?? "The running runtime could not be verified.",
+      title: t("Live control could not attach"),
+      detail: status.error ?? status.reason ?? t("The running runtime could not be verified."),
       tone: "error",
       ready: false,
     };
@@ -432,8 +425,8 @@ export function liveStatusMessage(status: LiveStatus | null | undefined): LiveSt
   if (status.state === "awaiting_config") {
     return {
       code: "awaiting-config",
-      title: "Live control is waiting for OptiScaler",
-      detail: status.reason ?? "OptiScaler has not authorized its active configuration yet.",
+      title: t("Live control is waiting for OptiScaler"),
+      detail: status.reason ?? t("OptiScaler has not authorized its active configuration yet."),
       tone: "info",
       ready: false,
     };
@@ -441,8 +434,8 @@ export function liveStatusMessage(status: LiveStatus | null | undefined): LiveSt
   if (["searching", "loading", "loaded", "waiting", "attached"].includes(status.state)) {
     return {
       code: "searching",
-      title: "Live control is checking the running game",
-      detail: status.reason ?? "It will become ready only after the runtime and frame hook are verified.",
+      title: t("Live control is checking the running game"),
+      detail: status.reason ?? t("It will become ready only after the runtime and frame hook are verified."),
       tone: "info",
       ready: false,
     };
@@ -450,8 +443,8 @@ export function liveStatusMessage(status: LiveStatus | null | undefined): LiveSt
   if (status.state === "awaiting_frame") {
     return {
       code: "awaiting-frame",
-      title: "Live control is waiting for a frame",
-      detail: status.reason ?? "The game has loaded the module, but has not reached a verified frame yet.",
+      title: t("Live control is waiting for a frame"),
+      detail: status.reason ?? t("The game has loaded the module, but has not reached a verified frame yet."),
       tone: "info",
       ready: false,
     };
@@ -459,8 +452,8 @@ export function liveStatusMessage(status: LiveStatus | null | undefined): LiveSt
   if (status.attached && status.ready !== true) {
     return {
       code: "awaiting-frame",
-      title: "Live control is waiting for a frame",
-      detail: "The game has loaded the module, but has not reached a verified frame yet.",
+      title: t("Live control is waiting for a frame"),
+      detail: t("The game has loaded the module, but has not reached a verified frame yet."),
       tone: "info",
       ready: false,
     };
@@ -469,8 +462,8 @@ export function liveStatusMessage(status: LiveStatus | null | undefined): LiveSt
     const legacyUnknown = status.schema === null || status.schema === undefined || status.asi_current === null;
     return {
       code: legacyUnknown ? "unknown" : "unsupported",
-      title: legacyUnknown ? "Live status is from an unknown module" : "Live control is unavailable",
-      detail: status.reason ?? "This runtime has no verified live-control capabilities.",
+      title: legacyUnknown ? t("Live status is from an unknown module") : t("Live control is unavailable"),
+      detail: status.reason ?? t("Live control is not available for this OptiScaler runtime."),
       tone: "warn",
       ready: false,
     };
@@ -478,8 +471,8 @@ export function liveStatusMessage(status: LiveStatus | null | undefined): LiveSt
   if (status.state === "disconnected" || !status.attached) {
     return {
       code: "disconnected",
-      title: "Live control is not connected",
-      detail: status.error ?? "Start or restart the game to connect live control.",
+      title: t("Live control is not connected"),
+      detail: status.error ?? t("Start or restart the game to connect live control."),
       tone: "info",
       ready: false,
     };
@@ -488,16 +481,16 @@ export function liveStatusMessage(status: LiveStatus | null | undefined): LiveSt
   if (!context) {
     return {
       code: "unknown",
-      title: "Live status is not ready to accept changes",
-      detail: "Waiting for a fresh schema 7 status with a verified session and capabilities.",
+      title: t("Live status is not ready to accept changes"),
+      detail: t("Waiting for the running game to finish initializing live control."),
       tone: "info",
       ready: false,
     };
   }
   return {
     code: "ready",
-    title: "Connected to the running game",
-    detail: "Live configuration requests are available.",
+    title: t("Connected to the running game"),
+    detail: t("Supported settings can apply while the game is running."),
     tone: "success",
     ready: true,
   };
